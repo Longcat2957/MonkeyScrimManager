@@ -1,0 +1,124 @@
+{
+	"type": "champion",
+	"format": "standAloneComplex",
+	"version": "14.24.1",
+	"data": {
+		"Aatrox": {
+			"version": "14.24.1",
+			"id": "Aatrox",
+			"key": "266",
+			"name": "아트록스",
+			"title": "다르킨의 검",
+			"image": { "full": "Aatrox.png" },
+			"tags": ["Fighter", "Tank"]
+		},
+		"Ahri": {
+			"version": "14.24.1",
+			"id": "Ahri",
+			"key": "103",
+			"name": "아리",
+			"title": "구미호",
+			"image": { "full": "Ahri.png" },
+			"tags": ["Mage", "Assassin"]
+		},
+		"Akali": {
+			"version": "14.24.1",
+			"id": "Akali",
+			"key": "84",
+			"name": "아칼리",
+			"title": "섬기는 이 없는 암살자",
+			"image": { "full": "Akali.png" },
+			"tags": ["Assassin"]
+		},
+		"Azir": {
+			"version": "14.24.1",
+			"id": "Azir",
+			"key": "268",
+			"name": "아지르",
+			"title": "사막의 황제",
+			"image": { "full": "Azir.png" },
+			"tags": ["Mage", "Marksman"]
+		},
+		"Gwen": {
+			"version": "14.24.1",
+			"id": "Gwen",
+			"key": "887",
+			"name": "그웬",
+			"title": "신성한 재봉사",
+			"image": { "full": "Gwen.png" },
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Kaisa": {
+			"version": "14.24.1",
+			"id": "Kaisa",
+			"key": "145",
+			"name": "카이사",
+			"title": "공허의 딸",
+			"image": { "full": "Kaisa.png" },
+			"tags": ["Marksman"]
+		},
+		"LeeSin": {
+			"version": "14.24.1",
+			"id": "LeeSin",
+			"key": "64",
+			"name": "리 신",
+			"title": "눈먼 수도승",
+			"image": { "full": "LeeSin.png" },
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Nautilus": {
+			"version": "14.24.1",
+			"id": "Nautilus",
+			"key": "111",
+			"name": "노틸러스",
+			"title": "심해의 타이탄",
+			"image": { "full": "Nautilus.png" },
+			"tags": ["Tank", "Fighter"]
+		},
+		"Ornn": {
+			"version": "14.24.1",
+			"id": "Ornn",
+			"key": "516",
+			"name": "오른",
+			"title": "거산의 화염",
+			"image": { "full": "Ornn.png" },
+			"tags": ["Tank", "Fighter"]
+		},
+		"Rakan": {
+			"version": "14.24.1",
+			"id": "Rakan",
+			"key": "497",
+			"name": "라칸",
+			"title": "매혹하는 자",
+			"image": { "full": "Rakan.png" },
+			"tags": ["Support"]
+		},
+		"Taliyah": {
+			"version": "14.24.1",
+			"id": "Taliyah",
+			"key": "163",
+			"name": "탈리야",
+			"title": "바위술사",
+			"image": { "full": "Taliyah.png" },
+			"tags": ["Mage", "Support"]
+		},
+		"Vi": {
+			"version": "14.24.1",
+			"id": "Vi",
+			"key": "254",
+			"name": "바이",
+			"title": "필트오버의 집행자",
+			"image": { "full": "Vi.png" },
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Zeri": {
+			"version": "14.24.1",
+			"id": "Zeri",
+			"key": "221",
+			"name": "제리",
+			"title": "자운의 불꽃",
+			"image": { "full": "Zeri.png" },
+			"tags": ["Marksman"]
+		}
+	}
+}
