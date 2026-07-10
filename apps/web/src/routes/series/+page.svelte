@@ -1,9 +1,43 @@
 <script lang="ts">
-	import RoutePlaceholder from '$lib/components/RoutePlaceholder.svelte';
+	import Panel from '$lib/components/layout/Panel.svelte';
+	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
+	import EntryDraftBoard from '$lib/components/workflow/EntryDraftBoard.svelte';
+	import ScrimResultBoard from '$lib/components/workflow/ScrimResultBoard.svelte';
+	import {
+		mockEntryAssignments,
+		mockEntryHeadToHead,
+		mockEntryParticipants,
+		mockEntrySynergies
+	} from '$lib/fixtures/workflow';
+	import type { PageProps } from './$types';
+
+	let { data }: PageProps = $props();
 </script>
 
-<RoutePlaceholder
-	kicker="P0 route"
-	title="진행 중 시리즈"
-	description="운영 가능한 일반 내전 시리즈 목록과 pick-ban 또는 result route 진입점을 둘 화면입니다."
-/>
+<div class="space-y-5">
+	<WorkspaceHeader
+		kicker="일반 내전"
+		title="진행 중 시리즈 작업대"
+		description="엔트리 편성 DnD와 1세트 픽밴/결과 입력 컴포넌트를 한 화면에서 확인합니다."
+		metrics={[
+			{ label: '참가자', value: mockEntryParticipants.length, tone: 'info' },
+			{ label: '배치', value: Object.keys(mockEntryAssignments).length, tone: 'neutral' },
+			{ label: '세트', value: 1, tone: 'success' }
+		]}
+	/>
+
+	<Panel kicker="엔트리" title="팀/라인 편성" compact>
+		<EntryDraftBoard
+			participants={mockEntryParticipants}
+			initialAssignments={mockEntryAssignments}
+			synergies={mockEntrySynergies}
+			headToHead={mockEntryHeadToHead}
+			targetCount={10}
+			profileIconVersion={data.championCatalog.version}
+		/>
+	</Panel>
+
+	<Panel kicker="픽밴" title="1세트 입력" compact>
+		<ScrimResultBoard />
+	</Panel>
+</div>

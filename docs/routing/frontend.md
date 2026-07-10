@@ -74,6 +74,33 @@ Backend 데이터:
 - 실제 운영 dashboard가 아니다.
 - product workflow 구현이 진행되면 이 화면은 component regression 확인 용도로 유지한다.
 
+### `/dev/fab`
+
+파일:
+
+- `apps/web/src/routes/dev/fab/+page.svelte`
+
+목적:
+
+- 전역 FAB와 관련 modal을 격리해서 확인하는 개발용 화면.
+- 루트 화면이나 실제 workflow 화면과 겹치지 않게, 미니게임과 빠른 전적검색 진입 UX를 검증한다.
+
+현재 작성된 범위:
+
+- FAB 열기/닫기.
+- 미니게임 modal.
+- 전적검색 modal.
+- 코인토스.
+- 룰렛.
+- 사다리.
+- mock 기반 빠른 전적검색 UI.
+
+주의:
+
+- 실제 운영 route가 아니다.
+- 미니게임 결과와 전적검색 결과는 mock data 기준이다.
+- 실제 Riot 전적과 guild 내전 전적 동시 조회는 아직 API에 연결되어 있지 않다.
+
 ### `+layout.svelte`
 
 파일:
@@ -390,6 +417,15 @@ WebSocket:
 - BO1/BO3 포맷, match 생성, 양 팀 5인 라인업 확정, match game result 입력, 마지막 게임 삭제.
 - 게임 시작 전 TOP/JUNGLE/MID/ADC/SUPPORT 라인업 입력을 반드시 지원한다.
 - 라인업 확정 취소와 match result 되돌리기를 지원한다.
+- 브래킷 화면은 운영자용 readiness/control dashboard를 별도로 두지 않는다.
+- match 상태 표시는 `AuctionMatchSummaryCard` 같은 compact 진입 카드 안에서만 최소한으로 제공한다.
+- match game result 입력은 별도 경매 전용 결과 입력 컴포넌트를 새로 만들지 않고 기존 game result 입력 흐름을 사용한다.
+
+컴포넌트 계획:
+
+- 완료: `AuctionBracketSetupBoard`
+- 완료: `AuctionMatchLineupBoard`
+- 다음: `AuctionMatchSummaryCard`
 
 Backend 데이터:
 
@@ -425,6 +461,13 @@ WebSocket:
 
 - 경매 토너먼트 결과.
 - 우승 팀, match 결과, game ledger, pick/ban 기록 표시.
+- 경매 최종 결과는 self-service 입력 완료 후 참가자가 확인하는 화면으로 둔다.
+- 운영자용 상태 대시보드가 아니라 우승팀, 팀 구성, 낙찰 기록, match 스코어를 읽기 쉽게 정리한다.
+
+컴포넌트 계획:
+
+- 다음: `AuctionTournamentResultBoard`
+- 다음: `AuctionPlayerLedgerBoard`
 
 Backend 데이터:
 

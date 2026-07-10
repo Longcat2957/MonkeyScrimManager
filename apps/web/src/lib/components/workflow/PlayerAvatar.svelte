@@ -9,7 +9,8 @@
 		avatarUrl?: string | null;
 		profileIconId?: number | null;
 		profileIconVersion?: string | null;
-		size?: 'xs' | 'sm' | 'md';
+		size?: 'xs' | 'sm' | 'md' | 'lg';
+		shape?: 'square' | 'circle';
 	}
 
 	let {
@@ -18,20 +19,28 @@
 		avatarUrl = null,
 		profileIconId = null,
 		profileIconVersion = null,
-		size = 'sm'
+		size = 'sm',
+		shape = 'square'
 	}: Props = $props();
 
 	const sizeClass = {
 		xs: 'size-6',
 		sm: 'size-7',
-		md: 'size-12'
+		md: 'size-12',
+		lg: 'size-9'
 	};
 
 	const iconSize = {
 		xs: 'sm',
 		sm: 'sm',
-		md: 'md'
+		md: 'md',
+		lg: 'md'
 	} as const;
+
+	const shapeClass = {
+		square: 'rounded-sm',
+		circle: 'rounded-full'
+	};
 
 	const source = $derived(
 		avatarUrl ??
@@ -42,7 +51,7 @@
 </script>
 
 <span
-	class={`grid ${sizeClass[size]} shrink-0 place-items-center overflow-hidden rounded-sm border border-slate-600 bg-slate-950/70`}
+	class={`grid ${sizeClass[size]} ${shapeClass[shape]} shrink-0 place-items-center overflow-hidden border border-slate-600 bg-slate-950/70`}
 	title={name}
 >
 	{#if source}

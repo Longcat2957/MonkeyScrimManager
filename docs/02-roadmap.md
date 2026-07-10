@@ -253,6 +253,29 @@ Route:
 - 경매는 DB 원장을 source of truth로 삼고 UI local state를 원장처럼 쓰지 않는다.
 - 팀/매치 entity tile은 허용하되 card pile layout은 피한다.
 
+컴포넌트 작성 현황:
+
+- 완료: `AuctionTournamentSetupBoard`
+  - 경매 시작 전 팀장 선택과 팀별 시작 포인트 설정.
+- 완료: `AuctionBiddingWorkbench`
+  - 매물 추첨, 입찰, 유찰, DND 기반 팀 배치.
+- 완료: `AuctionBracketSetupBoard`
+  - 20인/4팀 경매의 대진 설정.
+- 완료: `AuctionMatchLineupBoard`
+  - match별 5인 라인업 입력과 확정.
+- 다음 작업: `AuctionTournamentResultBoard`
+  - 우승팀, 대진 결과, match별 스코어, 팀 구성, 낙찰 기록을 보여주는 경매 최종 결과 화면.
+- 다음 작업: `AuctionMatchSummaryCard`
+  - 브래킷 화면에서 match를 compact하게 보여주는 카드. 팀 vs 팀, 라인업 확정 여부, 결과 입력 진입만 포함한다.
+- 다음 작업: `AuctionPlayerLedgerBoard`
+  - 참가자별 팀, 라인, 낙찰가, 경기 결과를 확인하는 경매 기록 요약.
+
+컴포넌트 제외 기준:
+
+- 별도 `AuctionMatchResultBoard`는 만들지 않는다. 게임 단위 결과 입력은 기존 결과 입력 컴포넌트 흐름을 사용한다.
+- 별도 readiness/control dashboard는 만들지 않는다. 경매 내전은 운영자가 모든 상태를 통제하는 대시보드가 아니라, 팀/참가자가 필요한 입력을 직접 완료하는 self-service 흐름을 우선한다.
+- match 진행 전 확인 UI가 필요하면 독립 dashboard가 아니라 `AuctionMatchSummaryCard` 안의 최소 상태 표시로 제한한다.
+
 완료 기준:
 
 - 10인/20인 경매 흐름을 완료할 수 있다.

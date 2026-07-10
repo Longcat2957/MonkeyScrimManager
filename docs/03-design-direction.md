@@ -109,6 +109,8 @@ route는 이 shell 안에서 작업대 내용을 채운다. route마다 별도�
 - expand UI는 사용자가 추가 정보를 요청하는 동작이어야 하며, 화면 밀도를 무너뜨리지 않아야 한다.
 - border는 정보 층위가 실제로 바뀌는 곳에만 사용한다.
 - 같은 영역 안에서 외곽, 헤더, row, card border를 중첩하지 않는다.
+- 인접한 컨테이너와 카드의 border가 겹쳐 두껍거나 지저분해 보이면 한쪽 border를 제거하고 gap, 배경 톤, separator 중 하나로 정리한다.
+- 반복 카드 내부에서 모든 요소에 border를 두르지 않는다. 카드 외곽, 활성 상태, drop target처럼 의미가 있는 경계만 남긴다.
 - 단순 구분은 여백, 배경 톤, gap, typography로 먼저 처리하고 border를 남발하지 않는다.
 - dashboard는 metric hero가 아니라 operations queue다.
 - Data Dragon catalog와 champion face/icon은 공유 capability로 유지한다.
@@ -117,6 +119,51 @@ route는 이 shell 안에서 작업대 내용을 채운다. route마다 별도�
 - 기존 사례를 현대화할 때는 workflow, 정보 배치, 상호작용 순서를 유지하고 색상/간격/컴포넌트 문법만 현재 스택에 맞춘다.
 - 사용자 지시와 다르게 창의적으로 재구성하지 않는다. 특히 검증용 컴포넌트는 실제 route에 연결하지 않는다.
 - 선호 챔피언, 주로 사용한 챔피언처럼 성격이 다른 정보는 한 행 안에 섞지 않고 영역을 분리해 보여준다.
+
+## Workflow Workbench / DnD Rules
+
+엔트리 편성 작업대와 픽밴 작업대는 이후 경매, 라인업, 결과 입력 화면의 root interaction reference로 둔다.
+
+작업대 구조:
+
+- 작업 화면은 source, target, action/inspector 영역을 분리한다.
+- source는 후보 풀, 챔피언 패널, 현재 매물처럼 사용자가 움직이거나 선택할 대상을 담는다.
+- target은 팀/라인 슬롯, 픽밴 슬롯, 팀 원장처럼 커밋 결과가 남는 고정 영역이다.
+- action/inspector는 현재 선택 대상, 필터, 상세 기록, 되돌리기, 저장 상태처럼 작업을 보조하는 정보만 담는다.
+- 핵심 작업 영역은 화면의 주인공이어야 하며, 요약 카드나 설명 문구가 작업대보다 앞서면 안 된다.
+- 작업대는 full-width에 가깝게 쓰고, 반복 슬롯은 같은 높이와 같은 grid rhythm을 유지한다.
+- 작업대 내부 ScrollArea는 스크롤바가 표시될 수 있는 오른쪽에 기본 padding보다 1px 여유를 더 둔다. 콘텐츠가 스크롤바에 붙거나 잘려 보이지 않아야 한다.
+
+상호작용 원칙:
+
+- DnD는 직관적인 기본 조작으로 제공하되 유일한 조작 경로로 두지 않는다.
+- coarse pointer 또는 모바일 환경에서는 HTML5 DnD에 기대지 않고 tap-to-select / tap-to-place 흐름을 제공한다.
+- 픽밴처럼 drag보다 빠른 작업은 `슬롯 선택 -> 후보 검색/필터 -> 커밋 -> 다음 슬롯` 흐름을 DnD와 같은 작업대 패턴으로 취급한다.
+- 선택된 source와 활성 target은 항상 시각적으로 추적 가능해야 한다.
+- drag 중인 source는 opacity나 cursor 변화로 이동 중임을 보여준다.
+- drop 가능한 target은 hover/over 상태에서 ring, border, background tone으로 즉시 반응한다.
+- drop 불가능한 target은 가능한 target과 다른 tone으로 표시하고, 실패 이유는 action 위치 근처에서 짧게 보여준다.
+- 이미 점유된 slot에 drop하면 duplicate를 만들지 않고 swap 또는 move 규칙 중 하나를 명확히 적용한다.
+- 후보 풀로 되돌리기, 슬롯 해제, 현재 선택 취소처럼 반대 방향 작업도 동일한 수준의 조작으로 제공한다.
+- 클릭, Enter/Space, Escape, Tab 같은 keyboard path를 주요 작업 흐름에 맞게 제공한다.
+- 대량 입력, 검색, 자동 다음 슬롯처럼 숙련자용 shortcut은 기본 DnD 흐름을 방해하지 않는 보조 수단으로 둔다.
+
+정보 표현 원칙:
+
+- slot/card 안의 기본 정보는 이름, 역할/라인, 현재 상태처럼 의사결정에 필요한 최소 정보로 제한한다.
+- 승률, 상대전적, 선호 챔피언, 솔랭 티어 같은 보조 정보는 compact meta 또는 상세/보조 rail에 둔다.
+- 서로 다른 성격의 정보는 같은 행에 섞지 않는다. 예: 선호 챔피언과 주 사용 챔피언은 별도 영역으로 분리한다.
+- champion face/icon, profile icon, lane icon처럼 식별에 직접 필요한 이미지는 작업대에서 적극적으로 사용한다.
+- image 자체는 드래그 대상으로 만들지 않는다. draggable target은 카드/슬롯 단위로 제한한다.
+- 빈 슬롯은 빈 상태임을 명확히 보여주되, slot 크기를 바꾸지 않는다.
+- 동작 직후 바뀐 항목은 짧은 highlight로 피드백을 주고, layout shift를 만들지 않는다.
+
+도메인 순서:
+
+- 라인 순서는 TOP / JUNGLE / MID / BOTTOM 또는 ADC / SUPPORT 순서를 유지한다.
+- 양 팀이 대칭으로 비교되는 화면은 좌우 또는 상하 리듬을 유지하고, 팀별 색상은 보조 신호로만 사용한다.
+- 픽밴 순서, 라인업 순서, 경매 후보 queue처럼 도메인 순서가 있는 작업은 UI 배열도 그 순서를 따른다.
+- 자동 advance가 있는 작업은 현재 위치와 다음 위치가 모두 예측 가능해야 한다.
 
 ## 현재 제외하는 것
 

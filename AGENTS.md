@@ -14,5 +14,7 @@
 - When the user points to an existing reference such as `mookbot_v2`, inspect and preserve the useful interaction model before changing local components.
 - Do not invent a new layout when the user asked to reuse or modernize an existing pattern. Modernization means adapting spacing, color, and component syntax while keeping the reference workflow recognizable.
 - If a request says to place a feature in a component sample page, do not wire it into production routes unless explicitly asked.
+- When the user asks to move or list completed components on a page, use the exact page the user names. Do not assume `/auction/a-118` or any other default destination.
+- `/dev/components` is only for the component currently being developed or inspected. Keep completed components on the user-specified QA page unless the user explicitly asks to move or remove them.
 - If the instruction is ambiguous, choose the smallest implementation that matches the literal request and existing local patterns.
 - Avoid arguing through implementation. If the user rejects a direction, remove or replace that direction instead of layering more UI around it.

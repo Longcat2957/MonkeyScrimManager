@@ -443,12 +443,90 @@ UI 구현 수준:
 - [ ] guild 외부 공개 여부 설정
 - [ ] user 단위 guild 선택/즐겨찾기/정렬 상태
 - [ ] guild dashboard
-- [ ] 일반 내전 화면
-- [ ] 경매 내전 화면
-- [ ] 전적 검색 화면
+- [ ] 일반 내전 화면: 샘플 컴포넌트 작성
+- [ ] 경매 내전 화면: 샘플 컴포넌트 작성
+- [ ] 전적 검색 화면: FAB mock 작성
 - [ ] 관리자 / 되돌리기 화면
-- [ ] mock fixture data 구조
+- [x] mock fixture data 구조
 - [ ] fake API 전환 준비
+
+현재 작성 현황:
+
+```txt
+기준 커밋
+  50b22ff feat: update app shell and workflow samples
+
+작성 완료
+  - 전역 app shell / 상단 navbar / 검색 패널
+  - 루트 화면의 shell 검증용 정리
+  - Noto Sans KR 기반 전역 typography
+  - light/dark color token baseline
+  - gpt-image 기반 logo/favicon asset
+  - Data Dragon champion catalog/icon helper
+  - Riot position icon asset
+  - component sample route: /dev/components
+  - FAB sample route: /dev/fab
+  - FAB shell, 미니게임 modal, 전적검색 modal
+  - 코인토스 / 룰렛 / 사다리 미니게임 mock 구현
+  - 빠른 전적검색 mock UI
+  - 엔트리 편성 DND mock board
+  - 일반 내전 결과 입력 mock board
+  - 결과 입력의 사이드 선택 / 픽밴 입력 / 승자 선택 단계
+  - 픽밴 챔피언 입력 autocomplete
+  - 결과 입력 undo/redo UI
+  - 결과 입력 strict flag
+
+샘플 수준
+  - 일반 내전 엔트리 편성
+  - 일반 내전 픽밴/결과 입력
+  - 경매 입찰 배정 샘플
+  - 빠른 전적검색 FAB
+  - 미니게임 FAB
+
+아직 실제 route/workflow에 연결되지 않음
+  - 모집 목록과 모집 상세
+  - 실제 guild dashboard
+  - 실제 series 결과 저장
+  - 실제 전적 반영
+  - 실제 guild별 내전 전적 검색
+  - 실제 Riot API 연동
+  - fake API layer
+  - Backend/API/DB 상태 전이
+  - Bot command/deeplink 연동
+```
+
+현재 작성 파일 묶음:
+
+```txt
+App shell / root
+  apps/web/src/lib/components/layout/*
+  apps/web/src/routes/+page.svelte
+
+개발 확인 route
+  apps/web/src/routes/dev/components/+page.svelte
+  apps/web/src/routes/dev/fab/+page.svelte
+
+FAB
+  apps/web/src/lib/components/fab/*
+  apps/web/src/lib/fixtures/quickRecordSearch.ts
+
+Workflow samples
+  apps/web/src/lib/components/workflow/*
+  apps/web/src/lib/fixtures/workflow.ts
+  apps/web/src/lib/fixtures/resultEntry.ts
+
+Assets
+  apps/web/static/brand/*
+  apps/web/static/riot/positions/*
+```
+
+주의:
+
+- 현재 `/dev/components`와 `/dev/fab`는 검증용 화면이다.
+- mock fixture 기준으로 UX와 디자인을 검증하는 단계이며, 저장/조회는 실제 API에 연결되어 있지 않다.
+- 일반 내전 결과 입력은 컴포넌트 샘플로 작성되었고, 실제 `/series/[id]/result` route에 연결된 상태가 아니다.
+- 엔트리 편성 DND와 결과 입력 컴포넌트는 현재 디자인 기준점으로 유지한다.
+- 이후 route 연결 시 샘플 컴포넌트를 그대로 옮기기보다 API 계약과 load/action 구조에 맞춰 감싸야 한다.
 
 완료 기준:
 

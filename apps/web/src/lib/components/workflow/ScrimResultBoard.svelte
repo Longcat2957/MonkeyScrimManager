@@ -5,7 +5,6 @@
 		mockResultPatch,
 		mockResultTeams,
 		resultChampions,
-		type ResultGame,
 		type ResultSide
 	} from '$lib/fixtures/resultEntry';
 	import PositionIcon from './PositionIcon.svelte';
@@ -23,15 +22,16 @@
 		picks: Record<string, string | null>;
 	};
 
-	let gameId = $state(mockResultGames[1]?.id ?? mockResultGames[0].id);
+	const resultGame = mockResultGames[0]!;
+
 	let inputStep = $state<ResultInputStep>('SIDE');
 	let sidePreset = $state<SidePreset>('DEFAULT');
-	let winner = $state<ResultSide | null>(mockResultGames[1]?.winner ?? null);
+	let winner = $state<ResultSide | null>(resultGame.winner);
 	let bans = $state<Record<ResultSide, Array<string | null>>>({
-		BLUE: [...(mockResultGames[1]?.bans.BLUE ?? [])],
-		RED: [...(mockResultGames[1]?.bans.RED ?? [])]
+		BLUE: [...resultGame.bans.BLUE],
+		RED: [...resultGame.bans.RED]
 	});
-	let picks = $state<Record<string, string | null>>({ ...(mockResultGames[1]?.picks ?? {}) });
+	let picks = $state<Record<string, string | null>>({ ...resultGame.picks });
 	let activeCell = $state<ResultActiveCell>({ kind: 'PICK', key: 'blue-mid' });
 	let undoStack = $state<ResultInputSnapshot[]>([]);
 	let redoStack = $state<ResultInputSnapshot[]>([]);
@@ -97,22 +97,6 @@
 		redoStack = redoStack.slice(0, -1);
 		undoStack = [...undoStack, captureSnapshot()];
 		restoreSnapshot(next);
-	}
-
-	function selectGame(game: ResultGame) {
-		gameId = game.id;
-		winner = game.winner;
-		bans = {
-			BLUE: [...game.bans.BLUE],
-			RED: [...game.bans.RED]
-		};
-		picks = { ...game.picks };
-		activeCell = { kind: 'PICK', key: 'blue-mid' };
-		sidePreset = 'DEFAULT';
-		inputStep = 'SIDE';
-		undoStack = [];
-		redoStack = [];
-		saved = false;
 	}
 
 	function setBan(side: ResultSide, index: number, championId: string | null) {
@@ -225,21 +209,6 @@
 				>
 					<Redo2 size={15} />
 				</button>
-			</div>
-			<div class="flex flex-wrap items-center gap-1.5">
-				{#each mockResultGames as game (game.id)}
-					<button
-						type="button"
-						class={`inline-flex h-8 items-center px-2.5 text-xs font-semibold ${
-							gameId === game.id
-								? 'rounded-md bg-slate-800/80 text-slate-50'
-								: 'rounded-sm text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100'
-						}`}
-						onclick={() => selectGame(game)}
-					>
-						{game.label}
-					</button>
-				{/each}
 			</div>
 		</div>
 	</div>
