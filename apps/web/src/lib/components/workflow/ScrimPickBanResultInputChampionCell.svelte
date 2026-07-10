@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { championIconUrl } from '$lib/datadragon';
-	import type { ResultChampion } from '$lib/fixtures/resultEntry';
-	import { championById, matchChampion, suggestChampions } from './resultEntryInput';
+	import type { ScrimPickBanResultInputChampion } from '$lib/fixtures/scrimPickBanResultInputFixtures';
+	import {
+		findScrimPickBanResultInputChampionById,
+		matchScrimPickBanResultInputChampion,
+		suggestScrimPickBanResultInputChampions
+	} from './scrimPickBanResultInputHelpers';
 
 	interface Props {
 		label?: string;
 		value: string | null;
-		champions: ResultChampion[];
+		champions: ScrimPickBanResultInputChampion[];
 		version: string;
 		active: boolean;
 		compact?: boolean;
@@ -27,13 +31,13 @@
 		onCommit
 	}: Props = $props();
 
-	const selected = $derived(championById(value, champions));
+	const selected = $derived(findScrimPickBanResultInputChampionById(value, champions));
 	const listboxId = $props.id();
 	let text = $state('');
 	let syncedValue = $state<string | null>(null);
 	let focused = $state(false);
 	let highlightedIndex = $state(0);
-	const suggestions = $derived(suggestChampions(text, champions));
+	const suggestions = $derived(suggestScrimPickBanResultInputChampions(text, champions));
 	const showSuggestions = $derived(focused && suggestions.length > 0);
 
 	$effect(() => {
@@ -50,7 +54,7 @@
 			return;
 		}
 
-		const matched = matchChampion(raw, champions);
+		const matched = matchScrimPickBanResultInputChampion(raw, champions);
 		if (!matched) {
 			text = selected?.name ?? '';
 			return;
@@ -60,7 +64,7 @@
 		syncedValue = matched.id;
 	}
 
-	function commitChampion(champion: ResultChampion) {
+	function commitChampion(champion: ScrimPickBanResultInputChampion) {
 		text = champion.name;
 		focused = false;
 		highlightedIndex = 0;

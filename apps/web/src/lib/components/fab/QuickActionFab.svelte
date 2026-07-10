@@ -5,6 +5,7 @@
 	import QuickActionMenuItem from './QuickActionMenuItem.svelte';
 	import MiniGameModal from './MiniGameModal.svelte';
 	import QuickRecordSearchModal from './QuickRecordSearchModal.svelte';
+	import TimerModal from './TimerModal.svelte';
 
 	interface Props {
 		label?: string;
@@ -15,6 +16,7 @@
 	let open = $state(false);
 	let miniGameOpen = $state(false);
 	let quickSearchOpen = $state(false);
+	let timerOpen = $state(false);
 
 	function toggleOpen() {
 		open = !open;
@@ -32,6 +34,11 @@
 	function openQuickSearch() {
 		closeFab();
 		quickSearchOpen = true;
+	}
+
+	function openTimer() {
+		closeFab();
+		timerOpen = true;
 	}
 </script>
 
@@ -59,6 +66,7 @@
 				<div class="grid gap-1 p-2">
 					<QuickActionMenuItem label="미니게임" tone="game" onSelect={openMiniGame} />
 					<QuickActionMenuItem label="전적검색" tone="record" onSelect={openQuickSearch} />
+					<QuickActionMenuItem label="타이머" tone="timer" onSelect={openTimer} />
 				</div>
 			</div>
 		</div>
@@ -86,3 +94,4 @@
 
 <MiniGameModal bind:open={miniGameOpen} />
 <QuickRecordSearchModal bind:open={quickSearchOpen} />
+<TimerModal bind:open={timerOpen} />

@@ -255,13 +255,13 @@ Route:
 
 컴포넌트 작성 현황:
 
-- 완료: `AuctionTournamentSetupBoard`
+- 완료: `AuctionTournamentCaptainPointSetupBoard`
   - 경매 시작 전 팀장 선택과 팀별 시작 포인트 설정.
-- 완료: `AuctionBiddingWorkbench`
+- 완료: `AuctionTournamentBidDraftWorkbench`
   - 매물 추첨, 입찰, 유찰, DND 기반 팀 배치.
-- 완료: `AuctionBracketSetupBoard`
+- 완료: `AuctionTournamentBracketMatchSetupBoard`
   - 20인/4팀 경매의 대진 설정.
-- 완료: `AuctionMatchLineupBoard`
+- 완료: `AuctionMatchStartingLineupInputBoard`
   - match별 5인 라인업 입력과 확정.
 - 다음 작업: `AuctionTournamentResultBoard`
   - 우승팀, 대진 결과, match별 스코어, 팀 구성, 낙찰 기록을 보여주는 경매 최종 결과 화면.

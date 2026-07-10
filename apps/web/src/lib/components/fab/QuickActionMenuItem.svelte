@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { Gamepad2, Search } from 'lucide-svelte';
+	import { Gamepad2, Search, Timer } from 'lucide-svelte';
 
 	interface Props {
 		label: string;
-		tone: 'game' | 'record';
+		tone: 'game' | 'record' | 'timer';
 		onSelect: () => void;
 	}
 
@@ -11,7 +11,8 @@
 
 	const iconToneClass = {
 		game: 'bg-cyan-400/10 text-cyan-100',
-		record: 'bg-amber-300/10 text-amber-100'
+		record: 'bg-amber-300/10 text-amber-100',
+		timer: 'bg-emerald-300/10 text-emerald-100'
 	};
 </script>
 
@@ -23,8 +24,10 @@
 	<span class={`grid size-9 place-items-center rounded-sm ${iconToneClass[tone]}`}>
 		{#if tone === 'game'}
 			<Gamepad2 size={17} />
-		{:else}
+		{:else if tone === 'record'}
 			<Search size={17} />
+		{:else}
+			<Timer size={17} />
 		{/if}
 	</span>
 	<span class="min-w-0">

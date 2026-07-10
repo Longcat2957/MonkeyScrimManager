@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { championIconUrl } from '$lib/datadragon';
-	import type { ResultChampion } from '$lib/fixtures/resultEntry';
-	import { championById } from './resultEntryInput';
+	import type { ScrimPickBanResultInputChampion } from '$lib/fixtures/scrimPickBanResultInputFixtures';
+	import { findScrimPickBanResultInputChampionById } from './scrimPickBanResultInputHelpers';
 
 	interface Props {
 		label: string;
 		championIds: string[];
-		champions: ResultChampion[];
+		champions: ScrimPickBanResultInputChampion[];
 		version: string;
 		onPick: (championId: string) => void;
 	}
@@ -15,7 +15,7 @@
 
 	const visibleChampions = $derived(
 		championIds
-			.map((championId) => championById(championId, champions))
+			.map((championId) => findScrimPickBanResultInputChampionById(championId, champions))
 			.filter((champion) => champion !== null)
 	);
 </script>

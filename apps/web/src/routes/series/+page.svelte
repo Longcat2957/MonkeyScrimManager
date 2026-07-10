@@ -2,8 +2,17 @@
 	import Panel from '$lib/components/layout/Panel.svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import EntryDraftBoard from '$lib/components/workflow/EntryDraftBoard.svelte';
-	import ScrimResultBoard from '$lib/components/workflow/ScrimResultBoard.svelte';
+	import ScrimPickBanResultInputBoard from '$lib/components/workflow/ScrimPickBanResultInputBoard.svelte';
+	import ScrimPickBanResultSetSummaryCard from '$lib/components/workflow/ScrimPickBanResultSetSummaryCard.svelte';
+	import SeriesCompletedEntryRosterBoard from '$lib/components/workflow/SeriesCompletedEntryRosterBoard.svelte';
 	import {
+		mockScrimPickBanResultInputGames,
+		mockScrimPickBanResultInputPatch,
+		mockScrimPickBanResultInputTeams,
+		scrimPickBanResultInputChampions
+	} from '$lib/fixtures/scrimPickBanResultInputFixtures';
+	import {
+		mockCompletedEntryAssignments,
 		mockEntryAssignments,
 		mockEntryHeadToHead,
 		mockEntryParticipants,
@@ -12,6 +21,8 @@
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
+
+	const completedSetResult = mockScrimPickBanResultInputGames[0]!;
 </script>
 
 <div class="space-y-5">
@@ -37,7 +48,29 @@
 		/>
 	</Panel>
 
+	<Panel kicker="엔트리" title="확정 엔트리 보드" compact>
+		<SeriesCompletedEntryRosterBoard
+			participants={mockEntryParticipants}
+			assignments={mockCompletedEntryAssignments}
+			champions={scrimPickBanResultInputChampions}
+			profileIconVersion={data.championCatalog.version}
+		/>
+	</Panel>
+
 	<Panel kicker="픽밴" title="1세트 입력" compact>
-		<ScrimResultBoard />
+		<ScrimPickBanResultInputBoard />
+	</Panel>
+
+	<Panel kicker="결과" title="1세트 결과 요약" compact>
+		<ScrimPickBanResultSetSummaryCard
+			label={completedSetResult.label}
+			blueTeam={mockScrimPickBanResultInputTeams.BLUE}
+			redTeam={mockScrimPickBanResultInputTeams.RED}
+			winner={completedSetResult.winner}
+			bans={completedSetResult.bans}
+			picks={completedSetResult.picks}
+			champions={scrimPickBanResultInputChampions}
+			version={mockScrimPickBanResultInputPatch}
+		/>
 	</Panel>
 </div>

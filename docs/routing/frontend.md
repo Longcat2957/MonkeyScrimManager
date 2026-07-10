@@ -423,8 +423,8 @@ WebSocket:
 
 컴포넌트 계획:
 
-- 완료: `AuctionBracketSetupBoard`
-- 완료: `AuctionMatchLineupBoard`
+- 완료: `AuctionTournamentBracketMatchSetupBoard`
+- 완료: `AuctionMatchStartingLineupInputBoard`
 - 다음: `AuctionMatchSummaryCard`
 
 Backend 데이터:

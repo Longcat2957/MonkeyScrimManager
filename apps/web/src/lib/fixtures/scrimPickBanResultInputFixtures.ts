@@ -1,36 +1,37 @@
-export type ResultSide = 'BLUE' | 'RED';
-export type ResultLane = 'TOP' | 'JUNGLE' | 'MID' | 'BOTTOM' | 'SUPPORT';
+export type ScrimPickBanResultInputSide = 'BLUE' | 'RED';
+export type ScrimPickBanResultInputLane = 'TOP' | 'JUNGLE' | 'MID' | 'BOTTOM' | 'SUPPORT';
 
-export interface ResultChampion {
+export interface ScrimPickBanResultInputChampion {
 	id: string;
 	name: string;
 	imageFull: string;
 }
 
-export interface ResultPlayer {
+export interface ScrimPickBanResultInputPlayer {
 	id: string;
 	name: string;
-	lane: ResultLane;
+	lane: ScrimPickBanResultInputLane;
 	mmr: number;
+	riotTier?: string | null;
 	preferredChampions: string[];
 	frequentChampions: string[];
 }
 
-export interface ResultTeam {
-	side: ResultSide;
+export interface ScrimPickBanResultInputTeam {
+	side: ScrimPickBanResultInputSide;
 	name: string;
-	players: ResultPlayer[];
+	players: ScrimPickBanResultInputPlayer[];
 }
 
-export interface ResultGame {
+export interface ScrimPickBanResultInputGame {
 	id: string;
 	label: string;
-	winner: ResultSide | null;
-	bans: Record<ResultSide, Array<string | null>>;
+	winner: ScrimPickBanResultInputSide | null;
+	bans: Record<ScrimPickBanResultInputSide, Array<string | null>>;
 	picks: Record<string, string | null>;
 }
 
-export const resultLaneLabel: Record<ResultLane, string> = {
+export const scrimPickBanResultInputLaneLabel: Record<ScrimPickBanResultInputLane, string> = {
 	TOP: '탑',
 	JUNGLE: '정글',
 	MID: '미드',
@@ -38,7 +39,7 @@ export const resultLaneLabel: Record<ResultLane, string> = {
 	SUPPORT: '서폿'
 };
 
-export const resultChampions: ResultChampion[] = [
+export const scrimPickBanResultInputChampions: ScrimPickBanResultInputChampion[] = [
 	{ id: 'Aatrox', name: '아트록스', imageFull: 'Aatrox.png' },
 	{ id: 'Ahri', name: '아리', imageFull: 'Ahri.png' },
 	{ id: 'Alistar', name: '알리스타', imageFull: 'Alistar.png' },
@@ -66,7 +67,10 @@ export const resultChampions: ResultChampion[] = [
 	{ id: 'Yone', name: '요네', imageFull: 'Yone.png' }
 ];
 
-export const mockResultTeams: Record<ResultSide, ResultTeam> = {
+export const mockScrimPickBanResultInputTeams: Record<
+	ScrimPickBanResultInputSide,
+	ScrimPickBanResultInputTeam
+> = {
 	BLUE: {
 		side: 'BLUE',
 		name: '1팀',
@@ -76,6 +80,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '도현',
 				lane: 'TOP',
 				mmr: 1518,
+				riotTier: 'P3',
 				preferredChampions: ['Aatrox', 'Gnar', 'Poppy'],
 				frequentChampions: ['Gnar', 'Aatrox', 'Renekton']
 			},
@@ -84,6 +89,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '서초',
 				lane: 'JUNGLE',
 				mmr: 1595,
+				riotTier: 'E2',
 				preferredChampions: ['LeeSin', 'Viego', 'Vi'],
 				frequentChampions: ['LeeSin', 'Viego', 'Graves']
 			},
@@ -92,6 +98,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '탐솔',
 				lane: 'MID',
 				mmr: 1642,
+				riotTier: 'D4',
 				preferredChampions: ['Ahri', 'Orianna', 'Yone'],
 				frequentChampions: ['Ahri', 'Orianna', 'Syndra']
 			},
@@ -100,6 +107,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '마루',
 				lane: 'BOTTOM',
 				mmr: 1588,
+				riotTier: 'E4',
 				preferredChampions: ['Ezreal', 'Kaisa', 'Varus'],
 				frequentChampions: ['Ezreal', 'Kaisa', 'Jinx']
 			},
@@ -108,6 +116,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '하루',
 				lane: 'SUPPORT',
 				mmr: 1510,
+				riotTier: 'P2',
 				preferredChampions: ['Thresh', 'Rakan', 'Blitzcrank'],
 				frequentChampions: ['Thresh', 'Rakan', 'Nautilus']
 			}
@@ -122,6 +131,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '준서',
 				lane: 'TOP',
 				mmr: 1532,
+				riotTier: 'P2',
 				preferredChampions: ['Poppy', 'Gnar', 'Renekton'],
 				frequentChampions: ['Poppy', 'Aatrox', 'Gnar']
 			},
@@ -130,6 +140,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '민기',
 				lane: 'JUNGLE',
 				mmr: 1560,
+				riotTier: 'P1',
 				preferredChampions: ['Vi', 'Sejuani', 'Viego'],
 				frequentChampions: ['Vi', 'Sejuani', 'Viego']
 			},
@@ -138,6 +149,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '로아',
 				lane: 'MID',
 				mmr: 1611,
+				riotTier: 'E3',
 				preferredChampions: ['Syndra', 'Azir', 'Orianna'],
 				frequentChampions: ['Syndra', 'Azir', 'Yone']
 			},
@@ -146,6 +158,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '이든',
 				lane: 'BOTTOM',
 				mmr: 1575,
+				riotTier: 'E4',
 				preferredChampions: ['Kaisa', 'Ashe', 'Jinx'],
 				frequentChampions: ['Kaisa', 'Varus', 'Ashe']
 			},
@@ -154,6 +167,7 @@ export const mockResultTeams: Record<ResultSide, ResultTeam> = {
 				name: '유림',
 				lane: 'SUPPORT',
 				mmr: 1528,
+				riotTier: 'P3',
 				preferredChampions: ['Alistar', 'Nautilus', 'Rakan'],
 				frequentChampions: ['Alistar', 'Blitzcrank', 'Nautilus']
 			}
@@ -165,7 +179,7 @@ function pickMap(values: Array<[string, string | null]>): Record<string, string 
 	return Object.fromEntries(values);
 }
 
-export const mockResultGames: ResultGame[] = [
+export const mockScrimPickBanResultInputGames: ScrimPickBanResultInputGame[] = [
 	{
 		id: 'game-1',
 		label: '1세트',
@@ -231,4 +245,4 @@ export const mockResultGames: ResultGame[] = [
 	}
 ];
 
-export const mockResultPatch = '16.13.1';
+export const mockScrimPickBanResultInputPatch = '16.13.1';

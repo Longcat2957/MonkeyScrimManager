@@ -1,10 +1,11 @@
 <script lang="ts">
 	import Panel from '$lib/components/layout/Panel.svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
-	import AuctionBiddingWorkbench from '$lib/components/workflow/AuctionBiddingWorkbench.svelte';
-	import AuctionBracketSetupBoard from '$lib/components/workflow/AuctionBracketSetupBoard.svelte';
-	import AuctionMatchLineupBoard from '$lib/components/workflow/AuctionMatchLineupBoard.svelte';
-	import AuctionTournamentSetupBoard from '$lib/components/workflow/AuctionTournamentSetupBoard.svelte';
+	import AuctionTournamentBidDraftWorkbench from '$lib/components/workflow/AuctionTournamentBidDraftWorkbench.svelte';
+	import AuctionTournamentBracketMatchSetupBoard from '$lib/components/workflow/AuctionTournamentBracketMatchSetupBoard.svelte';
+	import AuctionTournamentBracketResultBoard from '$lib/components/workflow/AuctionTournamentBracketResultBoard.svelte';
+	import AuctionMatchStartingLineupInputBoard from '$lib/components/workflow/AuctionMatchStartingLineupInputBoard.svelte';
+	import AuctionTournamentCaptainPointSetupBoard from '$lib/components/workflow/AuctionTournamentCaptainPointSetupBoard.svelte';
 	import {
 		mockAuctionBracketTeams,
 		mockAuctionCaptainIds,
@@ -30,7 +31,7 @@
 	/>
 
 	<Panel kicker="준비" title="경매 시작 전 설정" compact>
-		<AuctionTournamentSetupBoard
+		<AuctionTournamentCaptainPointSetupBoard
 			initialMembers={mockAuctionRecruitmentMembers}
 			initialCaptainIds={mockAuctionCaptainIds}
 			teamCount={mockAuctionTeams.length}
@@ -40,7 +41,7 @@
 	</Panel>
 
 	<Panel kicker="입찰" title="경매 드래프트" compact>
-		<AuctionBiddingWorkbench
+		<AuctionTournamentBidDraftWorkbench
 			initialTeams={mockAuctionTeams}
 			initialQueue={mockAuctionQueue}
 			profileIconVersion={data.championCatalog.version}
@@ -48,7 +49,7 @@
 	</Panel>
 
 	<Panel kicker="브래킷" title="경매 대진 설정" compact>
-		<AuctionBracketSetupBoard
+		<AuctionTournamentBracketMatchSetupBoard
 			teams={mockAuctionBracketTeams}
 			profileIconVersion={data.championCatalog.version}
 		/>
@@ -56,11 +57,18 @@
 
 	<Panel kicker="라인업" title="경매 매치 라인업" compact>
 		{#if mockAuctionBracketTeams[0] && mockAuctionBracketTeams[1]}
-			<AuctionMatchLineupBoard
+			<AuctionMatchStartingLineupInputBoard
 				leftTeam={mockAuctionBracketTeams[0]}
 				rightTeam={mockAuctionBracketTeams[1]}
 				profileIconVersion={data.championCatalog.version}
 			/>
 		{/if}
+	</Panel>
+
+	<Panel kicker="결과" title="경매 토너먼트 대진표 결과 입력" compact>
+		<AuctionTournamentBracketResultBoard
+			teams={mockAuctionBracketTeams}
+			profileIconVersion={data.championCatalog.version}
+		/>
 	</Panel>
 </div>

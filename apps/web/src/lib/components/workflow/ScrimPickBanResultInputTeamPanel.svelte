@@ -1,19 +1,23 @@
 <script lang="ts">
-	import { type ResultChampion, type ResultSide, type ResultTeam } from '$lib/fixtures/resultEntry';
+	import {
+		type ScrimPickBanResultInputChampion,
+		type ScrimPickBanResultInputSide,
+		type ScrimPickBanResultInputTeam
+	} from '$lib/fixtures/scrimPickBanResultInputFixtures';
 	import PositionIcon from './PositionIcon.svelte';
-	import type { ResultActiveCell } from './resultEntryInput';
-	import ScrimResultChampionCell from './ScrimResultChampionCell.svelte';
-	import ScrimResultChampionHints from './ScrimResultChampionHints.svelte';
+	import type { ScrimPickBanResultInputActiveCell } from './scrimPickBanResultInputHelpers';
+	import ScrimPickBanResultInputChampionCell from './ScrimPickBanResultInputChampionCell.svelte';
+	import ScrimPickBanResultInputChampionHints from './ScrimPickBanResultInputChampionHints.svelte';
 
 	interface Props {
-		team: ResultTeam;
+		team: ScrimPickBanResultInputTeam;
 		bans: Array<string | null>;
 		picks: Record<string, string | null>;
-		activeCell: ResultActiveCell;
-		champions: ResultChampion[];
+		activeCell: ScrimPickBanResultInputActiveCell;
+		champions: ScrimPickBanResultInputChampion[];
 		version: string;
-		onActiveCell: (cell: ResultActiveCell) => void;
-		onBan: (side: ResultSide, index: number, championId: string | null) => void;
+		onActiveCell: (cell: ScrimPickBanResultInputActiveCell) => void;
+		onBan: (side: ScrimPickBanResultInputSide, index: number, championId: string | null) => void;
 		onPick: (playerId: string, championId: string | null) => void;
 	}
 
@@ -24,11 +28,11 @@
 		return `${team.side}-ban-${index}`;
 	}
 
-	function isActive(kind: ResultActiveCell['kind'], key: string): boolean {
+	function isActive(kind: ScrimPickBanResultInputActiveCell['kind'], key: string): boolean {
 		return activeCell.kind === kind && activeCell.key === key;
 	}
 
-	function sideClass(side: ResultSide): string {
+	function sideClass(side: ScrimPickBanResultInputSide): string {
 		return side === 'BLUE' ? 'border-blue-300/30 text-blue-100' : 'border-red-300/30 text-red-100';
 	}
 
@@ -59,7 +63,7 @@
 			</div>
 			{#each bans as ban, index (`${team.side}-ban-${index}`)}
 				{@const key = banKey(index)}
-				<ScrimResultChampionCell
+				<ScrimPickBanResultInputChampionCell
 					value={ban}
 					{champions}
 					{version}
@@ -90,7 +94,7 @@
 						<span class="truncate text-sm font-semibold text-slate-100">{player.name}</span>
 					</button>
 
-					<ScrimResultChampionCell
+					<ScrimPickBanResultInputChampionCell
 						value={picked}
 						{champions}
 						{version}
@@ -101,7 +105,7 @@
 					/>
 
 					<div class="grid min-w-0 content-center gap-1 bg-slate-950/20 px-1.5">
-						<ScrimResultChampionHints
+						<ScrimPickBanResultInputChampionHints
 							label="선호"
 							championIds={player.preferredChampions}
 							{champions}
@@ -111,7 +115,7 @@
 								onPick(player.id, championId);
 							}}
 						/>
-						<ScrimResultChampionHints
+						<ScrimPickBanResultInputChampionHints
 							label="주 사용"
 							championIds={player.frequentChampions}
 							{champions}

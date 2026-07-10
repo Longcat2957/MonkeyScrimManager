@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Gamepad2, Search, Sparkles } from 'lucide-svelte';
+	import { Gamepad2, Search, Sparkles, Timer } from 'lucide-svelte';
 	import QuickActionFab from '$lib/components/fab/QuickActionFab.svelte';
 	import Panel from '$lib/components/layout/Panel.svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
@@ -7,7 +7,7 @@
 
 	const checks = [
 		{ label: '하단 고정', value: '우하단' },
-		{ label: '기능', value: '미니게임 / 전적검색' },
+		{ label: '기능', value: '미니게임 / 전적검색 / 타이머' },
 		{ label: '겹침', value: '전용 페이지에서 확인' }
 	];
 </script>
@@ -16,7 +16,7 @@
 	<WorkspaceHeader
 		kicker="FAB"
 		title="빠른 실행 확인"
-		description="미니게임과 전적검색 Modal이 화면 전환 없이 자연스럽게 열리는지 확인하는 전용 화면입니다."
+		description="미니게임, 전적검색, 타이머 Modal이 화면 전환 없이 자연스럽게 열리는지 확인하는 전용 화면입니다."
 		metrics={[
 			{ label: '위치', value: '하단', tone: 'info' },
 			{ label: '상태', value: '분리', tone: 'success' },
@@ -66,6 +66,13 @@
 						<p class="text-sm font-semibold text-slate-100">전적검색</p>
 					</div>
 					<StatusPill label="Modal" tone="warning" />
+				</div>
+				<div class="flex items-center justify-between gap-3">
+					<div class="flex items-center gap-2">
+						<Timer size={16} class="text-emerald-100" />
+						<p class="text-sm font-semibold text-slate-100">타이머</p>
+					</div>
+					<StatusPill label="Modal" tone="success" />
 				</div>
 			</div>
 		</Panel>

@@ -27,6 +27,7 @@ export interface MockEntryParticipant {
 	mmr: number;
 	recentRecord: string;
 	riotTier?: string | null;
+	mainChampions?: string[];
 	avatarUrl?: string | null;
 	profileIconId?: number | null;
 }
@@ -85,6 +86,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1620,
 		recentRecord: '최근 5승 3패',
 		riotTier: 'E2',
+		mainChampions: ['Gnar', 'Aatrox', 'Renekton', 'Poppy', 'Yone'],
 		profileIconId: 588
 	},
 	{
@@ -95,6 +97,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1580,
 		recentRecord: '최근 6승 2패',
 		riotTier: 'P1',
+		mainChampions: ['LeeSin', 'Viego', 'Vi', 'Graves', 'Sejuani'],
 		profileIconId: 907
 	},
 	{
@@ -105,6 +108,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1710,
 		recentRecord: '최근 7승 1패',
 		riotTier: 'D4',
+		mainChampions: ['Ahri', 'Orianna', 'Syndra', 'Azir', 'Yone'],
 		profileIconId: 1113
 	},
 	{
@@ -115,6 +119,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1490,
 		recentRecord: '최근 4승 4패',
 		riotTier: 'P3',
+		mainChampions: ['Ezreal', 'Kaisa', 'Jinx', 'Varus', 'Ashe'],
 		profileIconId: 1381
 	},
 	{
@@ -125,6 +130,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1510,
 		recentRecord: '최근 5승 3패',
 		riotTier: 'P2',
+		mainChampions: ['Thresh', 'Rakan', 'Nautilus', 'Alistar', 'Blitzcrank'],
 		profileIconId: 1454
 	},
 	{
@@ -135,6 +141,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1475,
 		recentRecord: '최근 3승 5패',
 		riotTier: 'P4',
+		mainChampions: ['Poppy', 'Gnar', 'Aatrox', 'Renekton', 'Yone'],
 		profileIconId: 1625
 	},
 	{
@@ -145,6 +152,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1660,
 		recentRecord: '최근 6승 2패',
 		riotTier: 'E1',
+		mainChampions: ['Vi', 'Sejuani', 'Viego', 'LeeSin', 'Graves'],
 		profileIconId: 1631
 	},
 	{
@@ -155,6 +163,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1535,
 		recentRecord: '최근 4승 4패',
 		riotTier: 'P2',
+		mainChampions: ['Syndra', 'Azir', 'Orianna', 'Ahri', 'Yone'],
 		profileIconId: 2090
 	},
 	{
@@ -165,6 +174,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1605,
 		recentRecord: '최근 6승 2패',
 		riotTier: 'E4',
+		mainChampions: ['Kaisa', 'Ashe', 'Jinx', 'Ezreal', 'Varus'],
 		profileIconId: 3157
 	},
 	{
@@ -175,6 +185,7 @@ export const mockEntryParticipants: MockEntryParticipant[] = [
 		mmr: 1450,
 		recentRecord: '최근 3승 5패',
 		riotTier: 'G1',
+		mainChampions: ['Alistar', 'Nautilus', 'Rakan', 'Thresh', 'Blitzcrank'],
 		profileIconId: 3379
 	}
 ];
@@ -186,6 +197,19 @@ export const mockEntryAssignments: Record<string, EntrySlot> = {
 	'u-mid-1': 'TEAM_1_MID',
 	'u-mid-2': 'TEAM_2_MID',
 	'u-bot-2': 'TEAM_2_BOTTOM'
+};
+
+export const mockCompletedEntryAssignments: Record<string, EntrySlot> = {
+	'u-top-1': 'TEAM_1_TOP',
+	'u-jgl-1': 'TEAM_1_JUNGLE',
+	'u-mid-1': 'TEAM_1_MID',
+	'u-bot-1': 'TEAM_1_BOTTOM',
+	'u-sup-1': 'TEAM_1_SUPPORT',
+	'u-top-2': 'TEAM_2_TOP',
+	'u-jgl-2': 'TEAM_2_JUNGLE',
+	'u-mid-2': 'TEAM_2_MID',
+	'u-bot-2': 'TEAM_2_BOTTOM',
+	'u-sup-2': 'TEAM_2_SUPPORT'
 };
 
 export const mockEntrySynergies: MockEntrySynergyRecord[] = [
