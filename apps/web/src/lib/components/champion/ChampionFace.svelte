@@ -21,7 +21,7 @@
 	<img
 		src={championIconUrl(champion, version)}
 		alt={champion.name}
-		class={`${sizeClass[size]} shrink-0 border border-slate-700 bg-slate-950 object-cover`}
+		class={`${sizeClass[size]} shrink-0 border border-[var(--color-app-border)] bg-[var(--color-app-control)] object-cover`}
 		loading="lazy"
 		decoding="async"
 	/>

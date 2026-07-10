@@ -1,9 +1,10 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const guilds = sqliteTable('guilds', {
 	guildId: text('guild_id').primaryKey(),
 	name: text('name').notNull(),
 	iconUrl: text('icon_url'),
+	isExternallyPublic: integer('is_externally_public', { mode: 'boolean' }).notNull().default(false),
 	status: text('status', { enum: ['INSTALLED', 'SETUP_REQUIRED', 'ACTIVE', 'DISABLED', 'LEFT'] })
 		.notNull()
 		.default('INSTALLED'),
@@ -18,6 +19,22 @@ export const users = sqliteTable('users', {
 	displayName: text('display_name').notNull(),
 	deletedAt: integer('deleted_at', { mode: 'timestamp_ms' })
 });
+
+export const userGuildPreferences = sqliteTable(
+	'user_guild_preferences',
+	{
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.discordId),
+		guildId: text('guild_id')
+			.notNull()
+			.references(() => guilds.guildId),
+		isFavorite: integer('is_favorite', { mode: 'boolean' }).notNull().default(false),
+		sortOrder: integer('sort_order').notNull().default(0),
+		lastSelectedAt: integer('last_selected_at', { mode: 'timestamp_ms' })
+	},
+	(table) => [primaryKey({ columns: [table.userId, table.guildId] })]
+);
 
 export const recruitments = sqliteTable('recruitments', {
 	id: text('id').primaryKey(),

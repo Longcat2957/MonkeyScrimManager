@@ -41,23 +41,38 @@ Frontend route의 비책임:
 
 목적:
 
-- 운영 대시보드.
-- 열린 모집, 마감 모집, 진행 중 시리즈, 진행 중 경매, 최근 완료 항목을 보여준다.
-- 운영자가 다음에 처리할 작업으로 바로 이동한다.
+- 전역 app shell 확인용 루트 화면.
+- 상단 navigation, guild selector, command/search, status strip, 본문 폭을 기능 화면 없이 확인한다.
+- 실제 workflow 컴포넌트 샘플은 `/dev/components`에서 확인한다.
 
 Backend 데이터:
 
-- `GET /api/recruitments`
-- `GET /api/series`
-- `GET /api/series/completed`
-- `GET /api/auction-recruitments`
-- `GET /api/auction-tournaments`
-- `GET /api/me`
+- 없음.
 
 WebSocket:
 
-- `dashboard`
-- `auction-dashboard`
+- 없음.
+
+### `/dev/components`
+
+파일:
+
+- `apps/web/src/routes/dev/components/+page.svelte`
+
+목적:
+
+- 공통 UI 컴포넌트와 운영 화면 샘플을 확인하는 개발용 화면.
+- root route를 실제 기능 샘플로 오염시키지 않고, panel/list/status/champion face 밀도를 검증한다.
+- 운영자가 보는 최종 용어 기준에 맞춰 한국어 표시를 우선한다.
+
+Backend 데이터:
+
+- Data Dragon champion catalog fixture 또는 `/dd` proxy.
+
+주의:
+
+- 실제 운영 dashboard가 아니다.
+- product workflow 구현이 진행되면 이 화면은 component regression 확인 용도로 유지한다.
 
 ### `+layout.svelte`
 
@@ -442,6 +457,8 @@ Backend 데이터:
 주의:
 
 - 내부 내전 기록은 반드시 현재 guild의 `games` 원장만 조회한다.
+- 현재 사용자가 guild 소속이 아니면 `guilds.is_externally_public`이 true인 공개 범위만 보여준다.
+- 공개 범위에는 운영 화면, 감사 로그, 멤버 관리, 권한 정보가 포함되지 않는다.
 
 ### `/users`
 
@@ -457,6 +474,13 @@ Backend 데이터:
 Backend 데이터:
 
 - `GET /api/users/search`
+- `GET /api/me/guilds`
+- `PUT /api/me/guild-preferences`
+
+주의:
+
+- 사용자가 속한 guild 선택, 즐겨찾기, 정렬 순서는 `user_guild_preferences`를 기준으로 유지한다.
+- Custom 전적 검색에서 어떤 guild의 기록을 볼지는 검색 결과 화면에서 사용자가 선택한다.
 
 ### `/users/[discordId]`
 

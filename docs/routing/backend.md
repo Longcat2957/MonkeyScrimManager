@@ -538,6 +538,8 @@ Routes:
 - `GET /api/users/:id/mmr-history`
 - `GET /api/users/:id/preferences`
 - `PUT /api/users/me/preferences`
+- `GET /api/me/guilds`
+- `PUT /api/me/guild-preferences`
 - `GET /api/me/riot-accounts`
 - `POST /api/me/riot-accounts`
 - `DELETE /api/me/riot-accounts/:puuid`
@@ -558,6 +560,13 @@ Frontend:
 - `/me/riot-accounts`
 - `/series/[id]/pick-ban`
 - `/auction/tournaments/[id]/bracket`
+
+권한/공개 범위:
+
+- guild 소속 사용자는 해당 guild의 내부 전적과 운영 화면을 권한에 따라 조회한다.
+- guild 소속이 아닌 사용자는 `guilds.is_externally_public = true`인 guild의 공개 화면/공개 전적만 조회할 수 있다.
+- `GET /api/me/guilds`는 Discord OAuth2 사용자 기준으로 소속 guild와 `user_guild_preferences`를 함께 반환한다.
+- `PUT /api/me/guild-preferences`는 사용자의 최근 선택 guild, 즐겨찾기, 정렬 순서를 저장한다.
 
 Bot:
 

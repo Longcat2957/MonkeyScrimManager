@@ -13,10 +13,10 @@
 	let { kicker, title, description, children, actions, compact = false }: Props = $props();
 </script>
 
-<section class="border border-slate-800 bg-[#0b0f16]">
+<section class="border border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)]">
 	{#if kicker || title || description || actions}
 		<div
-			class="flex flex-col gap-3 border-b border-slate-800 px-4 py-3 md:flex-row md:items-center md:justify-between"
+			class="flex flex-col gap-3 border-b border-[var(--color-app-border-muted)] px-4 py-3 md:flex-row md:items-center md:justify-between"
 		>
 			<div class="min-w-0">
 				{#if kicker}

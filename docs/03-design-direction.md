@@ -47,18 +47,45 @@ page별 placeholder를 먼저 늘리는 방식은 사용하지 않는다. 개별
 - operator/session state.
 - command/search area.
 - primary workflow navigation.
-- operations status rail.
 - shared capability 상태, 예: Data Dragon catalog/proxy.
 
 route는 이 shell 안에서 작업대 내용을 채운다. route마다 별도의 header/nav/status/card 구조를 새로 만들지 않는다.
+
+상단 레이아웃 원칙:
+
+- 전체 app navigation은 최상단 navbar에 둔다.
+- 홈 이동은 navbar 메뉴 항목이 아니라 좌측 로고 클릭으로 처리한다.
+- 모바일 navbar는 아이콘만 보여준다.
+- PC navbar는 명칭만 보여준다.
+- 검색은 avatar 옆 검색 버튼으로 열고 닫는다.
+- 검색 영역은 펼쳐졌을 때 navbar 아래에 표시하며, navbar와 시각적으로 분리한다.
+- 검색 왼쪽 카테고리는 Tabs로 구성하고, `Riot`과 `Custom`으로 이원화한다.
+- `Riot` 검색은 Riot ID/소환사명 검색을 우선한다.
+- `Custom` 검색은 내전 전적 검색 진입만 담당한다. 검색 패널 안에서 guild별 정보 노출이나 guild dropdown을 제공하지 않는다.
+- Custom 검색 이후 어떤 guild의 어떤 전적을 볼지는 이동한 화면에서 사용자가 조정한다.
+- 루트 화면이나 전역 shell에 Data Dragon 진입 버튼을 노출하지 않는다.
+- lol.ps의 정보 밀도와 상단 구조 감각은 참고하되 그대로 복제하지 않는다.
+
+## UI 문구와 톤
+
+이 서비스는 한국인 사용자를 주 대상으로 한다. 화면에 직접 노출되는 용어는 한국어를 기본으로 한다.
+
+원칙:
+
+- 단순 직역이나 개발자 용어를 피한다.
+- `운영 권한`, `감사 기준`, `operation`, `route`, `shell`처럼 딱딱하거나 내부 구현에 가까운 표현은 사용자 화면에 그대로 노출하지 않는다.
+- `내 역할`, `최근 변경`, `화면`, `상단 메뉴`, `할 일`처럼 실제 사용자가 자연스럽게 읽는 표현을 우선한다.
+- Data Dragon, Discord, champion id, API status code처럼 고유명사나 시스템 식별자는 필요한 경우 그대로 둔다.
+- 버튼, 탭, 상태 badge, 빈 상태, 오류 문구는 짧고 명확한 한국어로 작성한다.
+- 관리자용 화면이라도 기계적인 보고서 말투보다 운영자가 바로 이해하는 표현을 쓴다.
 
 ## Layout Primitive
 
 초기 baseline primitive:
 
 - app shell.
-- top bar.
-- workflow rail/sidebar.
+- top navbar.
+- separated search bar.
 - workspace header.
 - panel.
 - dense row/list/table frame.
@@ -69,9 +96,27 @@ route는 이 shell 안에서 작업대 내용을 채운다. route마다 별도�
 - panel은 작업 영역, 반복 row, table, modal 같은 명확한 프레임에만 쓴다.
 - card 안의 card는 만들지 않는다.
 - route-local 색상, spacing, badge 변형을 늘리지 않는다.
+- 사용자가 선택할 수 없는 항목은 `border-radius: 0`으로 처리한다.
+- 사용자가 선택 가능한 항목은 약한 `border-radius`를 둔다.
+- 현재 사용자가 선택한 항목은 중간 정도의 `border-radius`를 적용해 활성 상태가 분명히 보이게 한다.
+- 선택 가능한 버튼, 탭, 아이콘 버튼은 너무 둥글게 만들지 않고 약한 radius를 기본으로 한다. Tailwind 기준 `rounded-sm`을 우선한다.
+- Tabs/segmented control처럼 한 컨테이너 안에서 선택면이 움직이는 UI는 현재 선택 항목에 중간 정도의 radius를 둔다. Tailwind 기준 `rounded-md`를 우선한다.
+- 모든 페이지 전환은 빈 화면으로 튀지 않게 Skeleton placeholder 또는 Spinner를 제공한다.
+- 페이지 전환 로딩 상태와 화면 진입/이탈은 짧고 자연스러운 transition을 적용한다.
+- 여기서 Skeleton은 로딩 placeholder 패턴을 뜻한다. Skeleton UI 라이브러리를 뜻하지 않는다.
+- 기본 화면에는 의사결정에 필요한 정보만 노출한다.
+- 부가 정보, 설명, 상세 지표는 기본 노출하지 않고 사용자가 expand해서 확인하게 한다.
+- expand UI는 사용자가 추가 정보를 요청하는 동작이어야 하며, 화면 밀도를 무너뜨리지 않아야 한다.
+- border는 정보 층위가 실제로 바뀌는 곳에만 사용한다.
+- 같은 영역 안에서 외곽, 헤더, row, card border를 중첩하지 않는다.
+- 단순 구분은 여백, 배경 톤, gap, typography로 먼저 처리하고 border를 남발하지 않는다.
 - dashboard는 metric hero가 아니라 operations queue다.
 - Data Dragon catalog와 champion face/icon은 공유 capability로 유지한다.
 - route placeholder가 필요하면 공통 route frame을 사용하고, page별 화면처럼 꾸미지 않는다.
+- 사용자가 특정 기존 화면 또는 컴포넌트를 기준으로 지시하면 그 구조를 우선한다.
+- 기존 사례를 현대화할 때는 workflow, 정보 배치, 상호작용 순서를 유지하고 색상/간격/컴포넌트 문법만 현재 스택에 맞춘다.
+- 사용자 지시와 다르게 창의적으로 재구성하지 않는다. 특히 검증용 컴포넌트는 실제 route에 연결하지 않는다.
+- 선호 챔피언, 주로 사용한 챔피언처럼 성격이 다른 정보는 한 행 안에 섞지 않고 영역을 분리해 보여준다.
 
 ## 현재 제외하는 것
 

@@ -12,40 +12,40 @@
 
 <div class="space-y-5">
 	<WorkspaceHeader
-		kicker="Shared capability"
-		title="Data Dragon champion catalog"
-		description="챔피언 얼굴, 이름, id, key, 검색 slug를 모든 작업대가 같은 방식으로 쓰기 위한 기반 route입니다."
+		kicker="공유 기능"
+		title="Data Dragon 챔피언 카탈로그"
+		description="챔피언 얼굴, 이름, id, key, 검색 slug를 모든 작업대가 같은 방식으로 쓰기 위한 기반 화면입니다."
 		metrics={[
-			{ label: 'Version', value: data.championCatalog.version, tone: 'info' },
-			{ label: 'Locale', value: data.championCatalog.locale },
-			{ label: 'Results', value: data.results.length, tone: 'success' }
+			{ label: '버전', value: data.championCatalog.version, tone: 'info' },
+			{ label: '언어', value: data.championCatalog.locale },
+			{ label: '결과', value: data.results.length, tone: 'success' }
 		]}
 	>
 		{#snippet actions()}
 			<form
 				method="GET"
-				class="flex h-9 w-full items-center gap-2 border border-slate-800 bg-slate-950/70 px-3 sm:w-80"
+				class="flex h-9 w-full items-center gap-2 rounded-sm border border-[var(--color-app-border-muted)] bg-[var(--color-app-control)] px-3 sm:w-80"
 			>
 				<Search size={15} class="text-slate-500" />
 				<input
 					name="q"
 					value={data.query}
-					placeholder="name, id, key, tag"
+					placeholder="이름, id, key, 태그"
 					class="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
 				/>
 			</form>
 		{/snippet}
 	</WorkspaceHeader>
 
-	<Panel kicker="Champion rows" title="Catalog lookup" compact>
+	<Panel kicker="챔피언 목록" title="카탈로그 조회" compact>
 		<RowList
 			columns="56px minmax(0,1fr) 84px 88px 120px"
-			headings={['Icon', 'Champion', 'Key', 'idSlug', 'Tags']}
+			headings={['아이콘', '챔피언', 'Key', 'idSlug', '태그']}
 		>
 			{#each data.results as champion (champion.id)}
 				<a
 					href={resolve('/dd/catalog') + `?q=${encodeURIComponent(champion.id)}`}
-					class="grid gap-3 px-4 py-3 hover:bg-slate-900/80 md:grid-cols-[56px_minmax(0,1fr)_84px_88px_120px] md:items-center"
+					class="grid gap-3 rounded-sm px-4 py-3 hover:bg-[var(--color-app-hover)] md:grid-cols-[56px_minmax(0,1fr)_84px_88px_120px] md:items-center"
 				>
 					<ChampionFace {champion} version={data.championCatalog.version} size="sm" />
 					<div class="min-w-0">
@@ -57,7 +57,7 @@
 					<p class="truncate text-xs text-slate-500">{champion.tags.join(' / ')}</p>
 				</a>
 			{:else}
-				<p class="px-4 py-5 text-sm text-slate-500">No champion match.</p>
+				<p class="px-4 py-5 text-sm text-slate-500">일치하는 챔피언이 없습니다.</p>
 			{/each}
 		</RowList>
 	</Panel>

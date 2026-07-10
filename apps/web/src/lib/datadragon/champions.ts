@@ -60,6 +60,14 @@ export function championLoadingUrl(
 	return `${proxyRoot}/cdn/img/champion/loading/${encodeURIComponent(id)}_${skin}.jpg?v=${encodeURIComponent(version)}`;
 }
 
+export function profileIconUrl(
+	profileIconId: number | string,
+	version: string,
+	proxyRoot = DATA_DRAGON_PROXY_ROOT
+): string {
+	return `${proxyRoot}/cdn/${encodeURIComponent(version)}/img/profileicon/${encodeURIComponent(String(profileIconId))}.png`;
+}
+
 export async function loadLatestDataDragonVersion(
 	fetcher: typeof fetch,
 	proxyRoot = DATA_DRAGON_PROXY_ROOT

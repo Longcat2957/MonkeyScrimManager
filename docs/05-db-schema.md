@@ -17,7 +17,8 @@
 ```txt
 Global
   ├─ users                    # Discord user identity
-  └─ riot_accounts            # Discord user에 연결된 Riot 계정
+  ├─ riot_accounts            # Discord user에 연결된 Riot 계정
+  └─ user_guild_preferences   # 사용자별 guild 선택/정렬 선호
 
 Guild
   └─ guilds                   # Discord server identity / 설치 상태
@@ -87,6 +88,7 @@ INSTALLED
 ```txt
 users
   ├─ riot_accounts
+  ├─ user_guild_preferences
   └─ guild_members
         └─ guilds
              ├─ guild_operator_roles
@@ -126,6 +128,13 @@ users
   display_name
   deleted_at
 
+user_guild_preferences
+  user_id -> users.discord_id
+  guild_id -> guilds.guild_id
+  is_favorite
+  sort_order
+  last_selected_at
+
 riot_accounts
   puuid
   user_id -> users.discord_id
@@ -143,6 +152,8 @@ riot_accounts
 - Riot 계정은 전역 사용자 프로필에 연결한다.
 - 같은 Discord 사용자가 여러 guild에 있어도 Riot 계정 연결은 재사용할 수 있다.
 - guild별 MMR과 기록은 절대 global user에 직접 붙이지 않는다.
+- 사용자가 소속된 guild 중 어떤 guild를 먼저 볼지는 `user_guild_preferences`에서 관리한다.
+- `user_guild_preferences`는 데이터 소유권이 아니라 사용자별 진입/정렬/즐겨찾기 설정이다.
 
 ## Guild 루트 테이블
 
@@ -151,6 +162,7 @@ guilds
   guild_id              # Discord guild id
   name
   icon_url
+  is_externally_public  # guild 외부 공개 허용 여부
   status                # INSTALLED | SETUP_REQUIRED | ACTIVE | DISABLED | LEFT
   installed_at
   activated_at
@@ -180,6 +192,7 @@ guild_settings
 역할:
 
 - `guilds`는 multi-tenant의 루트다.
+- `guilds.is_externally_public`은 guild 외부 사용자가 guild 공개 화면이나 공개 전적을 볼 수 있는지 결정한다.
 - `guild_members`는 전역 user가 특정 guild에 속하는지 표현한다.
 - `guild_operator_roles`는 서버마다 다른 운영자 역할을 지원한다.
 - `guild_settings`는 모집 채널, 로그 채널, 기본 시즌, 기타 서버 설정을 담는다.
@@ -189,6 +202,8 @@ guild_settings
 - 모든 운영 데이터는 `guild_id`로 시작해야 한다.
 - 웹 URL의 `/g/{guildId}`와 DB의 `guild_id`가 같은 경계를 만든다.
 - Bot command는 항상 `interaction.guildId`를 기준으로 API를 호출한다.
+- `is_externally_public = false`인 guild의 내부 전적, 멤버, 운영 정보는 guild 소속 사용자에게만 노출한다.
+- 외부 공개가 켜져도 운영 화면, 감사 로그, 멤버 관리, 권한 정보는 공개 대상이 아니다.
 
 ## 일반 내전 구조
 

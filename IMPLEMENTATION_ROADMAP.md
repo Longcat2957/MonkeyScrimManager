@@ -31,6 +31,10 @@ Database: Cloudflare D1
 - Backend 구현은 Frontend 전체 페이지가 실제 운영 가능한 수준으로 완성된 뒤 시작한다.
 - VPS 배포를 기준으로 SvelteKit은 Node server 형태로 빌드한다.
 - D1은 Cloudflare Worker binding이 아니라 remote DB/API 접근 계층으로 다룬다.
+- 한국인 사용자를 대상으로 하므로 사용자에게 보이는 UI 문구는 한국어를 기본으로 한다.
+- 사용자 화면에서는 딱딱한 기계적 용어와 내부 구현 용어를 피하고, 자연스럽고 짧은 한국어 표현을 우선한다.
+- dev 환경은 다른 shell에서 계속 실행하고 확인한다. Codex는 사용자가 명시적으로 지시하지 않는 한 `pnpm dev`, `pnpm run dev`, Vite/SvelteKit dev server를 직접 실행하지 않는다.
+- Codex의 기본 검증은 `pnpm check`, `pnpm lint`, `pnpm test`, `pnpm build`로 수행한다.
 - 이 문서는 상세 스프린트 계획이 아니라 구현 순서의 뼈대다.
 
 ## Runtime / Deploy 결정
@@ -389,6 +393,20 @@ guild 우선순위 결정 방식
   - operator 권한 guild 우선
 ```
 
+Data Schema 반영 사항:
+
+```txt
+guilds.is_externally_public
+  -> guild 외부 사용자에게 공개 화면/공개 전적 접근을 허용할지 결정
+  -> 기본값 false
+  -> 운영 화면, 감사 로그, 멤버 관리, 권한 정보는 공개 대상에서 제외
+
+user_guild_preferences
+  -> user_id + guild_id 기준
+  -> 사용자가 속한 guild 중 최근 선택, 즐겨찾기, 정렬 순서를 저장
+  -> 데이터 소유권이 아니라 개인별 진입/선택 UX 상태
+```
+
 첫 번째로 끝까지 연결할 workflow:
 
 ```txt
@@ -422,6 +440,8 @@ UI 구현 수준:
 - [x] app shell
 - [x] shared layout primitives
 - [ ] guild 진입 / 기본 guild 선택 흐름
+- [ ] guild 외부 공개 여부 설정
+- [ ] user 단위 guild 선택/즐겨찾기/정렬 상태
 - [ ] guild dashboard
 - [ ] 일반 내전 화면
 - [ ] 경매 내전 화면

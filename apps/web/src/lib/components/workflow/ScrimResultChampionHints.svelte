@@ -1,0 +1,43 @@
+<script lang="ts">
+	import { championIconUrl } from '$lib/datadragon';
+	import type { ResultChampion } from '$lib/fixtures/resultEntry';
+	import { championById } from './resultEntryInput';
+
+	interface Props {
+		label: string;
+		championIds: string[];
+		champions: ResultChampion[];
+		version: string;
+		onPick: (championId: string) => void;
+	}
+
+	let { label, championIds, champions, version, onPick }: Props = $props();
+
+	const visibleChampions = $derived(
+		championIds
+			.map((championId) => championById(championId, champions))
+			.filter((champion) => champion !== null)
+	);
+</script>
+
+<div class="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-1">
+	<p class="truncate text-[11px] font-semibold text-slate-500">{label}</p>
+	<div class="grid min-w-0 grid-cols-3 gap-1">
+		{#each visibleChampions as champion (champion.id)}
+			<button
+				type="button"
+				class="grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-900/45 px-1 py-1 text-left hover:bg-[var(--color-app-hover)]"
+				title={champion.name}
+				onclick={() => onPick(champion.id)}
+			>
+				<img
+					src={championIconUrl(champion.imageFull, version)}
+					alt={champion.name}
+					class="size-6 object-cover"
+					loading="lazy"
+				/>
+				<span class="truncate text-[11px] font-semibold text-slate-300">{champion.name}</span>
+			</button>
+		{/each}
+	</div>
+</div>

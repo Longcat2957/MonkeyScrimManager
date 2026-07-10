@@ -69,3 +69,11 @@ docs/routing/bot.md             Bot command/component route
 라우팅 변경은 docs/routing/*에 반영
 디자인 결정은 docs/03-design-direction.md에 반영
 ```
+
+## 개발 서버 규칙
+
+```txt
+dev 환경은 다른 shell에서 계속 실행/확인한다.
+Codex는 pnpm dev / pnpm run dev / Vite dev server를 직접 실행하지 않는다.
+Codex 검증은 pnpm check / lint / test / build 중심으로 수행한다.
+```

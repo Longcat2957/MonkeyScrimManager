@@ -24,7 +24,7 @@
 		{#snippet actions()}
 			<a
 				href={resolve('/')}
-				class="inline-flex h-9 items-center gap-2 border border-slate-700 px-3 text-xs font-semibold text-slate-200 hover:border-cyan-400/40 hover:text-cyan-100"
+				class="inline-flex h-9 items-center gap-2 rounded-sm border border-slate-700 px-3 text-xs font-semibold text-slate-200 hover:border-cyan-400/40 hover:text-cyan-100"
 			>
 				<ArrowLeft size={14} />
 				Ops queue
@@ -50,7 +50,9 @@
 				</div>
 			</div>
 
-			<div class="grid gap-2 border-l border-slate-800 pl-4 max-lg:border-l-0 max-lg:pl-0">
+			<div
+				class="grid gap-2 border-l border-[var(--color-app-border-muted)] pl-4 max-lg:border-l-0 max-lg:pl-0"
+			>
 				<div class="flex items-center justify-between gap-3">
 					<span class="flex items-center gap-2 text-xs text-slate-500">
 						<Rows3 size={14} />

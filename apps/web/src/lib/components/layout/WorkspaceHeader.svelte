@@ -18,7 +18,7 @@
 	let { kicker, title, description, metrics = [], actions }: Props = $props();
 
 	const metricToneClass = {
-		neutral: 'border-slate-800 bg-slate-950/70 text-slate-50',
+		neutral: 'border-[var(--color-app-border-muted)] bg-[var(--color-app-control)] text-slate-50',
 		info: 'border-cyan-400/30 bg-cyan-400/10 text-cyan-50',
 		success: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-50',
 		warning: 'border-amber-300/30 bg-amber-300/10 text-amber-50',
@@ -26,7 +26,7 @@
 	};
 </script>
 
-<header class="border-b border-slate-800 pb-4">
+<header class="border-b border-[var(--color-app-border-muted)] pb-4">
 	<div class="flex flex-col gap-4 xl:flex-row xl:items-end">
 		<div class="min-w-0">
 			<p class="text-xs font-semibold uppercase text-cyan-200">{kicker}</p>
