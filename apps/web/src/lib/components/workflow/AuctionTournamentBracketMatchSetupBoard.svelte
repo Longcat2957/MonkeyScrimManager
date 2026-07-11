@@ -96,9 +96,12 @@
 		clearDragState();
 	}
 
-	function slotClass(targetSlotKey: SlotKey): string {
+	function slotClass(targetSlotKey: SlotKey, occupied: boolean): string {
 		if (overSlotKey === targetSlotKey) {
 			return 'border-cyan-300/60 bg-cyan-400/12 ring-1 ring-cyan-300/35';
+		}
+		if (!occupied) {
+			return 'border-dashed border-slate-700 bg-slate-950/25';
 		}
 		return 'border-transparent bg-slate-950/35';
 	}
@@ -181,7 +184,7 @@
 								{@const currentSlotKey = slotKey(match.id, slot)}
 								{@const team = teamById(bracket[currentSlotKey])}
 								<div
-									class={`grid h-44 grid-rows-[auto_minmax(0,1fr)] gap-3 border px-3 py-3 transition ${slotClass(currentSlotKey)}`}
+									class={`grid h-44 grid-rows-[auto_minmax(0,1fr)] gap-3 border px-3 py-3 transition ${slotClass(currentSlotKey, Boolean(team))}`}
 									ondragover={(event) => handleSlotDragOver(event, currentSlotKey)}
 									ondragleave={() => {
 										if (overSlotKey === currentSlotKey) overSlotKey = null;

@@ -500,7 +500,7 @@ Audit:
 
 - 경매 match 게임 결과 입력.
 - lineup locked 상태에서만 허용.
-- 경매는 MMR에 반영하지 않는다.
+- 경매도 해당 guild MMR에 반영한다.
 
 Frontend:
 

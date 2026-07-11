@@ -459,7 +459,7 @@ games
   guild_id = auction_matches.guild_id
   ranked_series_id = NULL
   auction_match_id = auction_matches.id
-  MMR 미반영
+  MMR 반영
 ```
 
 하위 기록:
@@ -791,6 +791,6 @@ Guild A와 Guild B의 season이 독립적임
 Guild A와 Guild B의 recruitment/series id 조회가 guild_id로 격리됨
 Bot 재설치 시 guild 데이터가 복구 가능함
 일반 game 결과는 해당 guild MMR만 갱신
-경매 game 결과는 어떤 guild MMR도 갱신하지 않음
+경매 game 결과도 해당 guild MMR만 갱신
 모든 admin audit log는 guild_id를 가진다
 ```

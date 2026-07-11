@@ -461,13 +461,13 @@ WebSocket:
 
 - 경매 토너먼트 결과.
 - 우승 팀, match 결과, game ledger, pick/ban 기록 표시.
-- 경매 최종 결과는 self-service 입력 완료 후 참가자가 확인하는 화면으로 둔다.
-- 운영자용 상태 대시보드가 아니라 우승팀, 팀 구성, 낙찰 기록, match 스코어를 읽기 쉽게 정리한다.
+- 경매 진행 요약은 self-service 입력 완료 후 참가자가 확인하는 읽기 전용 원장으로 둔다.
+- 운영자용 control dashboard가 아니라 팀 구성, 포인트 정산, MMR 변화, match 스코어를 읽기 쉽게 정리한다.
 
 컴포넌트 계획:
 
-- 다음: `AuctionTournamentResultBoard`
-- 다음: `AuctionPlayerLedgerBoard`
+- 완료: `AuctionTournamentOverviewBoard`
+- 통합: `AuctionPlayerLedgerBoard` 역할은 overview board의 참가자 정산 섹션에 포함한다.
 
 Backend 데이터:
 

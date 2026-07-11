@@ -6,11 +6,14 @@
 	import AuctionTournamentBracketResultBoard from '$lib/components/workflow/AuctionTournamentBracketResultBoard.svelte';
 	import AuctionMatchStartingLineupInputBoard from '$lib/components/workflow/AuctionMatchStartingLineupInputBoard.svelte';
 	import AuctionTournamentCaptainPointSetupBoard from '$lib/components/workflow/AuctionTournamentCaptainPointSetupBoard.svelte';
+	import AuctionTournamentOverviewBoard from '$lib/components/workflow/AuctionTournamentOverviewBoard.svelte';
 	import {
 		mockAuctionBracketTeams,
 		mockAuctionCaptainIds,
+		mockAuctionChampionTeamId,
 		mockAuctionQueue,
 		mockAuctionRecruitmentMembers,
+		mockAuctionResultMatches,
 		mockAuctionTeams
 	} from '$lib/fixtures/workflow';
 	import type { PageProps } from './$types';
@@ -68,6 +71,15 @@
 	<Panel kicker="결과" title="경매 토너먼트 대진표 결과 입력" compact>
 		<AuctionTournamentBracketResultBoard
 			teams={mockAuctionBracketTeams}
+			profileIconVersion={data.championCatalog.version}
+		/>
+	</Panel>
+
+	<Panel kicker="요약" title="경매 진행 요약" compact>
+		<AuctionTournamentOverviewBoard
+			teams={mockAuctionBracketTeams}
+			matches={mockAuctionResultMatches}
+			championTeamId={mockAuctionChampionTeamId}
 			profileIconVersion={data.championCatalog.version}
 		/>
 	</Panel>

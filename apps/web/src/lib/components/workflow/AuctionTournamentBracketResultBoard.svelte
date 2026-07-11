@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { Dialog, Tabs } from 'bits-ui';
 	import { ChevronDown, ClipboardList, Trophy, X } from 'lucide-svelte';
-	import type { MockAuctionTeam } from '$lib/fixtures/workflow';
+	import {
+		LANES,
+		laneLabel,
+		type Lane,
+		type MockAuctionMember,
+		type MockAuctionTeam
+	} from '$lib/fixtures/workflow';
 	import PlayerAvatar from './PlayerAvatar.svelte';
 	import PositionIcon from './PositionIcon.svelte';
 	import ScrimPickBanResultInputBoard from './ScrimPickBanResultInputBoard.svelte';
@@ -18,6 +24,11 @@
 		lineupsLocked: boolean;
 		resultEntered: boolean;
 		bestOf: 1 | 3 | 5;
+	};
+
+	type AuctionLineupSlot = {
+		lane: Lane;
+		member: MockAuctionMember;
 	};
 
 	interface Props {
@@ -106,6 +117,17 @@
 		return Array.from({ length: match.bestOf }, (_, index) => index + 1);
 	}
 
+	function assignedLineup(team: MockAuctionTeam): AuctionLineupSlot[] {
+		return LANES.map((lane, index) => {
+			const member = team.members[index];
+			return member ? { lane, member } : null;
+		}).filter((slot): slot is AuctionLineupSlot => Boolean(slot));
+	}
+
+	function matchFormatLabel(match: AuctionBracketMatch): string {
+		return `Bo${match.bestOf}`;
+	}
+
 	function activeModalTitle(): string {
 		if (!activeMatch) return '매치 결과 입력';
 		return `${activeMatch.label} 결과 입력`;
@@ -154,7 +176,7 @@
 					>
 						<div class="min-w-0">
 							<p class="text-[11px] font-semibold text-amber-200/70">
-								{finalMatch.roundLabel} · BO{finalMatch.bestOf}
+								{finalMatch.roundLabel} · {matchFormatLabel(finalMatch)}
 							</p>
 							<p class="truncate text-sm font-semibold text-slate-100">{finalMatch.label}</p>
 						</div>
@@ -194,13 +216,20 @@
 									</p>
 								</div>
 								{#if team}
-									{#each team.members.slice(0, 5) as member (member.id)}
-										<div class="grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-2">
-											<PositionIcon role={member.role} size="sm" />
+									{#each assignedLineup(team) as slot (slot.member.id)}
+										<div class="grid grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2">
+											<div class="grid justify-items-center gap-0.5">
+												<PositionIcon role={slot.lane} size="sm" />
+												<span class="text-[10px] font-bold text-slate-500">
+													{laneLabel[slot.lane]}
+												</span>
+											</div>
 											<div class="min-w-0">
-												<p class="truncate text-sm font-semibold text-slate-100">{member.name}</p>
+												<p class="truncate text-sm font-semibold text-slate-100">
+													{slot.member.name}
+												</p>
 												<p class="truncate text-xs text-slate-500">
-													{member.riotTier ?? '-'} · MMR {member.mmr}
+													{slot.member.riotTier ?? '-'} · MMR {slot.member.mmr}
 												</p>
 											</div>
 										</div>
@@ -222,7 +251,7 @@
 						>
 							<div class="min-w-0">
 								<p class="text-[11px] font-semibold text-slate-500">
-									{match.roundLabel} · BO{match.bestOf}
+									{match.roundLabel} · {matchFormatLabel(match)}
 								</p>
 								<p class="truncate text-sm font-semibold text-slate-100">{match.label}</p>
 							</div>
@@ -262,13 +291,20 @@
 										</p>
 									</div>
 									{#if team}
-										{#each team.members.slice(0, 5) as member (member.id)}
-											<div class="grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-2">
-												<PositionIcon role={member.role} size="sm" />
+										{#each assignedLineup(team) as slot (slot.member.id)}
+											<div class="grid grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2">
+												<div class="grid justify-items-center gap-0.5">
+													<PositionIcon role={slot.lane} size="sm" />
+													<span class="text-[10px] font-bold text-slate-500">
+														{laneLabel[slot.lane]}
+													</span>
+												</div>
 												<div class="min-w-0">
-													<p class="truncate text-sm font-semibold text-slate-100">{member.name}</p>
+													<p class="truncate text-sm font-semibold text-slate-100">
+														{slot.member.name}
+													</p>
 													<p class="truncate text-xs text-slate-500">
-														{member.riotTier ?? '-'} · MMR {member.mmr}
+														{slot.member.riotTier ?? '-'} · MMR {slot.member.mmr}
 													</p>
 												</div>
 											</div>
@@ -295,7 +331,7 @@
 						>
 							<div class="min-w-0">
 								<p class="text-[11px] font-semibold text-slate-500">
-									{match.roundLabel} · BO{match.bestOf}
+									{match.roundLabel} · {matchFormatLabel(match)}
 								</p>
 								<p class="truncate text-sm font-semibold text-slate-100">{match.label}</p>
 							</div>
@@ -326,12 +362,12 @@
 												</p>
 											</div>
 											<div class="flex -space-x-2">
-												{#each team.members.slice(0, 5) as member (member.id)}
+												{#each assignedLineup(team) as slot (slot.member.id)}
 													<PlayerAvatar
-														name={member.name}
-														role={member.role}
-														avatarUrl={member.avatarUrl}
-														profileIconId={member.profileIconId}
+														name={slot.member.name}
+														role={slot.lane}
+														avatarUrl={slot.member.avatarUrl}
+														profileIconId={slot.member.profileIconId}
 														{profileIconVersion}
 														size="sm"
 														shape="circle"
@@ -362,7 +398,7 @@
 					>
 						<div class="min-w-0">
 							<p class="text-[11px] font-semibold text-amber-200/70">
-								{finalMatch.roundLabel} · BO{finalMatch.bestOf}
+								{finalMatch.roundLabel} · {matchFormatLabel(finalMatch)}
 							</p>
 							<p class="truncate text-sm font-semibold text-slate-100">{finalMatch.label}</p>
 						</div>
@@ -393,12 +429,12 @@
 											</p>
 										</div>
 										<div class="flex -space-x-2">
-											{#each team.members.slice(0, 5) as member (member.id)}
+											{#each assignedLineup(team) as slot (slot.member.id)}
 												<PlayerAvatar
-													name={member.name}
-													role={member.role}
-													avatarUrl={member.avatarUrl}
-													profileIconId={member.profileIconId}
+													name={slot.member.name}
+													role={slot.lane}
+													avatarUrl={slot.member.avatarUrl}
+													profileIconId={slot.member.profileIconId}
 													{profileIconVersion}
 													size="md"
 													shape="circle"

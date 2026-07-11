@@ -77,6 +77,28 @@ export interface MockAuctionTeam {
 	members: MockAuctionMember[];
 }
 
+export interface MockAuctionResultMatch {
+	id: string;
+	round: 'SEMIFINAL' | 'FINAL';
+	label: string;
+	bestOf: 1 | 3 | 5;
+	leftTeamId: string;
+	rightTeamId: string;
+	leftScore: number;
+	rightScore: number;
+	winnerTeamId: string;
+	resultSubmitted: boolean;
+}
+
+export const MOCK_AUCTION_TEAM_IDS = {
+	A: 'auction-team-a',
+	B: 'auction-team-b',
+	C: 'auction-team-c',
+	D: 'auction-team-d'
+} as const;
+
+export const mockAuctionChampionTeamId = MOCK_AUCTION_TEAM_IDS.B;
+
 export const mockEntryParticipants: MockEntryParticipant[] = [
 	{
 		id: 'u-top-1',
@@ -271,7 +293,7 @@ export const mockEntryHeadToHead: MockEntryHeadToHeadRecord[] = [
 
 export const mockAuctionTeams: MockAuctionTeam[] = [
 	{
-		id: 'auction-team-a',
+		id: MOCK_AUCTION_TEAM_IDS.A,
 		name: '1팀',
 		captain: '서초 탑솔',
 		initialPoints: 1000,
@@ -291,7 +313,7 @@ export const mockAuctionTeams: MockAuctionTeam[] = [
 		]
 	},
 	{
-		id: 'auction-team-b',
+		id: MOCK_AUCTION_TEAM_IDS.B,
 		name: '2팀',
 		captain: '홍대 미드',
 		initialPoints: 1000,
@@ -311,7 +333,7 @@ export const mockAuctionTeams: MockAuctionTeam[] = [
 		]
 	},
 	{
-		id: 'auction-team-c',
+		id: MOCK_AUCTION_TEAM_IDS.C,
 		name: '3팀',
 		captain: '성수 정글',
 		initialPoints: 1000,
@@ -331,7 +353,7 @@ export const mockAuctionTeams: MockAuctionTeam[] = [
 		]
 	},
 	{
-		id: 'auction-team-d',
+		id: MOCK_AUCTION_TEAM_IDS.D,
 		name: '4팀',
 		captain: '노원 원딜',
 		initialPoints: 1000,
@@ -586,3 +608,42 @@ export const mockAuctionBracketTeams: MockAuctionTeam[] = mockAuctionTeams.map((
 		members: [...team.members.map((member) => ({ ...member })), ...additions]
 	};
 });
+
+export const mockAuctionResultMatches: MockAuctionResultMatch[] = [
+	{
+		id: 'auction-match-a',
+		round: 'SEMIFINAL',
+		label: '준결승 A',
+		bestOf: 3,
+		leftTeamId: MOCK_AUCTION_TEAM_IDS.A,
+		rightTeamId: MOCK_AUCTION_TEAM_IDS.B,
+		leftScore: 1,
+		rightScore: 2,
+		winnerTeamId: MOCK_AUCTION_TEAM_IDS.B,
+		resultSubmitted: true
+	},
+	{
+		id: 'auction-match-b',
+		round: 'SEMIFINAL',
+		label: '준결승 B',
+		bestOf: 3,
+		leftTeamId: MOCK_AUCTION_TEAM_IDS.C,
+		rightTeamId: MOCK_AUCTION_TEAM_IDS.D,
+		leftScore: 2,
+		rightScore: 0,
+		winnerTeamId: MOCK_AUCTION_TEAM_IDS.C,
+		resultSubmitted: true
+	},
+	{
+		id: 'auction-match-final',
+		round: 'FINAL',
+		label: '결승',
+		bestOf: 3,
+		leftTeamId: MOCK_AUCTION_TEAM_IDS.B,
+		rightTeamId: MOCK_AUCTION_TEAM_IDS.C,
+		leftScore: 2,
+		rightScore: 1,
+		winnerTeamId: MOCK_AUCTION_TEAM_IDS.B,
+		resultSubmitted: true
+	}
+];

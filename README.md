@@ -41,7 +41,7 @@ bot 설치
 guild_id가 모든 운영 데이터의 경계
 Discord OAuth2가 유일한 웹 인증
 일반 내전은 MMR 반영
-경매 내전은 MMR 미반영
+경매 내전도 MMR 반영
 경매 match는 게임 시작 전 5라인업 확정 필수
 중요 작업은 operation_log 기반 되돌리기 지원
 ```

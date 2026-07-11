@@ -91,7 +91,7 @@ MonkeyScrimManager/
 유지할 규칙:
 
 - 일반 내전은 MMR에 반영한다.
-- 경매 내전은 MMR에 반영하지 않는다.
+- 경매 내전도 MMR에 반영한다.
 - `series.id === recruitments.id`를 유지한다.
 - `auction_tournaments.id === auction_recruitments.id`를 유지한다.
 - 주요 삭제는 soft-delete 또는 상태 전이로 보존한다.
@@ -263,17 +263,17 @@ Route:
   - 20인/4팀 경매의 대진 설정.
 - 완료: `AuctionMatchStartingLineupInputBoard`
   - match별 5인 라인업 입력과 확정.
-- 다음 작업: `AuctionTournamentResultBoard`
-  - 우승팀, 대진 결과, match별 스코어, 팀 구성, 낙찰 기록을 보여주는 경매 최종 결과 화면.
+- 완료: `AuctionTournamentOverviewBoard`
+  - 대진 결과, match별 스코어, 팀 구성, 참가자별 포인트/MMR 정산을 보여주는 경매 진행 요약 화면.
 - 다음 작업: `AuctionMatchSummaryCard`
   - 브래킷 화면에서 match를 compact하게 보여주는 카드. 팀 vs 팀, 라인업 확정 여부, 결과 입력 진입만 포함한다.
-- 다음 작업: `AuctionPlayerLedgerBoard`
-  - 참가자별 팀, 라인, 낙찰가, 경기 결과를 확인하는 경매 기록 요약.
+- 통합 처리: `AuctionPlayerLedgerBoard`
+  - 별도 컴포넌트로 만들지 않고 `AuctionTournamentOverviewBoard`의 참가자 정산 섹션에 포함한다.
 
 컴포넌트 제외 기준:
 
 - 별도 `AuctionMatchResultBoard`는 만들지 않는다. 게임 단위 결과 입력은 기존 결과 입력 컴포넌트 흐름을 사용한다.
-- 별도 readiness/control dashboard는 만들지 않는다. 경매 내전은 운영자가 모든 상태를 통제하는 대시보드가 아니라, 팀/참가자가 필요한 입력을 직접 완료하는 self-service 흐름을 우선한다.
+- 별도 readiness/control dashboard는 만들지 않는다. 경매 진행 요약은 읽기 전용 원장으로만 두고, 조작은 각 단계 화면에서 처리한다.
 - match 진행 전 확인 UI가 필요하면 독립 dashboard가 아니라 `AuctionMatchSummaryCard` 안의 최소 상태 표시로 제한한다.
 
 완료 기준:
@@ -281,7 +281,7 @@ Route:
 - 10인/20인 경매 흐름을 완료할 수 있다.
 - 라인업 미확정 match는 결과 입력으로 넘어갈 수 없다.
 - 입찰, 라인업 확정, 경매 결과 입력은 이전 단계로 되돌릴 수 있다.
-- 경매 게임 기록은 저장되지만 MMR은 변하지 않는다.
+- 경매 게임 기록도 일반 내전과 같은 guild MMR 원장에 반영된다.
 - tournament result와 bot 종료 알림이 연결된다.
 
 ## Phase 9: Admin, 운영 안전장치, 배포
