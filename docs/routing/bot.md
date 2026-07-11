@@ -187,7 +187,7 @@ Message components:
 
 Web link:
 
-- 정원 도달/마감 후 `/recruitments/{id}/entry`.
+- 정원 도달/마감 후 `/g/{guildId}/recruitments/{id}/entry`.
 
 ### `/내전인원추가 모집 멤버`
 
@@ -276,8 +276,8 @@ Backend:
 
 Web link:
 
-- `/series`
-- `/series/completed`
+- `/g/{guildId}/series`
+- `/g/{guildId}/series#completed`
 
 ### `/내전강제삭제 series_id [rollback_mmr]`
 
@@ -332,7 +332,7 @@ Message components:
 
 Web link:
 
-- `/auction/recruitments/{id}/draft`.
+- `/g/{guildId}/auction/recruitments/{id}/draft`.
 
 ### `/경매인원추가 모집 멤버`
 
@@ -374,7 +374,7 @@ Backend:
 
 Web link:
 
-- `/auction`
+- `/g/{guildId}/auction`
 
 ### `/경매강제삭제 모집`
 
@@ -484,7 +484,7 @@ Backend:
 
 Web link:
 
-- `/g/{guildId}/admin/logs`.
+- `/g/{guildId}/admin?tab=logs`.
 
 ### `/되돌리기 [target]`
 
@@ -509,7 +509,7 @@ Audit:
 
 Web link:
 
-- `/g/{guildId}/admin/logs`.
+- `/g/{guildId}/admin?tab=operations`.
 
 ### `/유저강제삭제 discord_id`
 
@@ -551,7 +551,7 @@ Handlers:
 
 Web link:
 
-- `recruit:start-entry` 처리 후 `/recruitments/{id}/entry`.
+- `recruit:start-entry` 처리 후 `/g/{guildId}/recruitments/{id}/entry`.
 
 ### 경매 모집 message components
 
@@ -571,7 +571,7 @@ Handlers:
 
 Web link:
 
-- `auction-recruit:start` 처리 후 `/auction/recruitments/{id}/draft`.
+- `auction-recruit:start` 처리 후 `/g/{guildId}/auction/recruitments/{id}/draft`.
 
 ## API -> Bot Internal Routing
 
@@ -599,19 +599,19 @@ Bot 처리:
 
 Bot이 생성해야 하는 주요 웹 링크:
 
-| 상황 | URL |
-| --- | --- |
-| 일반 모집 마감 후 엔트리 편성 | `/recruitments/{id}/entry` |
-| 일반 시리즈 생성 후 픽/밴 | `/series/{id}/pick-ban` |
-| 일반 시리즈 완료 후 결과 | `/series/{id}/result` |
-| 경매 모집 마감 후 드래프트 시작 | `/auction/recruitments/{id}/draft` |
-| 경매 토너먼트 입찰 진행 | `/auction/tournaments/{id}/draft` |
-| 경매 브래킷 입력 | `/auction/tournaments/{id}/bracket` |
-| 경매 토너먼트 완료 후 결과 | `/auction/tournaments/{id}/result` |
-| 사용자 프로필 | `/users/{discordId}` |
-| 리더보드 | `/leaderboard` |
-| 내 Riot 계정 관리 | `/me/riot-accounts` |
-| audit log | `/admin/logs` |
+| 상황                            | URL                                             |
+| ------------------------------- | ----------------------------------------------- |
+| 일반 모집 마감 후 엔트리 편성   | `/g/{guildId}/recruitments/{id}/entry`          |
+| 일반 시리즈 생성 후 픽/밴       | `/g/{guildId}/series/{id}/pick-ban`             |
+| 일반 시리즈 완료 후 결과        | `/g/{guildId}/series/{id}/result`               |
+| 경매 모집 마감 후 드래프트 시작 | `/g/{guildId}/auction/recruitments/{id}/draft`  |
+| 경매 토너먼트 입찰 진행         | `/g/{guildId}/auction/tournaments/{id}/draft`   |
+| 경매 브래킷 입력                | `/g/{guildId}/auction/tournaments/{id}/bracket` |
+| 경매 토너먼트 완료 후 결과      | `/g/{guildId}/auction/tournaments/{id}/result`  |
+| 사용자 프로필                   | `/users/{discordId}`                            |
+| 리더보드                        | `/g/{guildId}/leaderboard`                      |
+| 내 정보 / Riot 계정 관리        | `/me`                                           |
+| audit log                       | `/g/{guildId}/admin?tab=logs`                   |
 
 ## Bot 우선순위
 

@@ -90,7 +90,7 @@
 	async function refreshStatus() {
 		if (refreshing) return;
 		refreshing = true;
-		await new Promise((resolve) => setTimeout(resolve, 450));
+		await new Promise((resolve) => globalThis.setTimeout(resolve, 450));
 		checkedAt = new Date();
 		refreshing = false;
 	}

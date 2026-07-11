@@ -587,7 +587,7 @@
 					</div>
 					{#each currentSeason.slice(0, currentExpanded ? currentSeason.length : 3) as champion (champion.name)}
 						<div class="data-row">
-							{#each championCells(champion) as cell, index}
+							{#each championCells(champion) as cell, index (index)}
 								<span>
 									{#if index === 0}
 										<img src={championIconUrl(champion.id)} alt="" class="table-champion-icon" />
@@ -621,7 +621,7 @@
 					</div>
 					{#each previousSeason.slice(0, previousExpanded ? previousSeason.length : 3) as champion (champion.name)}
 						<div class="data-row">
-							{#each championCells(champion) as cell, index}
+							{#each championCells(champion) as cell, index (index)}
 								<span>
 									{#if index === 0}
 										<img src={championIconUrl(champion.id)} alt="" class="table-champion-icon" />

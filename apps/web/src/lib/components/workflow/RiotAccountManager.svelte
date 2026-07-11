@@ -61,7 +61,7 @@
 		};
 	}
 
-	function addAccount(event: SubmitEvent) {
+	function addAccount(event: globalThis.SubmitEvent) {
 		event.preventDefault();
 		error = null;
 		notice = null;
@@ -104,7 +104,7 @@
 		busyPuuid = account.puuid;
 		error = null;
 		notice = null;
-		window.setTimeout(() => {
+		globalThis.setTimeout(() => {
 			accounts = accounts.map((item) =>
 				item.puuid === account.puuid ? { ...item, lastSynced: '방금' } : item
 			);

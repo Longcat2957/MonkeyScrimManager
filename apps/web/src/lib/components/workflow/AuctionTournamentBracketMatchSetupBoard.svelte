@@ -18,12 +18,18 @@
 
 	let { teams, profileIconVersion = null }: Props = $props();
 
-	const matches: BracketMatch[] = [
+	const semifinalMatches: BracketMatch[] = [
 		{ id: 'A', name: '준결승 A' },
 		{ id: 'B', name: '준결승 B' }
 	];
 	const matchSlotIndexes = [0, 1] as const;
-	const slotKeys: SlotKey[] = ['A_0', 'A_1', 'B_0', 'B_1'];
+	const isDirectFinal = $derived(teams.length === 2);
+	const matches = $derived<BracketMatch[]>(
+		isDirectFinal ? [{ id: 'A', name: '결승' }] : semifinalMatches
+	);
+	const activeSlotKeys = $derived<SlotKey[]>(
+		matches.flatMap((match) => matchSlotIndexes.map((slot) => slotKey(match.id, slot)))
+	);
 
 	let bracket = $state<Record<SlotKey, string | null>>({
 		A_0: null,
@@ -38,7 +44,7 @@
 		Object.values(bracket).filter((teamId): teamId is string => Boolean(teamId))
 	);
 	const availableTeams = $derived(teams.filter((team) => !assignedTeamIds.includes(team.id)));
-	const ready = $derived(slotKeys.every((slotKey) => Boolean(bracket[slotKey])));
+	const ready = $derived(activeSlotKeys.every((slotKey) => Boolean(bracket[slotKey])));
 
 	function teamById(teamId: string | null): MockAuctionTeam | null {
 		if (!teamId) return null;
@@ -51,7 +57,7 @@
 
 	function assignTeam(targetSlotKey: SlotKey, teamId: string) {
 		bracket = Object.fromEntries(
-			slotKeys.map((currentSlotKey) => [
+			activeSlotKeys.map((currentSlotKey) => [
 				currentSlotKey,
 				currentSlotKey === targetSlotKey
 					? teamId
@@ -166,7 +172,9 @@
 		>
 			<div class="border-b border-[var(--color-app-border-muted)] px-3 py-3">
 				<p class="text-base font-semibold text-slate-100">대진 설정</p>
-				<p class="mt-1 text-xs text-slate-500">4팀을 두 경기 슬롯에 한 번씩 배치</p>
+				<p class="mt-1 text-xs text-slate-500">
+					{isDirectFinal ? '2팀을 결승 슬롯에 배치' : '4팀을 두 준결승 슬롯에 배치'}
+				</p>
 			</div>
 
 			<div

@@ -41,18 +41,18 @@
 
 ### P0
 
-- Frontend: `/`, `/oauth/[...path]`, `/api/[...path]`, `/dd/[...path]`, `/recruitments`, `/recruitments/[id]/entry`, `/series/[id]/pick-ban`, `/series/[id]/result`
+- Frontend: `/`, `/g/[guildId]`, `/oauth/[...path]`, `/api/[...path]`, `/dd/[...path]`, `/g/[guildId]/recruitments/[id]/entry`, `/g/[guildId]/series/[id]/pick-ban`, `/g/[guildId]/series/[id]/result`
 - Backend: auth/session, recruitment, series, games, champions, healthz, WebSocket
 - Bot: `/내전모집`, 일반 모집 button/select, 엔트리/픽밴/결과 웹 링크
 
 ### P1
 
-- Frontend: `/series`, `/series/completed`, `/auction/**`, `/users`, `/users/[discordId]`, `/leaderboard`, `/me/riot-accounts`
+- Frontend: `/g/[guildId]/series`, `/g/[guildId]/auction/**`, `/users`, `/users/[discordId]`, `/g/[guildId]/leaderboard`, `/me`
 - Backend: auction recruitment/tournament/match, users/profile, leaderboard, riot accounts
 - Bot: 경매 모집/진행 command, 사용자 조회 command, Riot 조회 command
 
 ### P2
 
-- Frontend: `/admin/logs`, `/admin/status`, `/admin/perms`, `/tools/minigame`
+- Frontend: `/g/[guildId]/admin`, `/admin/status`, `/admin/perms`, `/tools/minigame`
 - Backend: logs, deep health/admin status, permission diagnostics, cleanup/admin endpoints
 - Bot: 관리자 command, audit log link, maintenance command

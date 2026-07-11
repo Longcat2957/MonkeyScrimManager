@@ -4,7 +4,7 @@
 		RealtimeConnectionState,
 		RealtimeEditor,
 		RealtimeSaveState
-	} from '$lib/fixtures/componentDevelopment';
+	} from '$lib/realtime/types';
 
 	interface Props {
 		resourceLabel: string;

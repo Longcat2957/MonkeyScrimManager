@@ -18,7 +18,8 @@
 Global
   ├─ users                    # Discord user identity
   ├─ riot_accounts            # Discord user에 연결된 Riot 계정
-  └─ user_guild_preferences   # 사용자별 guild 선택/정렬 선호
+  ├─ user_guild_preferences   # 사용자별 guild 선택/정렬 선호
+  └─ user_privacy_settings    # 사용자 외부 공개 범위
 
 Guild
   └─ guilds                   # Discord server identity / 설치 상태
@@ -90,6 +91,7 @@ INSTALLED
 users
   ├─ riot_accounts
   ├─ user_guild_preferences
+  ├─ user_privacy_settings
   └─ guild_members
         └─ guilds
              ├─ guild_operator_roles
@@ -130,6 +132,13 @@ users
   display_name
   deleted_at
 
+user_privacy_settings
+  user_id -> users.discord_id
+  public_profile_enabled
+  show_riot_ids
+  allow_external_record_search
+  updated_at
+
 user_guild_preferences
   user_id -> users.discord_id
   guild_id -> guilds.guild_id
@@ -153,6 +162,7 @@ riot_accounts
 - 인증은 Discord OAuth2만 사용한다.
 - Riot 계정은 전역 사용자 프로필에 연결한다.
 - 같은 Discord 사용자가 여러 guild에 있어도 Riot 계정 연결은 재사용할 수 있다.
+- 개인정보 설정은 외부 공개 범위만 제어하며 같은 guild 내부의 경기 기록과 MMR을 숨기지 않는다.
 - guild별 MMR과 기록은 절대 global user에 직접 붙이지 않는다.
 - 사용자가 소속된 guild 중 어떤 guild를 먼저 볼지는 `user_guild_preferences`에서 관리한다.
 - `user_guild_preferences`는 데이터 소유권이 아니라 사용자별 진입/정렬/즐겨찾기 설정이다.

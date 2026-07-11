@@ -105,7 +105,7 @@ Frontend 사용:
 Frontend:
 
 - `/`
-- `/recruitments`
+- `/g/[guildId]/series`
 
 WebSocket invalidate:
 
@@ -120,7 +120,7 @@ WebSocket invalidate:
 
 Frontend:
 
-- `/recruitments/[id]/entry`
+- `/g/[guildId]/recruitments/[id]/entry`
 
 WebSocket invalidate:
 
@@ -136,7 +136,7 @@ WebSocket invalidate:
 
 Frontend:
 
-- `/recruitments/[id]/entry`
+- `/g/[guildId]/recruitments/[id]/entry`
 
 권한:
 
@@ -150,7 +150,7 @@ Frontend:
 
 Frontend:
 
-- `/recruitments/[id]/entry`
+- `/g/[guildId]/recruitments/[id]/entry`
 
 권한:
 
@@ -169,7 +169,7 @@ Audit:
 
 Frontend:
 
-- `/recruitments/[id]/entry`
+- `/g/[guildId]/recruitments/[id]/entry`
 
 Bot notify:
 
@@ -190,7 +190,7 @@ WebSocket invalidate:
 Frontend:
 
 - `/`
-- `/series`
+- `/g/[guildId]/series`
 
 ### `GET /api/series/completed`
 
@@ -201,7 +201,7 @@ Frontend:
 Frontend:
 
 - `/`
-- `/series/completed`
+- `/g/[guildId]/series#completed`
 
 ### `GET /api/series/:id`
 
@@ -212,8 +212,8 @@ Frontend:
 
 Frontend:
 
-- `/series/[id]/pick-ban`
-- `/series/[id]/result`
+- `/g/[guildId]/series/[id]/pick-ban`
+- `/g/[guildId]/series/[id]/result`
 
 WebSocket invalidate:
 
@@ -229,7 +229,7 @@ WebSocket invalidate:
 
 Frontend:
 
-- `/series/[id]/pick-ban`
+- `/g/[guildId]/series/[id]/pick-ban`
 
 권한:
 
@@ -245,7 +245,7 @@ Frontend:
 
 Frontend:
 
-- `/series/[id]/pick-ban`
+- `/g/[guildId]/series/[id]/pick-ban`
 
 Bot notify:
 
@@ -260,7 +260,7 @@ Bot notify:
 
 Frontend:
 
-- `/series/[id]/pick-ban`
+- `/g/[guildId]/series/[id]/pick-ban`
 
 권한:
 
@@ -278,7 +278,7 @@ Audit:
 
 Frontend:
 
-- `/series/[id]/pick-ban`
+- `/g/[guildId]/series/[id]/pick-ban`
 
 권한:
 
@@ -296,7 +296,7 @@ Audit:
 
 Frontend:
 
-- `/series/[id]/result`
+- `/g/[guildId]/series/[id]/result`
 
 Bot:
 
@@ -313,7 +313,7 @@ Bot:
 Frontend:
 
 - `/`
-- `/auction`
+- `/g/[guildId]/auction`
 
 ### `GET /api/auction-recruitments/:id`
 
@@ -323,7 +323,7 @@ Frontend:
 
 Frontend:
 
-- `/auction/recruitments/[id]/draft`
+- `/g/[guildId]/auction/recruitments/[id]/draft`
 
 ### `POST /api/auction-recruitments/:id/members`
 
@@ -376,7 +376,7 @@ Audit:
 
 Frontend:
 
-- `/auction/recruitments/[id]/draft`
+- `/g/[guildId]/auction/recruitments/[id]/draft`
 
 WebSocket invalidate:
 
@@ -392,9 +392,9 @@ WebSocket invalidate:
 
 Frontend:
 
-- `/auction/tournaments/[id]/draft`
-- `/auction/tournaments/[id]/bracket`
-- `/auction/tournaments/[id]/result`
+- `/g/[guildId]/auction/tournaments/[id]/draft`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/result`
 
 ### 경매 draft mutation
 
@@ -419,7 +419,7 @@ Routes:
 
 Frontend:
 
-- `/auction/tournaments/[id]/draft`
+- `/g/[guildId]/auction/tournaments/[id]/draft`
 
 권한:
 
@@ -446,7 +446,7 @@ Audit:
 
 Frontend:
 
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 ### `POST /api/auction-tournaments/:id/matches`
 
@@ -456,7 +456,7 @@ Frontend:
 
 Frontend:
 
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 ### `PUT /api/auction-matches/:matchId/format`
 
@@ -466,7 +466,7 @@ Frontend:
 
 Frontend:
 
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 ### `PATCH /api/auction-matches/:matchId/lineup`
 
@@ -478,7 +478,7 @@ Frontend:
 
 Frontend:
 
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 권한:
 
@@ -494,7 +494,7 @@ Frontend:
 
 Frontend:
 
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 권한:
 
@@ -514,7 +514,7 @@ Audit:
 
 Frontend:
 
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 Bot notify:
 
@@ -528,7 +528,7 @@ Bot notify:
 
 Frontend:
 
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 Audit:
 
@@ -555,6 +555,8 @@ Routes:
 - `DELETE /api/me/riot-accounts/:puuid`
 - `PUT /api/me/riot-accounts/:puuid/main`
 - `POST /api/me/riot-accounts/:puuid/refresh`
+- `GET /api/me/privacy`
+- `PUT /api/me/privacy`
 - `GET /api/leaderboard`
 - `GET /api/leaderboard/composite`
 - `GET /api/champions`
@@ -566,10 +568,10 @@ Frontend:
 - `/g/[guildId]/records`
 - `/users`
 - `/users/[discordId]`
-- `/leaderboard`
-- `/me/riot-accounts`
-- `/series/[id]/pick-ban`
-- `/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/leaderboard`
+- `/me`
+- `/g/[guildId]/series/[id]/pick-ban`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 권한/공개 범위:
 
@@ -627,7 +629,7 @@ Routes:
 Frontend:
 
 - `/admin/status`
-- `/g/[guildId]/admin/logs`
+- `/g/[guildId]/admin`
 
 Bot:
 
@@ -643,7 +645,7 @@ Bot:
 
 Frontend:
 
-- `/g/[guildId]/admin/logs`
+- `/g/[guildId]/admin`
 - 일반 내전 pick-ban/result 화면
 - 경매 draft/bracket 화면
 

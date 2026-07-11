@@ -522,11 +522,9 @@ Assets
 
 주의:
 
-- 현재 `/dev/components`와 `/dev/fab`는 검증용 화면이다.
-- mock fixture 기준으로 UX와 디자인을 검증하는 단계이며, 저장/조회는 실제 API에 연결되어 있지 않다.
-- 일반 내전 결과 입력은 컴포넌트 샘플로 작성되었고, 실제 `/series/[id]/result` route에 연결된 상태가 아니다.
-- 엔트리 편성 DND와 결과 입력 컴포넌트는 현재 디자인 기준점으로 유지한다.
-- 이후 route 연결 시 샘플 컴포넌트를 그대로 옮기기보다 API 계약과 load/action 구조에 맞춰 감싸야 한다.
+- workflow 컴포넌트는 `/g/[guildId]` 아래 실제 운영 route에 배치되어 있다.
+- mock fixture 기준으로 전체 흐름을 검증하며 저장/조회는 아직 실제 API에 연결되어 있지 않다.
+- API 연결 시 guild context, 권한, revision, load/action 계약을 route별로 적용한다.
 
 완료 기준:
 

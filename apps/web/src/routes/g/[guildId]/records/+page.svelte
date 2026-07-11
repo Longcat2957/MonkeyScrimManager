@@ -1,6 +1,15 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { Search } from 'lucide-svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
+	import { getMockGuild } from '$lib/fixtures/guilds';
 	import type { Lane } from '$lib/fixtures/workflow';
+	import type { PageProps } from './$types';
+
+	let { data }: PageProps = $props();
+	let recordSearch = $state('');
 
 	type MatchType = '일반 내전' | '경매 내전';
 	type MatchResult = '승리' | '패배';
@@ -72,6 +81,12 @@
 	}
 
 	const dataDragonVersion = '16.13.1';
+	const guild = $derived(getMockGuild(data.guildId));
+	const searchedRiotId = $derived(page.url.searchParams.get('q')?.trim() || '탐솔#KR1');
+	const searchedUserName = $derived(searchedRiotId.split('#')[0] || '탐솔');
+	const searchedUserTag = $derived(
+		searchedRiotId.includes('#') ? searchedRiotId : `${searchedUserName}#KR1`
+	);
 	const laneOrder: Lane[] = ['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT'];
 	const laneLabel: Record<Lane, string> = {
 		TOP: '탑',
@@ -507,20 +522,46 @@
 			tournament.series[0]
 		);
 	}
+
+	function submitRecordSearch(event: globalThis.SubmitEvent) {
+		event.preventDefault();
+		const query = recordSearch.trim();
+		const target = resolve('/g/[guildId]/records', { guildId: data.guildId });
+		goto(query ? `${target}?q=${globalThis.encodeURIComponent(query)}` : target);
+	}
 </script>
 
 <svelte:head>
-	<title>탐솔 내전 전적 | MonkeyBot</title>
+	<title>{searchedUserName} 내전 전적 | MonkeyBot</title>
 </svelte:head>
 
 <div class="custom-records-page">
 	<main class="custom-records-shell">
+		<form class="records-search" onsubmit={submitRecordSearch}>
+			<div>
+				<span>{guild.name}</span>
+				<strong>내전 전적</strong>
+			</div>
+			<label>
+				<Search size={15} aria-hidden="true" />
+				<input
+					bind:value={recordSearch}
+					placeholder="Discord 사용자 또는 Riot ID"
+					aria-label="길드 내전 전적 검색"
+				/>
+			</label>
+			<button type="submit">조회</button>
+		</form>
+
 		<section class="profile-section">
-			<img src={`/dd/cdn/${dataDragonVersion}/img/profileicon/588.png`} alt="탐솔 프로필" />
+			<img
+				src={`/dd/cdn/${dataDragonVersion}/img/profileicon/588.png`}
+				alt={`${searchedUserName} 프로필`}
+			/>
 			<div class="profile-copy">
-				<p>MSM Seoul · 내전 참가자</p>
-				<h1>탐솔</h1>
-				<span>탐솔#KR1</span>
+				<p>{guild.name} · 내전 참가자</p>
+				<h1>{searchedUserName}</h1>
+				<span>{searchedUserTag}</span>
 			</div>
 			<label class="season-control">
 				<span>시즌</span>
@@ -830,15 +871,65 @@
 <style>
 	.custom-records-page {
 		min-height: calc(100vh - 57px);
-		padding: 28px 16px 64px;
+		padding: 0 16px 48px;
 		background: var(--color-app-bg);
 		color: #e2e8f0;
 	}
 	.custom-records-shell {
 		width: min(100%, 1280px);
 		margin: 0 auto;
-		padding: 12px;
+		padding: 0 12px 12px;
 		background: var(--color-app-bg-soft);
+	}
+	.records-search {
+		display: grid;
+		grid-template-columns: minmax(150px, 0.35fr) minmax(260px, 1fr) 72px;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 8px;
+		padding: 10px 12px;
+		border: 1px solid var(--color-app-border);
+		background: var(--color-app-surface);
+	}
+	.records-search > div {
+		display: grid;
+		gap: 2px;
+	}
+	.records-search span {
+		color: #64748b;
+		font-size: 10px;
+		font-weight: 700;
+	}
+	.records-search strong {
+		color: #f8fafc;
+		font-size: 14px;
+	}
+	.records-search label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		height: 38px;
+		border: 1px solid var(--color-app-border);
+		background: var(--color-app-control);
+		padding: 0 11px;
+		color: #64748b;
+	}
+	.records-search input {
+		min-width: 0;
+		width: 100%;
+		border: 0;
+		background: transparent;
+		color: #f8fafc;
+		font-size: 13px;
+		outline: 0;
+	}
+	.records-search button {
+		height: 38px;
+		border: 1px solid rgb(34 211 238 / 0.35);
+		background: rgb(34 211 238 / 0.08);
+		color: #cffafe;
+		font-size: 12px;
+		font-weight: 700;
 	}
 	.profile-section {
 		display: grid;
@@ -1465,10 +1556,16 @@
 	}
 	@media (max-width: 820px) {
 		.custom-records-page {
-			padding: 12px 0 40px;
+			padding: 0 0 40px;
 		}
 		.custom-records-shell {
-			padding: 8px;
+			padding: 0 8px 8px;
+		}
+		.records-search {
+			grid-template-columns: 1fr 72px;
+		}
+		.records-search > div {
+			grid-column: 1 / -1;
 		}
 		.profile-section {
 			grid-template-columns: 72px minmax(0, 1fr);

@@ -17,6 +17,7 @@
 		"bits-ui": "^2.8.13",
 		"drizzle-orm": "^0.44.3",
 		"lucide-svelte": "^0.525.0",
+		"marked": "^18.0.6",
 		"zod": "^4.0.5"
 	},
 	"devDependencies": {

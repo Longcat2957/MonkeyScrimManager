@@ -7,7 +7,7 @@
 이 문서는 이미 만든 UI를 route에서 다시 조립할 때 사용하는 컴포넌트 진입점의 단일 기준이다.
 
 - 어떤 컴포넌트를 직접 import해야 하는지 확인한다.
-- 현재 확인 가능한 route와 최종 업무 route를 구분한다.
+- 컴포넌트가 배치된 실제 업무 route와 데이터 상태를 확인한다.
 - 필요한 props와 데이터 출처를 확인한다.
 - 상위 컴포넌트 대신 내부 조각을 잘못 호출하는 일을 막는다.
 
@@ -15,14 +15,13 @@
 
 ## 상태 표기
 
-| 상태        | 의미                                              |
-| ----------- | ------------------------------------------------- |
-| Route       | 이름이 명시된 route에서 직접 렌더링 중            |
-| QA          | 목업 데이터로 상호작용과 레이아웃을 확인하는 상태 |
-| Placeholder | 최종 route는 있으나 아직 컴포넌트가 연결되지 않음 |
-| Internal    | 상위 컴포넌트 안에서만 사용하는 구현 조각         |
+| 상태      | 의미                                              |
+| --------- | ------------------------------------------------- |
+| Routed    | 실제 운영 흐름의 route에서 직접 렌더링 중         |
+| Mock data | route 배치는 완료했지만 API 대신 fixture를 사용함 |
+| Internal  | 상위 컴포넌트 안에서만 사용하는 구현 조각         |
 
-`Route`는 API 연동 완료를 의미하지 않는다. 현재 `LeaderboardBoard`, `RiotAccountManager`, `UserChampionPreferencesEditor` 등은 실제 route에 배치되어 있지만 데이터와 mutation은 아직 컴포넌트 내부 목업이다.
+현재 상위 workflow 컴포넌트는 모두 운영 route에 배치되어 있다. API가 연결되기 전까지 fixture와 local mutation을 사용하므로 route 배치 완료와 Backend 연동 완료를 구분한다.
 
 ## Import 원칙
 
@@ -62,44 +61,48 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 
 ## 일반 내전 Entrypoints
 
-| 컴포넌트                           | 현재 위치                   | 최종 위치                              | 필수 입력                                                                                                 |
-| ---------------------------------- | --------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `RecruitmentEntryQueue`            | `/recruitments` Route       | `/recruitments`                        | `items: MockRecruitmentQueueItem[]`                                                                       |
-| `EntryDraftBoard`                  | `/series` QA                | `/recruitments/[id]/entry` Placeholder | `participants`, `initialAssignments`; 선택 `synergies`, `headToHead`, `targetCount`, `profileIconVersion` |
-| `SeriesCompletedEntryRosterBoard`  | `/series` QA                | 배치 route 미정                        | `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                    |
-| `ScrimPickBanResultInputBoard`     | `/series` QA                | `/series/[id]/pick-ban` Placeholder    | 현재 props 없음. 내부 fixture를 사용하므로 API 연결 전에 controlled 계약으로 변경해야 한다.               |
-| `ScrimPickBanResultSetSummaryCard` | `/series` QA                | 픽밴/결과 화면 내부 반복 항목          | `label`, 양 팀, `winner`, `bans`, `picks`, `champions`, `version`                                         |
-| `SeriesResultLedgerBoard`          | `/series/[id]/result` Route | 동일                                   | `catalog: ChampionCatalog`; 선택 `seriesId`                                                               |
+| 컴포넌트                           | 운영 route                                         | 필수 입력                                                                                                 | 데이터 상태 |
+| ---------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------- |
+| `EntryDraftBoard`                  | `/g/[guildId]/recruitments/[id]/entry` 편성 탭     | `participants`, `initialAssignments`; 선택 `synergies`, `headToHead`, `targetCount`, `profileIconVersion` | Mock data   |
+| `SeriesCompletedEntryRosterBoard`  | `/g/[guildId]/recruitments/[id]/entry` 미리보기 탭 | `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                    | Mock data   |
+| `ScrimPickBanResultInputBoard`     | `/g/[guildId]/series/[id]/pick-ban` 입력 탭        | 현재 props 없음. API 연결 전에 controlled 계약으로 변경해야 한다.                                         | Mock data   |
+| `ScrimPickBanResultSetSummaryCard` | `/g/[guildId]/series/[id]/pick-ban` 요약 탭        | `label`, 양 팀, `winner`, `bans`, `picks`, `champions`, `version`                                         | Mock data   |
+| `SeriesResultLedgerBoard`          | `/g/[guildId]/series/[id]/result`                  | `catalog: ChampionCatalog`; 선택 `seriesId`                                                               | Mock data   |
 
-현재 `/series`는 진행 중 일반 내전 컴포넌트를 모아 확인하는 QA 화면이다. 최종 업무 흐름에서는 엔트리, 픽밴, 결과를 위 표의 개별 route로 분리한다.
+`/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 보여주고 하단에 완료 시리즈를 보여준다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
 
 ## 경매 Entrypoints
 
-현재 경매 컴포넌트는 모두 `/auction/[id]`에서 목업으로 함께 확인한다. 이 route는 완료된 컴포넌트의 QA 진입점이며 최종 경매 URL 구조가 아니다.
+`/g/[guildId]/auction`은 상단에 경매 모집과 진행 중 토너먼트, 하단에 완료된 경매를 보여준다. 각 컴포넌트는 아래 단계 route에서만 렌더링한다.
 
-| 컴포넌트                                  | 최종 업무 route                     | 필수 입력                                                                                      |
-| ----------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `AuctionTournamentCaptainPointSetupBoard` | `/auction/recruitments/[id]/draft`  | `initialMembers`; 선택 `initialCaptainIds`, `teamCount`, `initialPoints`, `profileIconVersion` |
-| `AuctionTournamentBidDraftWorkbench`      | `/auction/tournaments/[id]/draft`   | `initialTeams`, `initialQueue`; 선택 `profileIconVersion`                                      |
-| `AuctionTournamentBracketMatchSetupBoard` | `/auction/tournaments/[id]/bracket` | `teams`; 선택 `profileIconVersion`                                                             |
-| `AuctionMatchStartingLineupInputBoard`    | `/auction/tournaments/[id]/bracket` | `leftTeam`, `rightTeam`; 선택 `profileIconVersion`                                             |
-| `AuctionTournamentBracketResultBoard`     | `/auction/tournaments/[id]/bracket` | `teams`; 선택 `profileIconVersion`                                                             |
-| `AuctionTournamentOverviewBoard`          | `/auction/tournaments/[id]/result`  | `teams`, `matches`, `championTeamId`; 선택 `profileIconVersion`                                |
+| 컴포넌트                                  | 운영 route                                                  | 필수 입력                                                                                      |
+| ----------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `AuctionTournamentCaptainPointSetupBoard` | `/g/[guildId]/auction/recruitments/[id]/draft`              | `initialMembers`; 선택 `initialCaptainIds`, `teamCount`, `initialPoints`, `profileIconVersion` |
+| `AuctionTournamentBidDraftWorkbench`      | `/g/[guildId]/auction/tournaments/[id]/draft`               | `initialTeams`, `initialQueue`; 선택 `profileIconVersion`                                      |
+| `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket`             | `teams`; 선택 `profileIconVersion`                                                             |
+| `AuctionMatchStartingLineupInputBoard`    | `/g/[guildId]/auction/tournaments/[id]/bracket`             | `leftTeam`, `rightTeam`; 선택 `profileIconVersion`                                             |
+| `AuctionTournamentBracketResultBoard`     | `/g/[guildId]/auction/tournaments/[id]/bracket?view=result` | `teams`; 선택 `profileIconVersion`                                                             |
+| `AuctionTournamentOverviewBoard`          | `/g/[guildId]/auction/tournaments/[id]/result`              | `teams`, `matches`, `championTeamId`; 선택 `profileIconVersion`                                |
 
 이 컴포넌트들의 버튼과 drag-and-drop은 현재 local state를 변경한다. API 연동 시 화면 전체 객체를 저장하지 않고 문서화된 작은 operation과 `expectedRevision`을 전달하도록 바꾼다.
 
 ## 사용자와 운영 Entrypoints
 
-| 컴포넌트                        | 현재 위치                  | 주요 계약과 상태                                               |
-| ------------------------------- | -------------------------- | -------------------------------------------------------------- |
-| `LeaderboardBoard`              | `/leaderboard` Route       | `catalog: ChampionCatalog`; 랭킹 row는 내부 목업               |
-| `RiotAccountManager`            | `/me/riot-accounts` Route  | `version`; 계정 목록과 mutation은 내부 목업                    |
-| `UserChampionPreferencesEditor` | `/users/[discordId]` Route | `catalog`, 선택 `maxPreferences`; 선호 목록과 저장은 내부 목업 |
-| `OperationsQueueBoard`          | `/dev/components` QA       | `items: OperationsQueueItem[]`; 실제 배치 route는 미정         |
-| `RealtimeEditStateBar`          | `/dev/components` QA       | resource, 연결/저장 상태, 편집자, 충돌 처리 callback           |
-| `QuickActionFab`                | `/dev/fab` QA              | 선택 `label`; 미니게임, 전적 검색, 타이머 modal을 소유         |
-
-`/dev/components`는 현재 개발 또는 검토 중인 컴포넌트만 둔다. 완료 후에는 사용자가 지정한 QA route나 실제 업무 route로 옮기고 이 표를 갱신한다.
+| 컴포넌트                        | 운영 위치                                                    | 주요 계약과 상태                                                                |
+| ------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `LeaderboardBoard`              | `/g/[guildId]/leaderboard`                                   | `catalog: ChampionCatalog`; 랭킹 row는 내부 목업                                |
+| `RiotAccountManager`            | `/me` Riot 계정 탭                                           | `version`; 계정 목록과 mutation은 내부 목업                                     |
+| `UserChampionPreferencesEditor` | `/me` 선호 챔피언 탭                                         | `catalog`, 선택 `maxPreferences`; 선호 목록과 저장은 내부 목업                  |
+| `UserPrivacySettingsPanel`      | `/me` 개인정보 탭                                            | 외부 프로필, Riot ID, 외부 전적 검색 공개 설정                                  |
+| `UserDefaultGuildSettingsPanel` | `/me` 대표 길드 탭                                           | 루트 접속 시 이동할 기본 guild 선택                                             |
+| `OperationsQueueBoard`          | `/g/[guildId]`                                               | `items: OperationsQueueItem[]`; 작업 링크는 같은 guild의 운영 route를 가리킨다. |
+| `RealtimeEditStateBar`          | 편성, 픽밴, 경매 모집 설정, 경매 드래프트, 경매 브래킷 route | resource, 연결/저장 상태, 편집자, 충돌 처리 callback                            |
+| `QuickActionFab`                | `AppShell` 전역                                              | 선택 `label`; 미니게임, 전적 검색, 타이머 modal을 소유                          |
+| `AppFooter`                     | `AppShell` 전역                                              | 공통 브랜드 Footer와 `/docs` 진입 링크                                          |
+| `GuildMemberManagementPanel`    | `/g/[guildId]/admin` 멤버 탭                                 | guild 멤버 검색, 등록 상태, MMR 조정, 비활성화와 복구                           |
+| `GuildOperationsAdminPanel`     | `/g/[guildId]/admin` 운영 탭                                 | 고정 revert checkpoint 적용과 방치 작업 정리                                    |
+| `GuildSettingsAdminPanel`       | `/g/[guildId]/admin` 길드 설정 탭                            | 운영 역할, 채널, 현재 시즌 확인, 외부 공개와 시즌 초기화                        |
+| `GuildAuditLogPanel`            | `/g/[guildId]/admin` 감사 로그 탭                            | 작업, 대상, 실행자 필터와 audit 상세                                            |
 
 ## Page-local UI
 
@@ -107,7 +110,6 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 
 - `/records`: Riot 전적 검색과 상세 경기 표가 page-local이다.
 - `/g/[guildId]/records`: 내전 시리즈 목록과 확장 상세가 page-local이다.
-- `/series/completed`: 완료 시리즈 목록이 page-local이다.
 - `/admin/status`: 운영 상태 UI가 page-local이다.
 
 다른 route에서 같은 업무 UI가 실제로 필요해질 때만 상위 컴포넌트로 추출한다.
@@ -159,7 +161,7 @@ export async function load({ fetch }) {
 />
 ```
 
-상태 타입은 현재 `$lib/fixtures/componentDevelopment.ts`에 있다. 실제 WebSocket 계층을 만들 때 fixture 타입을 runtime 모듈로 이동하되 상태 이름 `connected | reconnecting | offline`과 `saved | saving | dirty | conflict`는 유지한다.
+상태 타입은 `$lib/realtime/types.ts`에 있다. 실제 WebSocket 계층을 만들 때도 상태 이름 `connected | reconnecting | offline`과 `saved | saving | dirty | conflict`는 유지한다.
 
 ## Internal Components
 
@@ -175,13 +177,11 @@ ScrimPickBanResultInputChampionCell
 ScrimPickBanResultInputChampionHints
 ```
 
-`AuctionBidTargetAssignmentBoard`는 현재 route나 상위 컴포넌트에서 호출되지 않는다. 경매 드래프트 진입점으로 사용하지 않고 `AuctionTournamentBidDraftWorkbench`를 사용한다.
-
 FAB의 `MiniGameModal`, `QuickRecordSearchModal`, `TimerModal`도 기본적으로 `QuickActionFab`을 통해 연다. 독립 route가 명시되기 전에는 route에서 modal을 직접 조립하지 않는다.
 
 ## Backend 연결 전 체크
 
-1. 현재 route와 최종 업무 route가 같은지 확인한다.
+1. 컴포넌트가 문서화된 업무 route에 배치되어 있는지 확인한다.
 2. `$lib/fixtures` 타입을 그대로 API 계약으로 사용하지 않는다.
 3. 내부 목업 state를 API snapshot 또는 parent-controlled props로 교체한다.
 4. mutation은 성공, 진행 중, 실패, 권한 없음 상태를 노출한다.

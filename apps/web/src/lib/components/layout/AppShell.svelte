@@ -4,12 +4,13 @@
 	import { resolve } from '$app/paths';
 	import {
 		Activity,
-		Bell,
-		BookOpen,
+		Check,
 		ChevronDown,
-		Gamepad2,
+		ChevronsUpDown,
+		History,
 		LogOut,
 		Search,
+		Server,
 		ShieldCheck,
 		Swords,
 		Trophy,
@@ -19,58 +20,77 @@
 	import { cubicOut } from 'svelte/easing';
 	import { fade, slide } from 'svelte/transition';
 	import type { Snippet } from 'svelte';
+	import QuickActionFab from '$lib/components/fab/QuickActionFab.svelte';
+	import AppFooter from '$lib/components/layout/AppFooter.svelte';
+	import { DEFAULT_GUILD_ID, getMockGuild, mockGuilds } from '$lib/fixtures/guilds';
 
 	interface NavItem {
 		href: string;
 		match: string;
 		label: string;
-		icon: typeof Bell;
+		icon: typeof Activity;
 	}
 
 	let { children }: { children: Snippet } = $props();
 	let searchOpen = $state(false);
 	let searchMode = $state<'riot' | 'custom'>('riot');
+	let searchQuery = $state('');
 
 	const skeletonRows = [0, 1, 2, 3];
-
-	const navItems: NavItem[] = [
+	const activeGuildId = $derived(page.params.guildId ?? DEFAULT_GUILD_ID);
+	const activeGuild = $derived(getMockGuild(activeGuildId));
+	const activeGuildBase = $derived(resolve('/g/[guildId]', { guildId: activeGuildId }));
+	const showQuickActionFab = $derived(page.url.pathname !== resolve('/docs'));
+	const navItems: NavItem[] = $derived([
 		{
-			href: resolve('/dev/components'),
-			match: '/dev/components',
-			label: '컴포넌트',
-			icon: BookOpen
-		},
-		{
-			href: resolve('/recruitments'),
-			match: '/recruitments',
-			label: '모집',
-			icon: Bell
-		},
-		{
-			href: resolve('/series'),
-			match: '/series',
+			href: resolve('/g/[guildId]/series', { guildId: activeGuildId }),
+			match: `${activeGuildBase}/series`,
 			label: '내전',
 			icon: Swords
 		},
 		{
-			href: resolve('/auction/[id]', { id: 'a-118' }),
-			match: '/auction',
+			href: resolve('/g/[guildId]/auction', { guildId: activeGuildId }),
+			match: `${activeGuildBase}/auction`,
 			label: '경매',
 			icon: Trophy
 		},
 		{
-			href: resolve('/leaderboard'),
-			match: '/leaderboard',
+			href: resolve('/g/[guildId]/records', { guildId: activeGuildId }),
+			match: `${activeGuildBase}/records`,
+			label: '전적',
+			icon: History
+		},
+		{
+			href: resolve('/g/[guildId]/leaderboard', { guildId: activeGuildId }),
+			match: `${activeGuildBase}/leaderboard`,
 			label: '랭킹',
 			icon: Activity
 		},
-		{
-			href: resolve('/admin/status'),
-			match: '/admin',
-			label: '관리',
-			icon: ShieldCheck
-		}
-	];
+		...(activeGuild.role === '운영자'
+			? [
+					{
+						href: resolve('/g/[guildId]/admin', { guildId: activeGuildId }),
+						match: `${activeGuildBase}/admin`,
+						label: '관리',
+						icon: ShieldCheck
+					}
+				]
+			: [])
+	]);
+
+	function switchGuild(guildId: string) {
+		goto(resolve('/g/[guildId]', { guildId }));
+	}
+
+	function submitSearch() {
+		const target =
+			searchMode === 'riot'
+				? resolve('/records')
+				: resolve('/g/[guildId]/records', { guildId: activeGuildId });
+		const query = searchQuery.trim();
+		goto(query ? `${target}?q=${globalThis.encodeURIComponent(query)}` : target);
+		searchOpen = false;
+	}
 
 	function isActive(match: string): boolean {
 		const pathname = page.url.pathname;
@@ -94,9 +114,7 @@
 			>
 				<img src="/brand/logo.png?v=2" alt="" class="size-11 shrink-0 object-contain" />
 				<div class="hidden min-w-0 sm:block">
-					<p class="truncate text-sm font-semibold tracking-normal text-slate-50">
-						MonkeyBot
-					</p>
+					<p class="truncate text-sm font-semibold tracking-normal text-slate-50">MonkeyBot</p>
 					<p class="truncate text-[11px] text-slate-500">monkeybot.lol</p>
 				</div>
 			</a>
@@ -120,6 +138,42 @@
 			</nav>
 
 			<div class="ml-auto flex shrink-0 items-center gap-2">
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger
+						aria-label="운영 서버 선택"
+						class="flex h-10 max-w-44 shrink-0 items-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-2.5 text-slate-300 outline-none hover:border-cyan-400/35 hover:text-slate-50 data-[state=open]:border-cyan-400/40 data-[state=open]:bg-cyan-400/10"
+					>
+						<Server size={15} class="shrink-0 text-cyan-200" aria-hidden="true" />
+						<span class="hidden truncate text-xs font-semibold xl:block">{activeGuild.name}</span>
+						<ChevronsUpDown size={13} class="shrink-0 text-slate-500" aria-hidden="true" />
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Portal>
+						<DropdownMenu.Content
+							align="end"
+							sideOffset={8}
+							class="z-50 min-w-64 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-1 text-sm text-slate-200 shadow-2xl shadow-black/40 outline-none"
+						>
+							<div class="px-3 py-2 text-[10px] font-semibold text-slate-600">Discord 서버</div>
+							{#each mockGuilds as guild (guild.id)}
+								<DropdownMenu.Item
+									class="grid h-11 cursor-default grid-cols-[minmax(0,1fr)_18px] items-center gap-3 px-3 outline-none data-[highlighted]:bg-[var(--color-app-hover)]"
+									onclick={() => switchGuild(guild.id)}
+								>
+									<span class="min-w-0">
+										<strong class="block truncate text-xs text-slate-100">{guild.name}</strong>
+										<small class="text-[10px] text-slate-600"
+											>{guild.role} · {guild.memberCount}명</small
+										>
+									</span>
+									{#if guild.id === activeGuildId}
+										<Check size={14} class="text-cyan-200" aria-hidden="true" />
+									{/if}
+								</DropdownMenu.Item>
+							{/each}
+						</DropdownMenu.Content>
+					</DropdownMenu.Portal>
+				</DropdownMenu.Root>
+
 				<button
 					type="button"
 					aria-label={searchOpen ? '검색 닫기' : '검색 열기'}
@@ -156,28 +210,15 @@
 						>
 							<div class="px-3 py-2">
 								<p class="font-semibold text-slate-50">내전 관리자</p>
-								<p class="mt-0.5 text-xs text-slate-500">MSM Seoul</p>
+								<p class="mt-0.5 text-xs text-slate-500">{activeGuild.name}</p>
 							</div>
 							<DropdownMenu.Separator class="my-1 h-px bg-[var(--color-app-border-muted)]" />
 							<DropdownMenu.Item
 								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold outline-none data-[highlighted]:bg-[var(--color-app-hover)] data-[highlighted]:text-slate-50"
-								onclick={() => goto(resolve('/users/[discordId]', { discordId: 'user-tamsol' }))}
+								onclick={() => goto(resolve('/me'))}
 							>
 								<UserCircle size={15} class="text-slate-500" />
 								내 정보
-							</DropdownMenu.Item>
-							<DropdownMenu.Item
-								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold outline-none data-[highlighted]:bg-[var(--color-app-hover)] data-[highlighted]:text-slate-50"
-								onclick={() => goto(resolve('/me/riot-accounts'))}
-							>
-								<Gamepad2 size={15} class="text-slate-500" />
-								Riot 계정
-							</DropdownMenu.Item>
-							<DropdownMenu.Item
-								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold outline-none data-[highlighted]:bg-[var(--color-app-hover)] data-[highlighted]:text-slate-50"
-							>
-								<ShieldCheck size={15} class="text-slate-500" />
-								서버 설정
 							</DropdownMenu.Item>
 							<DropdownMenu.Separator class="my-1 h-px bg-[var(--color-app-border-muted)]" />
 							<DropdownMenu.Item
@@ -230,11 +271,16 @@
 							placeholder={searchMode === 'riot'
 								? 'Riot ID 또는 소환사명을 검색하세요'
 								: '참가자, 팀, 내전 ID를 검색하세요'}
+							bind:value={searchQuery}
+							onkeydown={(event) => {
+								if (event.key === 'Enter') submitSearch();
+							}}
 							class="min-w-0 flex-1 bg-transparent py-3 text-sm font-medium text-slate-50 outline-none placeholder:text-slate-500"
 						/>
 						<button
 							type="button"
 							aria-label="검색"
+							onclick={submitSearch}
 							class="grid size-9 shrink-0 place-items-center rounded-sm text-cyan-100 hover:bg-cyan-400/10 hover:text-cyan-50"
 						>
 							<Search size={17} />
@@ -245,7 +291,7 @@
 		{/if}
 	</header>
 
-	<div class="min-h-[calc(100vh-57px)]">
+	<div class="flex min-h-[calc(100vh-57px)] flex-col">
 		{#if navigating.to}
 			<div
 				transition:fade={{ duration: 120, easing: cubicOut }}
@@ -265,7 +311,7 @@
 			</div>
 		{/if}
 
-		<main class="mx-auto min-w-0 max-w-[1680px] px-4 py-5 lg:px-6">
+		<main class="mx-auto w-full min-w-0 max-w-[1680px] flex-1 px-4 pt-5 pb-24 lg:px-6 lg:pb-5">
 			{#if navigating.to}
 				<section
 					transition:fade={{ duration: 120, easing: cubicOut }}
@@ -330,5 +376,11 @@
 				{/key}
 			{/if}
 		</main>
+
+		<AppFooter />
 	</div>
+
+	{#if showQuickActionFab}
+		<QuickActionFab />
+	{/if}
 </div>

@@ -189,7 +189,6 @@ Discord /내전모집
 
 ```txt
 /g/{guildId}
-/g/{guildId}/recruitments
 /g/{guildId}/recruitments/{id}/entry
 /g/{guildId}/series
 /g/{guildId}/series/{id}/pick-ban
@@ -289,7 +288,7 @@ Discord /경매모집
 
 ```txt
 Discord /등록 riot_id
-Web /me/riot-accounts
+Web /me
 ```
 
 흐름:
@@ -311,6 +310,8 @@ Web Riot 계정 관리
 - `/등록`은 회원가입이 아니다.
 - Riot 계정은 global user에 연결된다.
 - guild별 전적과 MMR은 Riot account가 아니라 `guild_id + user_id` 기준으로 분리된다.
+- 사용자는 `/me`에서 외부 프로필, 연결 Riot ID, 외부 전적 검색 노출을 설정한다.
+- 같은 guild 내부의 경기 기록과 MMR은 guild 원장이므로 개인 공개 설정으로 숨기지 않는다.
 
 ## 6. 전적 검색 / 사용자 조회
 

@@ -589,9 +589,20 @@ export const mockAuctionCaptainIds = mockAuctionTeams
 	.map((team) => team.members[0]?.id)
 	.filter(Boolean);
 
+export const mockAuctionTeams10 = mockAuctionTeams.slice(0, 2);
+export const mockAuctionQueue10 = mockAuctionQueue.slice(0, 8);
+export const mockAuctionCaptainIds10 = mockAuctionTeams10
+	.map((team) => team.members[0]?.id)
+	.filter(Boolean);
+
 export const mockAuctionRecruitmentMembers: MockAuctionMember[] = [
 	...mockAuctionTeams.flatMap((team) => team.members.map((member) => ({ ...member }))),
 	...mockAuctionQueue.map((member) => ({ ...member, price: 0 }))
+];
+
+export const mockAuctionRecruitmentMembers10: MockAuctionMember[] = [
+	...mockAuctionTeams10.flatMap((team) => team.members.map((member) => ({ ...member }))),
+	...mockAuctionQueue10.map((member) => ({ ...member, price: 0 }))
 ];
 
 export const mockAuctionBracketTeams: MockAuctionTeam[] = mockAuctionTeams.map((team, index) => {
@@ -608,6 +619,25 @@ export const mockAuctionBracketTeams: MockAuctionTeam[] = mockAuctionTeams.map((
 		members: [...team.members.map((member) => ({ ...member })), ...additions]
 	};
 });
+
+export const mockAuctionBracketTeams10 = mockAuctionBracketTeams.slice(0, 2);
+
+export const mockAuctionChampionTeamId10 = MOCK_AUCTION_TEAM_IDS.B;
+
+export const mockAuctionResultMatches10: MockAuctionResultMatch[] = [
+	{
+		id: 'auction-match-10-final',
+		round: 'FINAL',
+		label: '결승',
+		bestOf: 3,
+		leftTeamId: MOCK_AUCTION_TEAM_IDS.A,
+		rightTeamId: MOCK_AUCTION_TEAM_IDS.B,
+		leftScore: 1,
+		rightScore: 2,
+		winnerTeamId: MOCK_AUCTION_TEAM_IDS.B,
+		resultSubmitted: true
+	}
+];
 
 export const mockAuctionResultMatches: MockAuctionResultMatch[] = [
 	{

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ArrowRight, ClipboardCheck, Gavel, ListFilter, Swords, UsersRound } from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
-	import type { OperationKind, OperationsQueueItem } from '$lib/fixtures/componentDevelopment';
+	import type { OperationKind, OperationsQueueItem } from '$lib/fixtures/operations';
 
 	type QueueFilter = 'ALL' | OperationKind;
 

@@ -187,17 +187,16 @@ MonkeyBot/
 Route:
 
 - `/`
-- `/recruitments`
-- `/recruitments/[id]/entry`
-- `/series`
-- `/series/[id]/pick-ban`
-- `/series/[id]/result`
-- `/series/completed`
+- `/g/[guildId]`
+- `/g/[guildId]/recruitments/[id]/entry`
+- `/g/[guildId]/series`
+- `/g/[guildId]/series/[id]/pick-ban`
+- `/g/[guildId]/series/[id]/result`
 
 작업:
 
 - dashboard는 처리 대기, 진행 중, 최근 완료 queue로 구성한다.
-- recruitment list/detail은 row/table 중심으로 만든다.
+- 일반 내전 작업 목록은 모집 마감, 편성, 픽밴, 결과 입력 상태를 row/table로 함께 보여준다.
 - entry editor는 full-width 작업대로 구성한다.
 - pick-ban은 game tabs, side selector, team board, champion command list, result submit rail로 구성한다.
 - result 화면은 게임 원장, picks/bans, MMR 변화, 종료 상태를 명확하게 보여준다.
@@ -217,8 +216,8 @@ Route:
 - `/g/[guildId]/records`
 - `/users`
 - `/users/[discordId]`
-- `/leaderboard`
-- `/me/riot-accounts`
+- `/g/[guildId]/leaderboard`
+- `/me`
 
 작업:
 
@@ -227,6 +226,7 @@ Route:
 - user search는 command/list 중심으로 구현한다.
 - profile은 MMR, 최근 게임, 챔피언 선호, 경매 카드 정보를 dense section으로 구성한다.
 - leaderboard는 라인별/통합 view를 제공한다.
+- 내 정보에서 선호 챔피언, Riot 계정, 외부 공개 범위를 탭으로 관리한다.
 - Riot 계정 추가/삭제/메인 지정/갱신을 구현한다.
 
 완료 기준:
@@ -242,11 +242,11 @@ Route:
 
 Route:
 
-- `/auction`
-- `/auction/recruitments/[id]/draft`
-- `/auction/tournaments/[id]/draft`
-- `/auction/tournaments/[id]/bracket`
-- `/auction/tournaments/[id]/result`
+- `/g/[guildId]/auction`
+- `/g/[guildId]/auction/recruitments/[id]/draft`
+- `/g/[guildId]/auction/tournaments/[id]/draft`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/result`
 
 작업:
 
@@ -294,8 +294,8 @@ Route:
 
 작업:
 
-- `/admin/logs`, `/admin/status`, `/admin/perms` 구현.
-- `/admin/logs`에서 최근 revert checkpoint 조회와 되돌리기 실행을 지원한다.
+- `/g/[guildId]/admin`, `/admin/status`, `/admin/perms` 구현.
+- `/g/[guildId]/admin`에서 멤버, 길드 설정, audit log, 최근 revert checkpoint를 관리한다.
 - healthz/deep healthz, internal heartbeat, bot notify status 점검.
 - Dockerfile: api, bot, web.
 - deployment script: build, push, VPS deploy, command registration.

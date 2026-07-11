@@ -42,6 +42,7 @@
 	let activeMatchId = $state<string | null>(null);
 	let selectedSetTab = $state('1');
 	let expanded = $state(false);
+	const isDirectFinal = $derived(teams.length === 2);
 
 	const semiA = $derived<AuctionBracketMatch>({
 		id: 'semi-a',
@@ -75,17 +76,25 @@
 		id: 'final',
 		label: '결승',
 		roundLabel: 'FINAL',
-		leftTeam: semiA.winnerTeamId === semiA.leftTeam?.id ? semiA.leftTeam : semiA.rightTeam,
-		rightTeam: semiB.winnerTeamId === semiB.leftTeam?.id ? semiB.leftTeam : semiB.rightTeam,
+		leftTeam: isDirectFinal
+			? (teams[0] ?? null)
+			: semiA.winnerTeamId === semiA.leftTeam?.id
+				? semiA.leftTeam
+				: semiA.rightTeam,
+		rightTeam: isDirectFinal
+			? (teams[1] ?? null)
+			: semiB.winnerTeamId === semiB.leftTeam?.id
+				? semiB.leftTeam
+				: semiB.rightTeam,
 		leftScore: 1,
 		rightScore: 0,
-		winnerTeamId: semiA.winnerTeamId,
+		winnerTeamId: isDirectFinal ? null : semiA.winnerTeamId,
 		lineupsLocked: true,
 		resultEntered: false,
 		bestOf: 3
 	});
 
-	const semifinalMatches = $derived([semiA, semiB]);
+	const semifinalMatches = $derived(isDirectFinal ? [] : [semiA, semiB]);
 	const allMatches = $derived([...semifinalMatches, finalMatch]);
 	const activeMatch = $derived(allMatches.find((match) => match.id === activeMatchId) ?? null);
 
@@ -153,7 +162,7 @@
 				class="inline-flex h-8 items-center gap-2 border border-amber-300/35 px-2 text-xs font-semibold text-amber-100"
 			>
 				<Trophy size={14} />
-				{finalMatch.winnerTeamId ? '결승 진행 중' : '우승팀 대기'}
+				{finalMatch.resultEntered ? '결과 확정' : '결승 진행 중'}
 			</div>
 			<button
 				type="button"
@@ -321,75 +330,81 @@
 		</div>
 	{:else}
 		<div
-			class="grid gap-4 overflow-x-auto p-4 xl:grid-cols-[minmax(22rem,1fr)_minmax(22rem,1fr)] xl:items-center"
+			class={`grid gap-4 overflow-x-auto p-4 xl:items-center ${
+				isDirectFinal
+					? 'mx-auto w-full max-w-3xl'
+					: 'xl:grid-cols-[minmax(22rem,1fr)_minmax(22rem,1fr)]'
+			}`}
 		>
-			<div class="grid min-w-[22rem] gap-5">
-				{#each semifinalMatches as match (match.id)}
-					<article class="grid border border-cyan-400/25 bg-[var(--color-app-surface)]">
-						<header
-							class="flex items-center justify-between gap-3 border-b border-[var(--color-app-border-muted)] px-3 py-2"
-						>
-							<div class="min-w-0">
-								<p class="text-[11px] font-semibold text-slate-500">
-									{match.roundLabel} · {matchFormatLabel(match)}
-								</p>
-								<p class="truncate text-sm font-semibold text-slate-100">{match.label}</p>
-							</div>
-							<button
-								type="button"
-								class="inline-flex h-8 shrink-0 items-center gap-1.5 border border-cyan-400/35 px-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
-								disabled={!match.lineupsLocked}
-								onclick={() => openResultInput(match.id)}
+			{#if !isDirectFinal}
+				<div class="grid min-w-[22rem] gap-5">
+					{#each semifinalMatches as match (match.id)}
+						<article class="grid border border-cyan-400/25 bg-[var(--color-app-surface)]">
+							<header
+								class="flex items-center justify-between gap-3 border-b border-[var(--color-app-border-muted)] px-3 py-2"
 							>
-								<ClipboardList size={14} />
-								결과 입력
-							</button>
-						</header>
-
-						<div class="grid gap-px bg-[var(--color-app-border-muted)]">
-							{#each ['LEFT', 'RIGHT'] as side (side)}
-								{@const typedSide = side as 'LEFT' | 'RIGHT'}
-								{@const team = teamForSide(match, typedSide)}
-								<div
-									class={`grid grid-cols-[minmax(0,1fr)_3rem] items-center gap-3 px-3 py-2 ${teamRowClass(match, team)}`}
-								>
-									{#if team}
-										<div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-											<div class="min-w-0">
-												<p class="truncate text-base font-semibold text-slate-100">{team.name}</p>
-												<p class="mt-0.5 truncate text-xs font-semibold text-slate-500">
-													팀장 - {team.captain}
-												</p>
-											</div>
-											<div class="flex -space-x-2">
-												{#each assignedLineup(team) as slot (slot.member.id)}
-													<PlayerAvatar
-														name={slot.member.name}
-														role={slot.lane}
-														avatarUrl={slot.member.avatarUrl}
-														profileIconId={slot.member.profileIconId}
-														{profileIconVersion}
-														size="sm"
-														shape="circle"
-													/>
-												{/each}
-											</div>
-										</div>
-										<p
-											class="text-right font-mono text-xl font-semibold tabular-nums text-slate-100"
-										>
-											{teamScore(match, typedSide)}
-										</p>
-									{:else}
-										<p class="text-sm font-semibold text-slate-600">팀 대기</p>
-										<p class="text-right font-mono text-xl font-semibold text-slate-600">-</p>
-									{/if}
+								<div class="min-w-0">
+									<p class="text-[11px] font-semibold text-slate-500">
+										{match.roundLabel} · {matchFormatLabel(match)}
+									</p>
+									<p class="truncate text-sm font-semibold text-slate-100">{match.label}</p>
 								</div>
-							{/each}
-						</div>
-					</article>
-				{/each}
-			</div>
+								<button
+									type="button"
+									class="inline-flex h-8 shrink-0 items-center gap-1.5 border border-cyan-400/35 px-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
+									disabled={!match.lineupsLocked}
+									onclick={() => openResultInput(match.id)}
+								>
+									<ClipboardList size={14} />
+									결과 입력
+								</button>
+							</header>
+
+							<div class="grid gap-px bg-[var(--color-app-border-muted)]">
+								{#each ['LEFT', 'RIGHT'] as side (side)}
+									{@const typedSide = side as 'LEFT' | 'RIGHT'}
+									{@const team = teamForSide(match, typedSide)}
+									<div
+										class={`grid grid-cols-[minmax(0,1fr)_3rem] items-center gap-3 px-3 py-2 ${teamRowClass(match, team)}`}
+									>
+										{#if team}
+											<div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+												<div class="min-w-0">
+													<p class="truncate text-base font-semibold text-slate-100">{team.name}</p>
+													<p class="mt-0.5 truncate text-xs font-semibold text-slate-500">
+														팀장 - {team.captain}
+													</p>
+												</div>
+												<div class="flex -space-x-2">
+													{#each assignedLineup(team) as slot (slot.member.id)}
+														<PlayerAvatar
+															name={slot.member.name}
+															role={slot.lane}
+															avatarUrl={slot.member.avatarUrl}
+															profileIconId={slot.member.profileIconId}
+															{profileIconVersion}
+															size="sm"
+															shape="circle"
+														/>
+													{/each}
+												</div>
+											</div>
+											<p
+												class="text-right font-mono text-xl font-semibold tabular-nums text-slate-100"
+											>
+												{teamScore(match, typedSide)}
+											</p>
+										{:else}
+											<p class="text-sm font-semibold text-slate-600">팀 대기</p>
+											<p class="text-right font-mono text-xl font-semibold text-slate-600">-</p>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						</article>
+					{/each}
+				</div>
+			{/if}
 
 			<div class="grid min-w-[22rem]">
 				<article class="grid border border-amber-300/25 bg-[var(--color-app-surface)]">

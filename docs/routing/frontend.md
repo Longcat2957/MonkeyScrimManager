@@ -44,10 +44,11 @@ WebSocket을 사용하는 작업 화면은 다음 UI 상태를 공통으로 제�
 화면별 적용:
 
 ```txt
-/recruitments/[id]/entry       entry draft autosave + conflict notice
-/series/[id]/pick-ban          pick/ban autosave + game result command guard
-/auction/tournaments/[id]/draft live auction revision + guarded command
-/auction/tournaments/[id]/bracket lineup/result revision + command guard
+/g/[guildId]/recruitments/[id]/entry       entry draft autosave + conflict notice
+/g/[guildId]/series/[id]/pick-ban          pick/ban autosave + game result command guard
+/g/[guildId]/auction/recruitments/[id]/draft captain/point setup revision + conflict notice
+/g/[guildId]/auction/tournaments/[id]/draft live auction revision + guarded command
+/g/[guildId]/auction/tournaments/[id]/bracket lineup/result revision + command guard
 ```
 
 상태 전이, autosave, 충돌 처리와 재연결 계약은 [Realtime Collaboration](../07-realtime-collaboration.md)을 따른다.
@@ -62,65 +63,32 @@ WebSocket을 사용하는 작업 화면은 다음 UI 상태를 공통으로 제�
 
 목적:
 
-- 전역 app shell 확인용 루트 화면.
-- 상단 navigation, guild selector, command/search, status strip, 본문 폭을 기능 화면 없이 확인한다.
-- 실제 workflow 컴포넌트 샘플은 `/dev/components`에서 확인한다.
+- 사용자가 접근 가능한 Discord guild 목록을 보여준다.
+- guild 선택 후 `/g/[guildId]` 운영 화면으로 이동한다.
 
 Backend 데이터:
 
-- 없음.
+- `GET /api/me`
+- `GET /api/me/guilds`
+
+### `/g/[guildId]`
+
+파일:
+
+- `apps/web/src/routes/g/[guildId]/+page.svelte`
+
+목적:
+
+- 현재 guild에서 입력해야 하는 편성, 픽밴, 결과, 경매 작업을 우선순위 순으로 확인한다.
+- guild 전적 화면과 각 작업 route로 바로 이동한다.
+
+Backend 데이터:
+
+- `GET /api/guilds/:guildId/operations`
 
 WebSocket:
 
-- 없음.
-
-### `/dev/components`
-
-파일:
-
-- `apps/web/src/routes/dev/components/+page.svelte`
-
-목적:
-
-- 공통 UI 컴포넌트와 운영 화면 샘플을 확인하는 개발용 화면.
-- root route를 실제 기능 샘플로 오염시키지 않고, panel/list/status/champion face 밀도를 검증한다.
-- 운영자가 보는 최종 용어 기준에 맞춰 한국어 표시를 우선한다.
-
-Backend 데이터:
-
-- Data Dragon champion catalog fixture 또는 `/dd` proxy.
-
-주의:
-
-- 실제 운영 dashboard가 아니다.
-- product workflow 구현이 진행되면 이 화면은 component regression 확인 용도로 유지한다.
-
-### `/dev/fab`
-
-파일:
-
-- `apps/web/src/routes/dev/fab/+page.svelte`
-
-목적:
-
-- 전역 FAB와 관련 modal을 격리해서 확인하는 개발용 화면.
-- 루트 화면이나 실제 workflow 화면과 겹치지 않게, 미니게임과 빠른 전적검색 진입 UX를 검증한다.
-
-현재 작성된 범위:
-
-- FAB 열기/닫기.
-- 미니게임 modal.
-- 전적검색 modal.
-- 코인토스.
-- 룰렛.
-- 사다리.
-- mock 기반 빠른 전적검색 UI.
-
-주의:
-
-- 실제 운영 route가 아니다.
-- 미니게임 결과와 전적검색 결과는 mock data 기준이다.
-- 실제 Riot 전적과 guild 내전 전적 동시 조회는 아직 API에 연결되어 있지 않다.
+- `guild:{guildId}:dashboard`
 
 ### `+layout.svelte`
 
@@ -132,6 +100,10 @@ Backend 데이터:
 
 - 공통 shell, navigation, auth bootstrap, toast/overlay root.
 - 로그인 상태와 현재 권한 요약을 표시한다.
+- 오른쪽 guild selector가 현재 `guildId` context를 표시하고 서버 전환 시 해당 guild dashboard로 이동한다.
+- 모집 마감 상태는 `내전` 메뉴에 포함하고, `전적`, `랭킹`, `관리`는 현재 guild 기준 route를 사용한다.
+- `관리`는 현재 guild의 operator에게만 노출하고 `/g/[guildId]/admin`으로 이동한다.
+- `QuickActionFab`을 전역 배치해 미니게임, 빠른 전적 검색, 타이머를 연다.
 
 주의:
 
@@ -210,32 +182,11 @@ Backend 데이터:
 
 ## 일반 내전 Routes
 
-### `/recruitments`
+### `/g/[guildId]/recruitments/[id]/entry`
 
 파일:
 
-- `apps/web/src/routes/recruitments/+page.svelte`
-
-목적:
-
-- 일반 모집 목록.
-- OPEN/CLOSED/CANCELLED 등 상태별 필터.
-- 엔트리 편성으로 이동.
-
-Backend 데이터:
-
-- `GET /api/recruitments`
-- `GET /api/me`
-
-WebSocket:
-
-- `guild:{guildId}:dashboard`
-
-### `/recruitments/[id]/entry`
-
-파일:
-
-- `apps/web/src/routes/recruitments/[id]/entry/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/recruitments/[id]/entry/+page.svelte`
 
 목적:
 
@@ -260,45 +211,47 @@ WebSocket:
 
 - `guild:{guildId}:recruitment:{id}`
 
-### `/series`
+### `/g/[guildId]/series`
 
 파일:
 
-- `apps/web/src/routes/series/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/series/+page.svelte`
 
 목적:
 
-- 진행 중 또는 운영 가능한 일반 내전 시리즈 목록.
+- 상단에는 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 일반 내전 작업 목록으로 보여준다.
+- 하단에는 완료된 일반 내전을 최신 순으로 보여준다.
 - pick-ban 또는 result route로 이동한다.
 
 Backend 데이터:
 
+- `GET /api/recruitments`
 - `GET /api/series`
 
 WebSocket:
 
 - `guild:{guildId}:dashboard`
 
-### `/series/completed`
+### `/g/[guildId]/series/completed` 호환 경로
 
 파일:
 
-- `apps/web/src/routes/series/completed/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/series/completed/+page.svelte`
 
 목적:
 
-- 완료된 일반 내전 목록.
-- 결과 조회 route로 이동한다.
+- `/g/[guildId]/series#completed`로 redirect한다.
+- 기존 Bot 메시지와 북마크 호환만 유지한다.
 
 Backend 데이터:
 
 - `GET /api/series/completed`
 
-### `/series/[id]/pick-ban`
+### `/g/[guildId]/series/[id]/pick-ban`
 
 파일:
 
-- `apps/web/src/routes/series/[id]/pick-ban/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/series/[id]/pick-ban/+page.svelte`
 
 목적:
 
@@ -327,11 +280,11 @@ WebSocket:
 
 - `guild:{guildId}:series:{id}`
 
-### `/series/[id]/result`
+### `/g/[guildId]/series/[id]/result`
 
 파일:
 
-- `apps/web/src/routes/series/[id]/result/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/series/[id]/result/+page.svelte`
 
 목적:
 
@@ -349,15 +302,16 @@ WebSocket:
 
 ## 경매 내전 Routes
 
-### `/auction`
+### `/g/[guildId]/auction`
 
 파일:
 
-- `apps/web/src/routes/auction/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/auction/+page.svelte`
 
 목적:
 
-- 경매 모집, 진행 중 경매 토너먼트, 완료/취소 경매 진입점.
+- 상단에는 경매 모집과 진행 중 경매 토너먼트, 하단에는 완료된 경매를 표시한다.
+- 팀장 설정, 입찰 진행, 브래킷 진행, 결과 입력, 결과 확정 상태를 구분한다.
 
 Backend 데이터:
 
@@ -368,11 +322,11 @@ WebSocket:
 
 - `guild:{guildId}:auction-dashboard`
 
-### `/auction/recruitments/[id]/draft`
+### `/g/[guildId]/auction/recruitments/[id]/draft`
 
 파일:
 
-- `apps/web/src/routes/auction/recruitments/[id]/draft/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/auction/recruitments/[id]/draft/+page.svelte`
 
 목적:
 
@@ -392,11 +346,11 @@ WebSocket:
 
 - `guild:{guildId}:auction-recruitment:{id}`
 
-### `/auction/tournaments/[id]/draft`
+### `/g/[guildId]/auction/tournaments/[id]/draft`
 
 파일:
 
-- `apps/web/src/routes/auction/tournaments/[id]/draft/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/auction/tournaments/[id]/draft/+page.svelte`
 
 목적:
 
@@ -426,15 +380,16 @@ WebSocket:
 
 - `guild:{guildId}:auction-tournament:{id}`
 
-### `/auction/tournaments/[id]/bracket`
+### `/g/[guildId]/auction/tournaments/[id]/bracket`
 
 파일:
 
-- `apps/web/src/routes/auction/tournaments/[id]/bracket/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/auction/tournaments/[id]/bracket/+page.svelte`
 
 목적:
 
 - 경매 브래킷, match별 라인업 입력, match game result 입력.
+- `?view=result`로 진입하면 `AuctionTournamentBracketResultBoard` 결과 입력 탭을 바로 연다.
 - BO1/BO3 포맷, match 생성, 양 팀 5인 라인업 확정, match game result 입력, 마지막 게임 삭제.
 - 게임 시작 전 TOP/JUNGLE/MID/ADC/SUPPORT 라인업 입력을 반드시 지원한다.
 - 라인업 확정 취소와 match result 되돌리기를 지원한다.
@@ -472,11 +427,11 @@ WebSocket:
 - `guild:{guildId}:auction-tournament:{id}`
 - `guild:{guildId}:auction-match:{matchId}`
 
-### `/auction/tournaments/[id]/result`
+### `/g/[guildId]/auction/tournaments/[id]/result`
 
 파일:
 
-- `apps/web/src/routes/auction/tournaments/[id]/result/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/auction/tournaments/[id]/result/+page.svelte`
 
 목적:
 
@@ -570,11 +525,11 @@ WebSocket:
 
 - `user:{discordId}`
 
-### `/leaderboard`
+### `/g/[guildId]/leaderboard`
 
 파일:
 
-- `apps/web/src/routes/leaderboard/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/leaderboard/+page.svelte`
 
 목적:
 
@@ -590,29 +545,47 @@ WebSocket:
 - `guild:{guildId}:leaderboard:{role}`
 - `guild:{guildId}:leaderboard:COMPOSITE`
 
-### `/me/riot-accounts`
+### `/me`
 
 파일:
 
-- `apps/web/src/routes/me/riot-accounts/+page.svelte`
+- `apps/web/src/routes/me/+page.svelte`
 
 목적:
 
-- 내 Riot 계정 연결/삭제/메인 지정/갱신.
+- 선호 챔피언, Riot 계정, 대표 길드, 개인정보 설정을 하나의 내 정보 화면에서 관리한다.
+- 개인정보 설정은 외부 프로필, 연결된 Riot ID, 외부 전적 검색 노출만 제어한다.
+- 같은 guild 내부의 내전 기록과 MMR은 개인 설정으로 숨기지 않는다.
 
 Backend 데이터:
 
+- `GET /api/users/:id/preferences`
+- `PUT /api/users/me/preferences`
 - `GET /api/me/riot-accounts`
 - `POST /api/me/riot-accounts`
 - `DELETE /api/me/riot-accounts/:puuid`
 - `PUT /api/me/riot-accounts/:puuid/main`
 - `POST /api/me/riot-accounts/:puuid/refresh`
+- `GET /api/me/privacy`
+- `PUT /api/me/privacy`
 
 WebSocket:
 
 - `user:{currentDiscordId}`
 
 ## 도구 Routes
+
+### `/docs`
+
+파일:
+
+- `apps/web/src/routes/docs/+page.svelte`
+- `apps/web/src/lib/content/user-guide.md`
+
+목적:
+
+- 일반 사용자와 길드 운영자를 위한 정적 기능 설명.
+- Markdown 원본을 build 시 렌더링하며 API나 사용자 상태를 요구하지 않는다.
 
 ### `/tools/minigame`
 
@@ -636,17 +609,29 @@ WebSocket:
 
 ## Admin Routes
 
-### `/g/[guildId]/admin/logs`
+### `/g/[guildId]/admin`
 
 파일:
 
-- `apps/web/src/routes/g/[guildId]/admin/logs/+page.svelte`
+- `apps/web/src/routes/g/[guildId]/admin/+page.svelte`
 
 목적:
 
-- audit log 조회.
-- destructive/admin action 추적.
-- 최근 revert checkpoint 조회와 되돌리기.
+- 길드 멤버 등록 상태, Riot 연결 상태, MMR을 조회하고 관리한다.
+- 운영자 역할, 모집/로그 채널, 현재 시즌, 외부 공개 설정을 관리한다.
+- 최근 revert checkpoint 조회와 고정 단계 되돌리기를 실행한다.
+- audit log를 필터링하고 destructive/admin action을 추적한다.
+
+탭:
+
+- `members`: 멤버 검색, 일괄 등록, MMR 조정, 비활성화와 복구.
+- `operations`: 최근 고정 checkpoint 복구와 방치 작업 정리.
+- `settings`: Discord 역할/채널, 시즌, 공개 설정과 시즌 초기화.
+- `logs`: 작업, 대상, 실행자별 감사 로그와 상세 payload.
+
+호환 경로:
+
+- `/g/[guildId]/admin/logs`는 `/g/[guildId]/admin?tab=logs`로 redirect한다.
 
 Backend 데이터:
 
@@ -706,28 +691,27 @@ Backend 데이터:
 - `/oauth/[...path]`
 - `/api/[...path]`
 - `/dd/[...path]`
-- `/recruitments`
-- `/recruitments/[id]/entry`
-- `/series/[id]/pick-ban`
-- `/series/[id]/result`
+- `/g/[guildId]`
+- `/g/[guildId]/recruitments/[id]/entry`
+- `/g/[guildId]/series/[id]/pick-ban`
+- `/g/[guildId]/series/[id]/result`
 
 ### P1
 
-- `/series`
-- `/series/completed`
-- `/auction`
-- `/auction/recruitments/[id]/draft`
-- `/auction/tournaments/[id]/draft`
-- `/auction/tournaments/[id]/bracket`
-- `/auction/tournaments/[id]/result`
+- `/g/[guildId]/series`
+- `/g/[guildId]/auction`
+- `/g/[guildId]/auction/recruitments/[id]/draft`
+- `/g/[guildId]/auction/tournaments/[id]/draft`
+- `/g/[guildId]/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/tournaments/[id]/result`
 - `/users`
 - `/users/[discordId]`
-- `/leaderboard`
-- `/me/riot-accounts`
+- `/g/[guildId]/leaderboard`
+- `/me`
 
 ### P2
 
-- `/admin/logs`
+- `/g/[guildId]/admin`
 - `/admin/status`
 - `/admin/perms`
 - `/tools/minigame`
@@ -737,7 +721,7 @@ Backend 데이터:
 - `/activity/*`: Discord Activity route는 만들지 않는다.
 - `/login`: `/oauth/discord/start` 링크 또는 button으로 충분하면 별도 로그인 페이지를 만들지 않는다. 만들더라도 Discord OAuth2 시작 버튼만 둔다.
 - `/signup`: 별도 회원가입은 절대 만들지 않는다.
-- `/register`: 앱 회원가입 route는 만들지 않는다. Riot ID 연결은 `/me/riot-accounts` 또는 Discord `/등록`에서 처리한다.
+- `/register`: 앱 회원가입 route는 만들지 않는다. Riot ID 연결은 `/me` 또는 Discord `/등록`에서 처리한다.
 - `/password/*`: password reset/change flow는 만들지 않는다.
 - `/settings`: 사용자/관리자 설정 요구가 구체화될 때 만든다.
 - `/reports`: 통계 report 제품 요구가 생기기 전까지 만들지 않는다.
