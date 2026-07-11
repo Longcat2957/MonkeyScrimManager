@@ -48,7 +48,7 @@ Backend:
 
 목적:
 
-- bot이 설치된 Discord guild를 MonkeyScrimManager 운영 공간으로 활성화한다.
+- bot이 설치된 Discord guild를 MonkeyBot 운영 공간으로 활성화한다.
 - guild 표시 이름과 관리 권한 role 이름만 설정한다.
 - 설정 완료 후 guild dashboard link를 제공한다.
 

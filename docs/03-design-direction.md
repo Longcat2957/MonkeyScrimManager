@@ -1,4 +1,4 @@
-# MonkeyScrimManager Design Direction
+# MonkeyBot Design Direction
 
 작성일: 2026-07-10
 
@@ -37,7 +37,7 @@ page별 placeholder를 먼저 늘리는 방식은 사용하지 않는다. 개별
 
 - `lol.ps`를 그대로 복제하지 않는다.
 - 광고/커뮤니티/콘텐츠 포털 성격은 이 프로젝트의 핵심이 아니다.
-- MonkeyScrimManager는 전적검색 사이트가 아니라 내전 운영 콘솔이므로, 운영 흐름과 작업대 구조가 우선이다.
+- MonkeyBot은 전적검색 사이트가 아니라 내전 운영 콘솔이므로, 운영 흐름과 작업대 구조가 우선이다.
 
 ## Product Shell
 

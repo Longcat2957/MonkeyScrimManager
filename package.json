@@ -1,14 +1,14 @@
 {
-	"name": "monkey-scrim-manager",
+	"name": "monkeybot",
 	"private": true,
 	"type": "module",
 	"packageManager": "pnpm@10.13.1",
 	"scripts": {
-		"dev": "pnpm --filter @monkeyscrim/web dev",
-		"check": "pnpm --filter @monkeyscrim/web check",
-		"build": "pnpm --filter @monkeyscrim/web build",
-		"lint": "pnpm --filter @monkeyscrim/web lint",
-		"test": "pnpm --filter @monkeyscrim/web test",
+		"dev": "pnpm --filter @monkeybot/web dev",
+		"check": "pnpm --filter @monkeybot/web check",
+		"build": "pnpm --filter @monkeybot/web build",
+		"lint": "pnpm --filter @monkeybot/web lint",
+		"test": "pnpm --filter @monkeybot/web test",
 		"format": "prettier --write .",
 		"format:check": "prettier --check ."
 	},

@@ -7,7 +7,7 @@
 </script>
 
 <svelte:head>
-	<title>MonkeyScrimManager</title>
+	<title>MonkeyBot</title>
 	<meta name="description" content="Multi-guild League of Legends scrim operations console" />
 </svelte:head>
 

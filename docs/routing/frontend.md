@@ -31,6 +31,27 @@ Frontend route의 비책임:
 - 계정 생성 form, password reset form, email verification flow는 만들지 않는다.
 - Riot 계정 연결 화면은 회원가입이 아니라 Discord 로그인 이후의 프로필 연결 기능이다.
 
+## 실시간 편집 UI 규칙
+
+WebSocket을 사용하는 작업 화면은 다음 UI 상태를 공통으로 제공한다.
+
+- `loading`, `synced`, `dirty`, `saving`, `reconnecting`, `offline`, `conflict`.
+- 연결과 저장 상태는 `RealtimeEditStateBar`로 표시한다.
+- 저장하지 않은 local 입력을 invalidate만으로 덮어쓰지 않는다.
+- 위험 command는 최신 revision을 확인한 뒤 실행한다.
+- reconnect 후 topic 재구독과 aggregate 전체 재조회를 수행한다.
+
+화면별 적용:
+
+```txt
+/recruitments/[id]/entry       entry draft autosave + conflict notice
+/series/[id]/pick-ban          pick/ban autosave + game result command guard
+/auction/tournaments/[id]/draft live auction revision + guarded command
+/auction/tournaments/[id]/bracket lineup/result revision + command guard
+```
+
+상태 전이, autosave, 충돌 처리와 재연결 계약은 [Realtime Collaboration](../07-realtime-collaboration.md)을 따른다.
+
 ## App Shell
 
 ### `/`
@@ -208,7 +229,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `dashboard`
+- `guild:{guildId}:dashboard`
 
 ### `/recruitments/[id]/entry`
 
@@ -231,13 +252,13 @@ Bot 딥링크:
 Backend 데이터:
 
 - `GET /api/recruitments/:id`
-- `PUT /api/recruitments/:id/entry-draft`
+- `PATCH /api/recruitments/:id/entry-draft`
 - `POST /api/recruitments/:id/reopen`
 - `POST /api/series`
 
 WebSocket:
 
-- `recruitment:{id}`
+- `guild:{guildId}:recruitment:{id}`
 
 ### `/series`
 
@@ -256,7 +277,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `dashboard`
+- `guild:{guildId}:dashboard`
 
 ### `/series/completed`
 
@@ -294,7 +315,7 @@ Bot 딥링크:
 Backend 데이터:
 
 - `GET /api/series/:id`
-- `PUT /api/series/:id/pickban`
+- `PATCH /api/series/:id/pickban`
 - `POST /api/series/:id/games`
 - `DELETE /api/series/:id/games/last`
 - `POST /api/series/:id/revert`
@@ -304,7 +325,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `series:{id}`
+- `guild:{guildId}:series:{id}`
 
 ### `/series/[id]/result`
 
@@ -324,7 +345,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `series:{id}`
+- `guild:{guildId}:series:{id}`
 
 ## 경매 내전 Routes
 
@@ -345,7 +366,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `auction-dashboard`
+- `guild:{guildId}:auction-dashboard`
 
 ### `/auction/recruitments/[id]/draft`
 
@@ -369,7 +390,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `auction-recruitment:{id}`
+- `guild:{guildId}:auction-recruitment:{id}`
 
 ### `/auction/tournaments/[id]/draft`
 
@@ -403,7 +424,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `auction-tournament:{id}`
+- `guild:{guildId}:auction-tournament:{id}`
 
 ### `/auction/tournaments/[id]/bracket`
 
@@ -433,7 +454,7 @@ Backend 데이터:
 - `GET /api/auction-matches/:matchId`
 - `POST /api/auction-tournaments/:id/matches`
 - `PUT /api/auction-matches/:matchId/format`
-- `PUT /api/auction-matches/:matchId/lineup`
+- `PATCH /api/auction-matches/:matchId/lineup`
 - `POST /api/auction-matches/:matchId/lineup/lock`
 - `POST /api/auction-matches/:matchId/games`
 - `DELETE /api/auction-matches/:matchId/games/last`
@@ -448,8 +469,8 @@ Backend 데이터:
 
 WebSocket:
 
-- `auction-tournament:{id}`
-- `auction-match:{matchId}`
+- `guild:{guildId}:auction-tournament:{id}`
+- `guild:{guildId}:auction-match:{matchId}`
 
 ### `/auction/tournaments/[id]/result`
 
@@ -475,7 +496,7 @@ Backend 데이터:
 
 WebSocket:
 
-- `auction-tournament:{id}`
+- `guild:{guildId}:auction-tournament:{id}`
 
 ## 사용자 / 통계 Routes
 
@@ -566,8 +587,8 @@ Backend 데이터:
 
 WebSocket:
 
-- `leaderboard:{role}`
-- `leaderboard:COMPOSITE`
+- `guild:{guildId}:leaderboard:{role}`
+- `guild:{guildId}:leaderboard:COMPOSITE`
 
 ### `/me/riot-accounts`
 
@@ -666,7 +687,7 @@ Backend 데이터:
 
 목적:
 
-- API, bot heartbeat, DB, KV, Data Dragon, internal notify 상태 확인.
+- API, bot heartbeat, DB, Valkey, Data Dragon, internal notify 상태 확인.
 
 Backend 데이터:
 

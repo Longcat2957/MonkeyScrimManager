@@ -1,4 +1,4 @@
-# MonkeyScrimManager DB Structure And Flow
+# MonkeyBot DB Structure And Flow
 
 작성일: 2026-07-10
 
@@ -25,7 +25,8 @@ Guild
       ├─ guild_members         # guild 안에서의 user 상태
       ├─ guild_operator_roles  # guild별 운영자 역할
       ├─ guild_settings        # guild별 설정
-      ├─ guild_kv              # guild별 draft/cache
+      ├─ recruitment_entry_drafts # 엔트리 편성 draft와 revision
+      ├─ series_pickban_drafts # 픽밴 draft와 revision
       ├─ seasons               # guild별 시즌
       ├─ recruitments          # guild별 일반 모집
       ├─ series                # guild별 일반 내전
@@ -115,7 +116,8 @@ users
              ├─ user_lane_mmr
              ├─ user_champion_preferences
              ├─ record search reads games / stats / picks / bans
-             ├─ guild_kv
+             ├─ recruitment_entry_drafts
+             ├─ series_pickban_drafts
              ├─ revert_checkpoints
              └─ admin_audit_log
 ```
@@ -270,7 +272,7 @@ Discord 참가/취소/라인선호
   -> recruitment_participant_roles
 
 엔트리 편성
-  -> guild_kv(guild_id, entry:{recruitmentId})
+  -> recruitment_entry_drafts(guild_id, recruitment_id, revision)
 
 시리즈 생성
   -> recruitments.status = CONVERTED
@@ -520,8 +522,8 @@ Riot 외부 전적
 Riot 외부 전적 캐시:
 
 ```txt
-guild_kv(guild_id, key = riot-match:{region}:{puuid}:{matchId})
-guild_kv(guild_id, key = riot-summary:{region}:{puuid})
+Valkey key = guild:{guildId}:riot-match:{region}:{puuid}:{matchId}
+Valkey key = guild:{guildId}:riot-summary:{region}:{puuid}
 ```
 
 원칙:
@@ -561,45 +563,16 @@ MMR 변경 기록도 guild별로 분리한다.
 mmr_changes(guild_id, game_id, user_id, season_id, role, delta)
 ```
 
-## KV / Draft 격리
+## 실시간 편집 상태 / Valkey
 
-기존 key:
+상태 저장 경계:
 
-```txt
-entry:{recruitmentId}
-pickban:{seriesId}
-auction-card:{userId}
-screening:lol:{...}
-```
+- `recruitment_entry_drafts`, `series_pickban_drafts`, 경매 단계/입찰/배치/라인업/결과는 DB에 저장한다.
+- 동시 편집 aggregate는 `revision`, `updated_by`, `updated_at`을 가진다.
+- Valkey에는 WebSocket Pub/Sub, presence, 짧은 보조 lock, 재생성 가능한 cache만 둔다.
+- `guild_kv` 범용 테이블과 DB/Valkey 이중 write는 새 구조에 만들지 않는다.
 
-새 구조:
-
-```txt
-guild_kv
-  guild_id
-  key
-  value
-
-key examples:
-  entry:{recruitmentId}
-  pickban:{seriesId}
-  auction-card:{userId}
-  screening:lol:{...}
-```
-
-또는 Redis/Valkey key prefix:
-
-```txt
-guild:{guildId}:entry:{recruitmentId}
-guild:{guildId}:pickban:{seriesId}
-guild:{guildId}:auction-card:{userId}
-```
-
-원칙:
-
-- 최종 결과와 복구가 필요한 상태는 DB 원장에 둔다.
-- 임시 편집 상태와 cache만 KV에 둔다.
-- 경매 현재 매물과 후보 queue는 KV가 아니라 `auction_tournaments`에 둔다.
+revision schema, mutation 단위, Valkey key, 충돌과 장애 복구 기준은 [Realtime Collaboration](07-realtime-collaboration.md)을 따른다.
 
 ## 되돌리기 / Revert Checkpoint
 
@@ -770,8 +743,15 @@ guild_id on seasons
 guild_id on recruitments / series / games
 guild_id on auction_recruitments / auction_tournaments / auction_matches
 guild_id on user_lane_mmr / mmr_changes
-guild_id on admin_audit_log / guild_kv
+guild_id on admin_audit_log
+recruitment_entry_drafts / series_pickban_drafts with revision
 ```
+
+v3 `guild_kv` migration:
+
+- `entry:*`, `pickban:*` 중 진행 중 aggregate의 최신 값만 새 draft 테이블로 이전한다.
+- Riot/screening cache는 이전하지 않고 Valkey에서 다시 생성한다.
+- 기타 key는 도메인 소유 테이블을 정한 뒤 이전하며 범용 `guild_kv` fallback을 남기지 않는다.
 
 금지:
 

@@ -1,4 +1,4 @@
-# MonkeyScrimManager Routing Plan
+# MonkeyBot Routing Plan
 
 작성일: 2026-07-10
 
@@ -14,6 +14,8 @@
 - [Backend Routing](routing/backend.md): Fastify HTTP API, OAuth/session, WebSocket topic, internal bot notify endpoint.
 - [Bot Routing](routing/bot.md): Discord slash command, button/select interaction, 웹 딥링크 생성 규칙.
 - [Expected Workflows](06-expected-workflows.md): bot 설치부터 일반 내전, 경매, 전적 검색, 관리자 작업까지의 예상 사용 흐름.
+- [Realtime Collaboration](07-realtime-collaboration.md): 동시 편집, revision, WebSocket invalidate, Valkey, 충돌 복구 기준.
+- [Component Entrypoints](08-component-entrypoints.md): 재사용 UI의 import 위치, route 배치, props와 목업 상태.
 
 ## 전체 원칙
 

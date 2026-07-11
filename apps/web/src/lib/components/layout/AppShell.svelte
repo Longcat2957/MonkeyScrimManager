@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { navigating, page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import {
@@ -6,6 +7,7 @@
 		Bell,
 		BookOpen,
 		ChevronDown,
+		Gamepad2,
 		LogOut,
 		Search,
 		ShieldCheck,
@@ -59,7 +61,7 @@
 		{
 			href: resolve('/leaderboard'),
 			match: '/leaderboard',
-			label: '전적',
+			label: '랭킹',
 			icon: Activity
 		},
 		{
@@ -76,7 +78,6 @@
 		if (match === '/') {
 			return pathname === resolve('/');
 		}
-
 		return pathname.startsWith(match);
 	}
 </script>
@@ -91,12 +92,12 @@
 				aria-label="홈으로 이동"
 				class="flex min-w-0 shrink-0 items-center gap-3"
 			>
-				<img src="/brand/logo.png" alt="" class="size-11 shrink-0 object-contain" />
+				<img src="/brand/logo.png?v=2" alt="" class="size-11 shrink-0 object-contain" />
 				<div class="hidden min-w-0 sm:block">
 					<p class="truncate text-sm font-semibold tracking-normal text-slate-50">
-						MonkeyScrimManager
+						MonkeyBot
 					</p>
-					<p class="truncate text-[11px] text-slate-500">여러 서버를 위한 내전 관리 콘솔</p>
+					<p class="truncate text-[11px] text-slate-500">monkeybot.lol</p>
 				</div>
 			</a>
 
@@ -160,9 +161,17 @@
 							<DropdownMenu.Separator class="my-1 h-px bg-[var(--color-app-border-muted)]" />
 							<DropdownMenu.Item
 								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold outline-none data-[highlighted]:bg-[var(--color-app-hover)] data-[highlighted]:text-slate-50"
+								onclick={() => goto(resolve('/users/[discordId]', { discordId: 'user-tamsol' }))}
 							>
 								<UserCircle size={15} class="text-slate-500" />
 								내 정보
+							</DropdownMenu.Item>
+							<DropdownMenu.Item
+								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold outline-none data-[highlighted]:bg-[var(--color-app-hover)] data-[highlighted]:text-slate-50"
+								onclick={() => goto(resolve('/me/riot-accounts'))}
+							>
+								<Gamepad2 size={15} class="text-slate-500" />
+								Riot 계정
 							</DropdownMenu.Item>
 							<DropdownMenu.Item
 								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold outline-none data-[highlighted]:bg-[var(--color-app-hover)] data-[highlighted]:text-slate-50"

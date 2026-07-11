@@ -1,4 +1,4 @@
-# MonkeyScrimManager
+# MonkeyBot
 
 SvelteKit fullstack 기반으로 새로 작성하는 multi-guild 내전 운영 시스템.
 
@@ -56,6 +56,8 @@ docs/03-design-direction.md     디자인 방향
 docs/04-routing-plan.md         라우팅 문서 색인
 docs/05-db-schema.md            DB 구조와 데이터 흐름
 docs/06-expected-workflows.md   예상 사용 workflow
+docs/07-realtime-collaboration.md 동시 편집과 WebSocket 계약
+docs/08-component-entrypoints.md UI 컴포넌트 진입점과 호출 계약
 docs/routing/frontend.md        Frontend route
 docs/routing/backend.md         Backend API route
 docs/routing/bot.md             Bot command/component route
@@ -68,6 +70,7 @@ docs/routing/bot.md             Bot command/component route
 구조/흐름 변경은 docs/06-expected-workflows.md 또는 docs/05-db-schema.md에 반영
 라우팅 변경은 docs/routing/*에 반영
 디자인 결정은 docs/03-design-direction.md에 반영
+컴포넌트 추가/이동/계약 변경은 docs/08-component-entrypoints.md에 반영
 ```
 
 ## 개발 서버 규칙

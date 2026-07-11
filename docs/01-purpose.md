@@ -1,10 +1,10 @@
-# MonkeyScrimManager Purpose
+# MonkeyBot Purpose
 
 작성일: 2026-07-10
 
 ## 목적
 
-MonkeyScrimManager는 `../mookbot_v3`의 내전 운영 로직을 계승하되, 제품 구조와 사용자 경험을 새로 설계하는 신규 프로젝트다. 목표는 기존 v1, v2, v3를 거치며 누적된 레거시 UI, Activity 전제, 임시 디자인 패턴, 사용 빈도가 낮은 코드 경로를 정리하고, Discord 모집과 웹 운영 콘솔 중심의 작고 명확한 시스템을 만드는 것이다.
+MonkeyBot은 `../mookbot_v3`의 내전 운영 로직을 계승하되, 제품 구조와 사용자 경험을 새로 설계하는 신규 프로젝트다. 목표는 기존 v1, v2, v3를 거치며 누적된 레거시 UI, Activity 전제, 임시 디자인 패턴, 사용 빈도가 낮은 코드 경로를 정리하고, Discord 모집과 웹 운영 콘솔 중심의 작고 명확한 시스템을 만드는 것이다.
 
 이 프로젝트는 `mookbot_v3`를 그대로 포크해 다듬는 리팩토링이 아니다. v3는 기능 기준선과 검증된 도메인 로직의 참고 구현이며, 새 프로젝트는 필요한 계약과 동작만 선별해 다시 작성한다.
 
@@ -20,7 +20,7 @@ MonkeyScrimManager는 `../mookbot_v3`의 내전 운영 로직을 계승하되, �
 
 ## 제품 정의
 
-MonkeyScrimManager는 League of Legends 내전 운영을 위한 Discord 연동 운영 콘솔이다.
+MonkeyBot은 League of Legends 내전 운영을 위한 Discord 연동 운영 콘솔이다.
 
 주 사용자는 내전 운영자다. 사용자는 Discord에서 모집을 만들고 참가자를 모은 뒤, 웹 콘솔에서 팀 편성, 픽밴, 게임 결과, 경매 드래프트, 브래킷, 사용자 기록, 감사 로그를 처리한다.
 
@@ -29,11 +29,11 @@ MonkeyScrimManager는 League of Legends 내전 운영을 위한 Discord 연동 �
 - Discord bot: 모집 생성, 참가/취소, 라인 선호 입력, 운영자 명령, 알림, 종료 카드 발행.
 - Web console: 운영자가 실제 작업을 처리하는 기본 화면. 대시보드, 편성, 픽밴, 경매, 결과, 사용자/랭킹/로그를 담당.
 - API: 인증, 권한, 도메인 상태 전이, audit log, WebSocket invalidate, bot notify를 담당.
-- Core domain: DB repository, MMR/ELO, Riot API, Data Dragon, KV/cache, 검증 가능한 순수 로직을 담당.
+- Core domain: DB repository, MMR/ELO, Riot API, Data Dragon, Valkey cache, 검증 가능한 순수 로직을 담당.
 
 ## 인증 정책
 
-MonkeyScrimManager의 인증은 오직 Discord OAuth2만 지원한다.
+MonkeyBot의 인증은 오직 Discord OAuth2만 지원한다.
 
 - 별도 회원가입은 만들지 않는다.
 - 이메일/비밀번호 계정은 만들지 않는다.
@@ -92,6 +92,10 @@ MMR, series/recruitment id 대응, auction tournament id 대응, game 기록, re
 
 API response, mutation request, WebSocket topic, domain state를 먼저 문서화하고 타입으로 고정한다. 웹과 봇은 이 계약 위에 얇게 구현한다.
 
+### 실시간 상태의 소유권
+
+동시 편집 화면의 source of truth는 DB와 API다. WebSocket은 변경 사실만 알리고 Valkey는 전달 계층과 재생성 가능한 임시 상태만 담당한다. revision, 충돌, 재연결, 경매 원자성의 세부 기준은 [Realtime Collaboration](07-realtime-collaboration.md)을 따른다.
+
 ### 봇은 슬림하게
 
 Discord bot은 Discord 상호작용과 알림에 집중한다. 복잡한 도메인 전이는 API/Core로 이동시키고, 봇 안에는 command parsing, permission check, message rendering, component handler만 남긴다.
@@ -109,7 +113,7 @@ Discord bot은 Discord 상호작용과 알림에 집중한다. 복잡한 도메�
 5. 기존 v3 DB 데이터를 마이그레이션하거나 읽어올 수 있는 경로가 있다.
 6. 봇 명령어의 사용자-facing 이름과 주요 UX는 유지하되 내부 구현은 더 작고 테스트 가능하다.
 7. 웹 UI는 Activity/legacy 디자인을 답습하지 않고, route별 작업 목적이 화면 구조에 직접 반영된다.
-8. 배포 단위는 bot, api, web, DB/KV/cache로 명확히 나뉜다.
+8. 배포 단위는 bot, api, web, DB, Valkey로 명확히 나뉜다.
 9. 새 기능 추가 전 `typecheck`, 핵심 domain/API 테스트, route별 smoke 검증이 통과한다.
 
 ## Non-goals

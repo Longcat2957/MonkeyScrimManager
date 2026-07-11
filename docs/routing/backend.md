@@ -109,7 +109,7 @@ Frontend:
 
 WebSocket invalidate:
 
-- `dashboard`
+- `guild:{guildId}:dashboard`
 
 ### `GET /api/recruitments/:id`
 
@@ -124,13 +124,15 @@ Frontend:
 
 WebSocket invalidate:
 
-- `recruitment:{id}`
+- `guild:{guildId}:recruitment:{id}`
 
-### `PUT /api/recruitments/:id/entry-draft`
+### `PATCH /api/recruitments/:id/entry-draft`
 
 목적:
 
-- 엔트리 편성 draft 저장.
+- 참가자 이동 또는 slot 해제 operation 저장.
+- 전체 배정 payload replace 금지.
+- `expectedRevision` 검증.
 
 Frontend:
 
@@ -175,9 +177,9 @@ Bot notify:
 
 WebSocket invalidate:
 
-- `dashboard`
-- `recruitment:{id}`
-- `series:{id}`
+- `guild:{guildId}:dashboard`
+- `guild:{guildId}:recruitment:{id}`
+- `guild:{guildId}:series:{id}`
 
 ### `GET /api/series`
 
@@ -215,13 +217,15 @@ Frontend:
 
 WebSocket invalidate:
 
-- `series:{id}`
+- `guild:{guildId}:series:{id}`
 
-### `PUT /api/series/:id/pickban`
+### `PATCH /api/series/:id/pickban`
 
 목적:
 
-- pick/ban draft 저장.
+- 특정 game/team/slot의 pick/ban 설정 또는 해제.
+- 전체 pick/ban draft replace 금지.
+- `expectedRevision` 검증.
 
 Frontend:
 
@@ -376,9 +380,9 @@ Frontend:
 
 WebSocket invalidate:
 
-- `auction-dashboard`
-- `auction-recruitment:{id}`
-- `auction-tournament:{id}`
+- `guild:{guildId}:auction-dashboard`
+- `guild:{guildId}:auction-recruitment:{id}`
+- `guild:{guildId}:auction-tournament:{id}`
 
 ### `GET /api/auction-tournaments/:id`
 
@@ -423,7 +427,12 @@ Frontend:
 
 WebSocket invalidate:
 
-- `auction-tournament:{id}`
+- `guild:{guildId}:auction-tournament:{id}`
+
+동시성:
+
+- 모든 mutation은 `expectedRevision`을 받는다.
+- 낙찰, 수동 배치, 단계 전환은 DB transaction 안에서 현재 stage와 point를 다시 검증한다.
 
 Audit:
 
@@ -459,12 +468,13 @@ Frontend:
 
 - `/auction/tournaments/[id]/bracket`
 
-### `PUT /api/auction-matches/:matchId/lineup`
+### `PATCH /api/auction-matches/:matchId/lineup`
 
 목적:
 
-- 경매 match 시작 전 양 팀 라인업 draft 저장.
-- 각 팀 5명의 TOP/JUNGLE/MID/ADC/SUPPORT 배정을 기록.
+- 경매 match 시작 전 선수 1명의 role 배정 또는 해제.
+- 전체 lineup payload replace 금지.
+- `expectedRevision` 검증.
 
 Frontend:
 
@@ -592,7 +602,7 @@ external Riot lookup
   /api/guilds/:guildId/riot/lookup
   /api/guilds/:guildId/riot/recent-matches
   -> Riot API
-  -> guild_kv cache
+  -> Valkey cache
 ```
 
 원칙:
@@ -712,21 +722,26 @@ Routes:
 
 Topics:
 
-- `dashboard`
-- `auction-dashboard`
-- `recruitment:{id}`
-- `series:{id}`
-- `auction-recruitment:{id}`
-- `auction-tournament:{id}`
-- `auction-match:{id}`
-- `leaderboard:{role}`
-- `leaderboard:COMPOSITE`
+- `guild:{guildId}:dashboard`
+- `guild:{guildId}:auction-dashboard`
+- `guild:{guildId}:recruitment:{id}`
+- `guild:{guildId}:series:{id}`
+- `guild:{guildId}:auction-recruitment:{id}`
+- `guild:{guildId}:auction-tournament:{id}`
+- `guild:{guildId}:auction-match:{id}`
+- `guild:{guildId}:leaderboard:{role}`
+- `guild:{guildId}:leaderboard:COMPOSITE`
 - `user:{discordId}`
 
 원칙:
 
 - WebSocket payload는 원장 데이터 전체가 아니라 invalidate 신호다.
-- Frontend는 invalidate 수신 후 해당 route/API 데이터를 재조회한다.
+- WebSocket 연결과 Valkey Pub/Sub은 전달 계층이며 source of truth가 아니다.
+- guild resource topic은 `guild:{guildId}:` prefix를 사용하고 subscribe 권한을 검증한다.
+- mutation은 `expectedRevision`을 검증하고 DB commit 이후 invalidate를 publish한다.
+- Frontend는 invalidate 수신 또는 reconnect 이후 HTTP API를 재조회한다.
+
+revision request/response, event schema, 순서 뒤바뀜, publish 실패와 경매 transaction의 세부 계약은 [Realtime Collaboration](../07-realtime-collaboration.md)을 따른다.
 
 ## Backend 우선순위
 

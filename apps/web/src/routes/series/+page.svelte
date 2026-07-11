@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
+	import { ListChecks } from 'lucide-svelte';
 	import Panel from '$lib/components/layout/Panel.svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import EntryDraftBoard from '$lib/components/workflow/EntryDraftBoard.svelte';
@@ -35,7 +37,16 @@
 			{ label: '배치', value: Object.keys(mockEntryAssignments).length, tone: 'neutral' },
 			{ label: '세트', value: 1, tone: 'success' }
 		]}
-	/>
+	>
+		{#snippet actions()}
+			<a
+				href={resolve('/series/completed')}
+				class="inline-flex h-10 items-center gap-2 rounded-sm border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-semibold text-slate-300 hover:text-slate-50"
+			>
+				<ListChecks size={15} aria-hidden="true" /> 완료 시리즈
+			</a>
+		{/snippet}
+	</WorkspaceHeader>
 
 	<Panel kicker="엔트리" title="팀/라인 편성" compact>
 		<EntryDraftBoard

@@ -1,4 +1,4 @@
-# MonkeyScrimManager Expected Workflows
+# MonkeyBot Expected Workflows
 
 작성일: 2026-07-10
 
@@ -36,7 +36,7 @@ API/Core = 상태 전이와 권한의 source of truth
 Discord command
   -> Backend API
   -> Core domain
-  -> DB / KV / Riot API
+  -> DB / Valkey / Riot API
   -> Bot message update
   -> Web dashboard invalidate
 ```
@@ -394,7 +394,35 @@ guild 상태와 권한 문제를 빨리 발견하는 화면
 - 운영자가 지금 처리해야 하는 항목을 먼저 보여준다.
 - WebSocket invalidate 후 필요한 데이터만 다시 조회한다.
 
-## 8. 관리자 / 안전장치
+## 8. 동시 편집 / 실시간 동기화
+
+대상:
+
+- 엔트리 편성
+- 픽밴 입력
+- 경매 드래프트와 입찰
+- 경매 match 라인업과 결과 입력
+
+흐름:
+
+```txt
+HTTP GET snapshot + revision
+  -> 작은 operation 단위 mutation + expectedRevision
+  -> DB transaction commit
+  -> WebSocket invalidate
+  -> HTTP GET 재조회 또는 409 Conflict 처리
+```
+
+원칙:
+
+- DB/API를 source of truth로 사용한다.
+- 전체 draft 덮어쓰기와 last-write-wins를 사용하지 않는다.
+- 연결 복구 후 현재 aggregate를 다시 조회한다.
+- 경매 낙찰과 결과 입력은 하나의 DB transaction에서 확정한다.
+
+전체 계약과 필수 장애 테스트는 [Realtime Collaboration](07-realtime-collaboration.md)을 따른다.
+
+## 9. 관리자 / 안전장치
 
 사용자:
 
@@ -434,7 +462,7 @@ audit log 조회
 - admin action도 guild target이 있으면 반드시 `guild_id`를 기록한다.
 - 실제 삭제보다 soft-delete 또는 상태 전이를 우선한다.
 
-## 9. Bot 제거 / 재설치
+## 10. Bot 제거 / 재설치
 
 사용자:
 

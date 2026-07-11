@@ -1,4 +1,4 @@
-# MonkeyScrimManager Roadmap
+# MonkeyBot Roadmap
 
 작성일: 2026-07-10
 
@@ -17,13 +17,13 @@
 ## 목표 구조
 
 ```txt
-MonkeyScrimManager/
+MonkeyBot/
   apps/
     bot/          # discord.js command, component handler, notification
     api/          # HTTP API, auth, permission, websocket, bot notify
     web/          # SvelteKit 운영 콘솔
   packages/
-    core/         # DB repository, domain service, Riot, Data Dragon, KV, MMR
+    core/         # DB repository, domain service, Riot, Data Dragon, Valkey, MMR
     contracts/    # zod schema, shared DTO, route contracts
     api-client/   # typed fetch client for web and tests
   docs/
@@ -69,6 +69,7 @@ MonkeyScrimManager/
 - `../mookbot_v3/packages/core/src/db/schema.sql`
 - `../mookbot_v3/apps/api/src/http`
 - `../mookbot_v3/docs/v2-feature-inventory.md`
+- `docs/07-realtime-collaboration.md`
 
 완료 기준:
 
@@ -78,14 +79,15 @@ MonkeyScrimManager/
 
 ## Phase 2: Core 이식과 정리
 
-목표: DB, MMR, Riot, Data Dragon, KV 로직을 새 프로젝트 기준으로 가져온다.
+목표: DB, MMR, Riot, Data Dragon, Valkey 로직을 새 프로젝트 기준으로 가져온다.
 
 작업:
 
 - v3 `packages/core/src/db`에서 필요한 repository를 선별 이식한다.
 - MMR/ELO, game stats, picks/bans 저장 로직을 테스트와 함께 가져온다.
 - Riot API client, Data Dragon client, screening logic은 모듈 경계를 재정리해서 이식한다.
-- KV는 `guild_kv`와 Redis/Valkey routed KV를 유지하되 interface를 단순화한다.
+- v3의 `guild_kv`와 Valkey routed KV는 계승하지 않는다.
+- 유실되면 안 되는 draft는 guild-scoped DB 테이블에 저장하고, Valkey는 Pub/Sub과 TTL 기반 임시 상태에만 사용한다.
 - seed, backup, restore, migration script를 새 scripts 구조에 맞춘다.
 
 유지할 규칙:
@@ -115,6 +117,7 @@ MonkeyScrimManager/
 - user API: search, profile, MMR history, preferences, Riot accounts.
 - admin API: logs, health, permission diagnostics, destructive action endpoints.
 - WebSocket invalidate server와 topic subscription 구현.
+- 동시 편집 mutation에 `revision` 기반 optimistic concurrency와 DB constraint 기반 중복 방지를 적용한다.
 - API -> bot internal notify endpoint를 유지한다.
 - 고정 단계 revert API를 구현한다.
 
@@ -202,7 +205,7 @@ Route:
 완료 기준:
 
 - 일반 모집 생성 후 웹에서 시리즈 완료까지 진행 가능하다.
-- draft autosave와 WebSocket invalidate가 동작한다.
+- draft autosave, revision 충돌 처리, WebSocket 재연결 후 전체 재조회가 동작한다.
 - 주요 desktop/mobile viewport에서 레이아웃이 깨지지 않는다.
 
 ## Phase 7: 사용자, 랭킹, Riot 계정
@@ -251,6 +254,7 @@ Route:
 - bracket setup, match별 라인업 확정, auction match game result 입력을 구현한다.
 - 경매 match는 게임 시작 전에 양 팀 TOP/JUNGLE/MID/ADC/SUPPORT 라인업을 반드시 확정한다.
 - 경매는 DB 원장을 source of truth로 삼고 UI local state를 원장처럼 쓰지 않는다.
+- 낙찰, 수동 배치, 라인업 확정은 DB transaction과 revision 검증을 통과한 뒤에만 invalidate한다.
 - 팀/매치 entity tile은 허용하되 card pile layout은 피한다.
 
 컴포넌트 작성 현황:

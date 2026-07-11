@@ -1,4 +1,4 @@
-# MonkeyScrimManager Implementation Roadmap
+# MonkeyBot Implementation Roadmap
 
 작성일: 2026-07-10
 
@@ -122,8 +122,8 @@ GitHub 사용 범위:
 
 ```txt
 Docker images
-  monkeyscrim-web
-  monkeyscrim-bot
+  monkeybot-web
+  monkeybot-bot
 
 VPS services
   nginx 또는 caddy

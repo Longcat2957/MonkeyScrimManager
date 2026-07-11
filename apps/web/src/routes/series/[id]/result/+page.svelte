@@ -1,9 +1,12 @@
 <script lang="ts">
-	import RoutePlaceholder from '$lib/components/RoutePlaceholder.svelte';
+	import SeriesResultLedgerBoard from '$lib/components/workflow/SeriesResultLedgerBoard.svelte';
+	import type { PageProps } from './$types';
+
+	let { data }: PageProps = $props();
 </script>
 
-<RoutePlaceholder
-	kicker="P0 route"
-	title="결과 입력"
-	description="게임 결과 입력, MMR 반영 확인, bot follow-up 갱신을 연결할 화면입니다."
-/>
+<svelte:head>
+	<title>시리즈 결과 | MonkeyBot</title>
+</svelte:head>
+
+<SeriesResultLedgerBoard catalog={data.championCatalog} seriesId={data.seriesId} />
