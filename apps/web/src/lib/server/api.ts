@@ -1,0 +1,73 @@
+import { resolve } from '$app/paths';
+import { error, redirect } from '@sveltejs/kit';
+import { z, type ZodType } from 'zod';
+import { apiErrorEnvelopeSchema, responseMetaSchema } from '$lib/contracts/workflow';
+import { apiRoute } from '$lib/routing';
+
+export { apiRoute };
+
+interface ApiGetContext {
+	url: URL;
+}
+
+export async function apiGet<T>(
+	fetcher: typeof globalThis.fetch,
+	path: string,
+	dataSchema: ZodType<T>,
+	context: ApiGetContext
+): Promise<T> {
+	let response: Response;
+	try {
+		response = await fetcher(path, { headers: { accept: 'application/json' } });
+	} catch {
+		error(503, 'API 서버에 연결할 수 없습니다.');
+	}
+
+	const payload = await readJson(response);
+	if (!response.ok) {
+		handleErrorResponse(response.status, payload, context.url);
+	}
+
+	const envelope = dataSchemaEnvelope(dataSchema).safeParse(payload);
+	if (!envelope.success) {
+		error(502, 'API 응답 형식이 올바르지 않습니다.');
+	}
+	return envelope.data.data;
+}
+
+function dataSchemaEnvelope<T>(dataSchema: ZodType<T>) {
+	return z.object({ data: dataSchema, meta: responseMetaSchema }).strict();
+}
+
+async function readJson(response: Response): Promise<unknown> {
+	try {
+		return await response.json();
+	} catch {
+		if (response.ok) error(502, 'API 응답 형식이 올바르지 않습니다.');
+		return null;
+	}
+}
+
+function handleErrorResponse(status: number, payload: unknown, url: URL): never {
+	const parsed = apiErrorEnvelopeSchema.safeParse(payload);
+	const backendMessage = parsed.success ? parsed.data.error.message : null;
+
+	if (status === 401) {
+		const next = `${url.pathname}${url.search}`;
+		const login = resolve('/oauth/[...path]', { path: 'discord/start' });
+		redirect(303, `${login}?${new URLSearchParams({ next })}`);
+	}
+	if (status === 403 || status === 404 || status === 503) {
+		error(status, backendMessage ?? fallbackMessage(status));
+	}
+	if (status >= 500) {
+		error(500, 'API 요청을 처리하지 못했습니다.');
+	}
+	error(502, '프론트엔드와 API 요청 계약이 일치하지 않습니다.');
+}
+
+function fallbackMessage(status: number): string {
+	if (status === 403) return '요청을 수행할 권한이 없습니다.';
+	if (status === 404) return '요청한 데이터를 찾을 수 없습니다.';
+	return 'API 서비스를 일시적으로 사용할 수 없습니다.';
+}

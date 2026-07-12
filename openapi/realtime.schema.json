@@ -1,0 +1,19 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://monkeybot.lol/schemas/realtime.schema.json",
+	"title": "MonkeyBot realtime event",
+	"type": "object",
+	"additionalProperties": false,
+	"required": ["type", "eventId", "topic", "resourceId", "revision", "occurredAt"],
+	"properties": {
+		"type": { "const": "invalidate" },
+		"eventId": { "type": "string", "format": "uuid" },
+		"topic": {
+			"type": "string",
+			"pattern": "^guild:[^:]+:(recruitment|series|auction-recruitment|auction-tournament|auction-match):[^:]+$"
+		},
+		"resourceId": { "type": "string", "minLength": 1 },
+		"revision": { "type": "integer", "minimum": 0 },
+		"occurredAt": { "type": "string", "format": "date-time" }
+	}
+}

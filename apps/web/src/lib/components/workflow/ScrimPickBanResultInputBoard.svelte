@@ -1,41 +1,65 @@
 <script lang="ts">
 	import { Redo2, Undo2 } from 'lucide-svelte';
+	import { untrack } from 'svelte';
 	import {
 		mockScrimPickBanResultInputGames,
 		mockScrimPickBanResultInputPatch,
 		mockScrimPickBanResultInputTeams,
 		scrimPickBanResultInputChampions,
+		type ScrimPickBanResultInputChampion,
+		type ScrimPickBanResultInputGame,
+		type ScrimPickBanResultInputSidePreset,
+		type ScrimPickBanResultInputTeam,
 		type ScrimPickBanResultInputSide
 	} from '$lib/fixtures/scrimPickBanResultInputFixtures';
 	import PositionIcon from './PositionIcon.svelte';
 	import type { ScrimPickBanResultInputActiveCell } from './scrimPickBanResultInputHelpers';
 	import ScrimPickBanResultInputTeamPanel from './ScrimPickBanResultInputTeamPanel.svelte';
 
-	let { strict = false }: { strict?: boolean } = $props();
+	interface Props {
+		strict?: boolean;
+		teams?: Record<ScrimPickBanResultInputSide, ScrimPickBanResultInputTeam>;
+		initialGame?: ScrimPickBanResultInputGame;
+		champions?: ScrimPickBanResultInputChampion[];
+		patchVersion?: string;
+		onSubmit?: (game: ScrimPickBanResultInputGame) => void | Promise<void>;
+	}
+
+	let {
+		strict = false,
+		teams = mockScrimPickBanResultInputTeams,
+		initialGame = mockScrimPickBanResultInputGames[0]!,
+		champions = scrimPickBanResultInputChampions,
+		patchVersion = mockScrimPickBanResultInputPatch,
+		onSubmit
+	}: Props = $props();
 
 	type ScrimPickBanResultInputStep = 'SIDE' | 'PICKBAN' | 'WINNER';
-	type SidePreset = 'DEFAULT' | 'SWAPPED';
 	type ScrimPickBanResultInputSnapshot = {
-		sidePreset: SidePreset;
+		sidePreset: ScrimPickBanResultInputSidePreset;
 		winner: ScrimPickBanResultInputSide | null;
 		bans: Record<ScrimPickBanResultInputSide, Array<string | null>>;
 		picks: Record<string, string | null>;
 	};
 
-	const resultGame = mockScrimPickBanResultInputGames[0]!;
-
 	let inputStep = $state<ScrimPickBanResultInputStep>('SIDE');
-	let sidePreset = $state<SidePreset>('DEFAULT');
-	let winner = $state<ScrimPickBanResultInputSide | null>(resultGame.winner);
+	let sidePreset = $state<ScrimPickBanResultInputSidePreset>(
+		untrack(() => initialGame.sidePreset ?? 'DEFAULT')
+	);
+	let winner = $state<ScrimPickBanResultInputSide | null>(untrack(() => initialGame.winner));
 	let bans = $state<Record<ScrimPickBanResultInputSide, Array<string | null>>>({
-		BLUE: [...resultGame.bans.BLUE],
-		RED: [...resultGame.bans.RED]
+		BLUE: untrack(() => [...initialGame.bans.BLUE]),
+		RED: untrack(() => [...initialGame.bans.RED])
 	});
-	let picks = $state<Record<string, string | null>>({ ...resultGame.picks });
-	let activeCell = $state<ScrimPickBanResultInputActiveCell>({ kind: 'PICK', key: 'blue-mid' });
+	let picks = $state<Record<string, string | null>>(untrack(() => ({ ...initialGame.picks })));
+	let activeCell = $state<ScrimPickBanResultInputActiveCell>({
+		kind: 'PICK',
+		key: untrack(() => teams.BLUE.players[2]?.id ?? teams.BLUE.players[0]?.id ?? '')
+	});
 	let undoStack = $state<ScrimPickBanResultInputSnapshot[]>([]);
 	let redoStack = $state<ScrimPickBanResultInputSnapshot[]>([]);
 	let saved = $state(false);
+	let submitting = $state(false);
 
 	const allBansFilled = $derived([...bans.BLUE, ...bans.RED].every(Boolean));
 	const allPicksFilled = $derived(Object.values(picks).every(Boolean));
@@ -50,7 +74,7 @@
 	]);
 	const canUndo = $derived(undoStack.length > 0);
 	const canRedo = $derived(redoStack.length > 0);
-	const sidePresets: SidePreset[] = ['DEFAULT', 'SWAPPED'];
+	const sidePresets: ScrimPickBanResultInputSidePreset[] = ['DEFAULT', 'SWAPPED'];
 	const winnerSides: ScrimPickBanResultInputSide[] = ['BLUE', 'RED'];
 
 	function captureSnapshot(): ScrimPickBanResultInputSnapshot {
@@ -116,7 +140,7 @@
 		saved = false;
 	}
 
-	function selectSide(preset: SidePreset) {
+	function selectSide(preset: ScrimPickBanResultInputSidePreset) {
 		if (sidePreset === preset) return;
 		recordHistory();
 		sidePreset = preset;
@@ -124,7 +148,7 @@
 	}
 
 	function sideForColumn(
-		preset: SidePreset,
+		preset: ScrimPickBanResultInputSidePreset,
 		column: 'LEFT' | 'RIGHT'
 	): ScrimPickBanResultInputSide {
 		if (preset === 'DEFAULT') return column === 'LEFT' ? 'BLUE' : 'RED';
@@ -148,9 +172,7 @@
 	}
 
 	function teamForSide(side: ScrimPickBanResultInputSide) {
-		return sideForColumn(sidePreset, 'LEFT') === side
-			? mockScrimPickBanResultInputTeams.BLUE
-			: mockScrimPickBanResultInputTeams.RED;
+		return sideForColumn(sidePreset, 'LEFT') === side ? teams.BLUE : teams.RED;
 	}
 
 	function setWinner(side: ScrimPickBanResultInputSide) {
@@ -179,9 +201,22 @@
 		inputStep = 'WINNER';
 	}
 
-	function submit() {
-		if (!ready) return;
-		saved = true;
+	async function submit() {
+		if (!ready || submitting) return;
+		submitting = true;
+		try {
+			await onSubmit?.({
+				id: initialGame.id,
+				label: initialGame.label,
+				sidePreset,
+				winner,
+				bans: { BLUE: [...bans.BLUE], RED: [...bans.RED] },
+				picks: { ...picks }
+			});
+			saved = true;
+		} finally {
+			submitting = false;
+		}
 	}
 </script>
 
@@ -256,7 +291,7 @@
 						<div
 							class="grid min-w-[34rem] grid-cols-2 gap-1 overflow-x-auto bg-[var(--color-app-surface)]"
 						>
-							{#each [{ column: 'LEFT' as const, team: mockScrimPickBanResultInputTeams.BLUE }, { column: 'RIGHT' as const, team: mockScrimPickBanResultInputTeams.RED }] as item (item.column)}
+							{#each [{ column: 'LEFT' as const, team: teams.BLUE }, { column: 'RIGHT' as const, team: teams.RED }] as item (item.column)}
 								<section class={sidePanelClass(sideForColumn(preset, item.column))}>
 									<div class="flex h-11 items-center justify-between px-2">
 										<div>
@@ -297,12 +332,12 @@
 		>
 			<div class="grid min-w-[64rem] gap-px xl:min-w-0">
 				<ScrimPickBanResultInputTeamPanel
-					team={mockScrimPickBanResultInputTeams.BLUE}
+					team={teams.BLUE}
 					bans={bans.BLUE}
 					{picks}
 					{activeCell}
-					champions={scrimPickBanResultInputChampions}
-					version={mockScrimPickBanResultInputPatch}
+					{champions}
+					version={patchVersion}
 					onActiveCell={(cell) => {
 						activeCell = cell;
 					}}
@@ -310,12 +345,12 @@
 					onPick={setPick}
 				/>
 				<ScrimPickBanResultInputTeamPanel
-					team={mockScrimPickBanResultInputTeams.RED}
+					team={teams.RED}
 					bans={bans.RED}
 					{picks}
 					{activeCell}
-					champions={scrimPickBanResultInputChampions}
-					version={mockScrimPickBanResultInputPatch}
+					{champions}
+					version={patchVersion}
 					onActiveCell={(cell) => {
 						activeCell = cell;
 					}}
@@ -428,10 +463,10 @@
 				<button
 					type="button"
 					class="inline-flex h-9 items-center justify-center rounded-sm bg-emerald-400/14 px-4 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-					disabled={!ready}
+					disabled={!ready || submitting}
 					onclick={submit}
 				>
-					결과 기록
+					{submitting ? '기록 중' : '결과 기록'}
 				</button>
 			{/if}
 		</div>
@@ -439,7 +474,7 @@
 
 	{#if saved}
 		<div class="bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100">
-			입력값이 기록 대기 상태로 표시되었습니다.
+			결과가 기록되었습니다.
 		</div>
 	{/if}
 </div>

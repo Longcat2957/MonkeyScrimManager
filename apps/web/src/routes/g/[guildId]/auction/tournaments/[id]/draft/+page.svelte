@@ -10,13 +10,20 @@
 		mockAuctionTeams,
 		mockAuctionTeams10
 	} from '$lib/fixtures/workflow';
+	import type { AuctionDraftCommand } from '$lib/realtime/auction';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
-	const isTenPerson = $derived(data.tournamentId.startsWith('a10-'));
+	const isTenPerson = $derived(data.tournament.format === 'TEN_PERSON');
 	const teams = $derived(isTenPerson ? mockAuctionTeams10 : mockAuctionTeams);
 	const queue = $derived(isTenPerson ? mockAuctionQueue10 : mockAuctionQueue);
+	let draftRevision = $state(12);
+
+	function handleDraftCommand(command: AuctionDraftCommand) {
+		if (command.expectedRevision !== draftRevision) return;
+		draftRevision += 1;
+	}
 </script>
 
 <svelte:head>
@@ -56,6 +63,8 @@
 	<AuctionTournamentBidDraftWorkbench
 		initialTeams={teams}
 		initialQueue={queue}
+		revision={draftRevision}
+		onCommand={handleDraftCommand}
 		profileIconVersion={data.championCatalog.version}
 	/>
 </div>

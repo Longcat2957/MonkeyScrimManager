@@ -4,7 +4,6 @@
 	import { page } from '$app/state';
 	import { Search } from 'lucide-svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
-	import { getMockGuild } from '$lib/fixtures/guilds';
 	import type { Lane } from '$lib/fixtures/workflow';
 	import type { PageProps } from './$types';
 
@@ -81,7 +80,7 @@
 	}
 
 	const dataDragonVersion = '16.13.1';
-	const guild = $derived(getMockGuild(data.guildId));
+	const guild = $derived(data.guild);
 	const searchedRiotId = $derived(page.url.searchParams.get('q')?.trim() || '탐솔#KR1');
 	const searchedUserName = $derived(searchedRiotId.split('#')[0] || '탐솔');
 	const searchedUserTag = $derived(
@@ -539,7 +538,7 @@
 	<main class="custom-records-shell">
 		<form class="records-search" onsubmit={submitRecordSearch}>
 			<div>
-				<span>{guild.name}</span>
+				<span>{guild.displayName}</span>
 				<strong>내전 전적</strong>
 			</div>
 			<label>
@@ -559,7 +558,7 @@
 				alt={`${searchedUserName} 프로필`}
 			/>
 			<div class="profile-copy">
-				<p>{guild.name} · 내전 참가자</p>
+				<p>{guild.displayName} · 내전 참가자</p>
 				<h1>{searchedUserName}</h1>
 				<span>{searchedUserTag}</span>
 			</div>

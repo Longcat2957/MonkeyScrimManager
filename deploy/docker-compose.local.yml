@@ -1,0 +1,9 @@
+services:
+  postgres:
+    networks:
+      - data
+      - local-access
+
+networks:
+  local-access:
+    name: monkeybot_local_access

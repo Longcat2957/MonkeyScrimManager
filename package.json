@@ -5,10 +5,14 @@
 	"packageManager": "pnpm@10.13.1",
 	"scripts": {
 		"dev": "pnpm --filter @monkeybot/web dev",
-		"check": "pnpm --filter @monkeybot/web check",
-		"build": "pnpm --filter @monkeybot/web build",
-		"lint": "pnpm --filter @monkeybot/web lint",
-		"test": "pnpm --filter @monkeybot/web test",
+		"check": "pnpm --filter @monkeybot/web check && pnpm --filter @monkeybot/bot check",
+		"build": "pnpm --filter @monkeybot/web build && pnpm --filter @monkeybot/bot build",
+		"lint": "pnpm --filter @monkeybot/web lint && pnpm --filter @monkeybot/bot lint",
+		"test": "pnpm --filter @monkeybot/web test && pnpm --filter @monkeybot/bot test",
+		"bot:dev": "pnpm --filter @monkeybot/bot dev",
+		"bot:commands:guild": "pnpm --filter @monkeybot/bot commands:register:guild",
+		"bot:commands:global": "pnpm --filter @monkeybot/bot commands:register:global",
+		"docker:build": "scripts/docker-build.sh",
 		"format": "prettier --write .",
 		"format:check": "prettier --check ."
 	},

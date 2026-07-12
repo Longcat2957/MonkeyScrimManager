@@ -10,6 +10,14 @@ node_modules
 build
 dist
 coverage
+target
 
 *.local
 *.log
+*.pem
+
+# Deployment credentials. Commit only the adjacent *.example files.
+deploy/api/runtime.env
+deploy/api/migration.env
+deploy/postgres/pg_service.conf
+deploy/postgres/pgpass

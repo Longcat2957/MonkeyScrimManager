@@ -1,40 +1,43 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { Check, ChevronDown, RotateCcw, Save, Server } from 'lucide-svelte';
-	import {
-		DEFAULT_GUILD_COOKIE,
-		DEFAULT_GUILD_ID,
-		isMockGuildId,
-		mockGuilds
-	} from '$lib/fixtures/guilds';
+	import { untrack } from 'svelte';
+	import type { GuildAccessSummary } from '$lib/contracts/workflow';
 
-	let savedGuildId = $state(DEFAULT_GUILD_ID);
-	let draftGuildId = $state(DEFAULT_GUILD_ID);
+	interface Props {
+		initialGuildId: string | null;
+		guilds: GuildAccessSummary[];
+		onSave: (guildId: string) => void | Promise<void>;
+	}
+
+	let { initialGuildId, guilds, onSave }: Props = $props();
+	const startingGuildId = untrack(() => initialGuildId ?? guilds[0]?.id ?? '');
+	let savedGuildId = $state(startingGuildId);
+	let draftGuildId = $state(startingGuildId);
 	let savedNotice = $state(false);
+	let submitting = $state(false);
+	let saveError = $state(false);
 
-	const dirty = $derived(draftGuildId !== savedGuildId);
-
-	onMount(() => {
-		const cookie = globalThis.document.cookie
-			.split('; ')
-			.find((entry) => entry.startsWith(`${DEFAULT_GUILD_COOKIE}=`));
-		const cookieGuildId = cookie ? decodeURIComponent(cookie.split('=').slice(1).join('=')) : '';
-
-		if (isMockGuildId(cookieGuildId)) {
-			savedGuildId = cookieGuildId;
-			draftGuildId = cookieGuildId;
-		}
-	});
+	const dirty = $derived(Boolean(draftGuildId) && draftGuildId !== savedGuildId);
 
 	function reset() {
 		draftGuildId = savedGuildId;
 		savedNotice = false;
+		saveError = false;
 	}
 
-	function save() {
-		globalThis.document.cookie = `${DEFAULT_GUILD_COOKIE}=${encodeURIComponent(draftGuildId)}; Path=/; Max-Age=31536000; SameSite=Lax`;
-		savedGuildId = draftGuildId;
-		savedNotice = true;
+	async function save() {
+		if (!dirty || submitting) return;
+		submitting = true;
+		saveError = false;
+		try {
+			await onSave(draftGuildId);
+			savedGuildId = draftGuildId;
+			savedNotice = true;
+		} catch {
+			saveError = true;
+		} finally {
+			submitting = false;
+		}
 	}
 </script>
 
@@ -57,10 +60,13 @@
 					<Check size={14} aria-hidden="true" /> 저장됨
 				</span>
 			{/if}
+			{#if saveError}
+				<span class="text-xs font-semibold text-red-300">저장 실패</span>
+			{/if}
 			<button
 				type="button"
 				class="grid size-8 place-items-center border border-[var(--color-app-border)] bg-[var(--color-app-control)] text-slate-400 enabled:hover:text-slate-100 disabled:opacity-35"
-				disabled={!dirty}
+				disabled={!dirty || submitting}
 				aria-label="대표 길드 변경 취소"
 				title="변경 취소"
 				onclick={reset}
@@ -73,7 +79,8 @@
 				disabled={!dirty}
 				onclick={save}
 			>
-				<Save size={14} aria-hidden="true" /> 저장
+				<Save size={14} aria-hidden="true" />
+				{submitting ? '저장 중' : '저장'}
 			</button>
 		</div>
 	</header>
@@ -92,10 +99,18 @@
 			<select
 				bind:value={draftGuildId}
 				onchange={() => (savedNotice = false)}
+				disabled={guilds.length === 0}
 				class="h-11 w-full appearance-none border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 pr-10 text-sm font-semibold text-slate-100 outline-none hover:border-cyan-400/35 focus:border-cyan-400/50"
 			>
-				{#each mockGuilds as guild (guild.id)}
-					<option value={guild.id}>{guild.name} · {guild.role}</option>
+				{#if guilds.length === 0}
+					<option value="">선택 가능한 길드 없음</option>
+				{/if}
+				{#each guilds as guild (guild.id)}
+					<option value={guild.id}
+						>{guild.displayName} · {guild.currentUserRole === 'OPERATOR'
+							? '운영자'
+							: '참가자'}</option
+					>
 				{/each}
 			</select>
 			<ChevronDown

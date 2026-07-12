@@ -22,7 +22,6 @@
 	import type { Snippet } from 'svelte';
 	import QuickActionFab from '$lib/components/fab/QuickActionFab.svelte';
 	import AppFooter from '$lib/components/layout/AppFooter.svelte';
-	import { DEFAULT_GUILD_ID, getMockGuild, mockGuilds } from '$lib/fixtures/guilds';
 
 	interface NavItem {
 		href: string;
@@ -31,52 +30,87 @@
 		icon: typeof Activity;
 	}
 
+	interface ShellGuild {
+		id: string;
+		displayName: string;
+		memberCount: number;
+		currentUserRole: 'MEMBER' | 'OPERATOR';
+	}
+
+	interface ShellUser {
+		displayName: string;
+		defaultGuildId: string | null;
+	}
+
+	interface ShellPageData {
+		guild?: ShellGuild;
+		guilds?: ShellGuild[];
+		user?: ShellUser;
+	}
+
 	let { children }: { children: Snippet } = $props();
 	let searchOpen = $state(false);
 	let searchMode = $state<'riot' | 'custom'>('riot');
 	let searchQuery = $state('');
 
 	const skeletonRows = [0, 1, 2, 3];
-	const activeGuildId = $derived(page.params.guildId ?? DEFAULT_GUILD_ID);
-	const activeGuild = $derived(getMockGuild(activeGuildId));
-	const activeGuildBase = $derived(resolve('/g/[guildId]', { guildId: activeGuildId }));
-	const showQuickActionFab = $derived(page.url.pathname !== resolve('/docs'));
-	const navItems: NavItem[] = $derived([
-		{
-			href: resolve('/g/[guildId]/series', { guildId: activeGuildId }),
-			match: `${activeGuildBase}/series`,
-			label: '내전',
-			icon: Swords
-		},
-		{
-			href: resolve('/g/[guildId]/auction', { guildId: activeGuildId }),
-			match: `${activeGuildBase}/auction`,
-			label: '경매',
-			icon: Trophy
-		},
-		{
-			href: resolve('/g/[guildId]/records', { guildId: activeGuildId }),
-			match: `${activeGuildBase}/records`,
-			label: '전적',
-			icon: History
-		},
-		{
-			href: resolve('/g/[guildId]/leaderboard', { guildId: activeGuildId }),
-			match: `${activeGuildBase}/leaderboard`,
-			label: '랭킹',
-			icon: Activity
-		},
-		...(activeGuild.role === '운영자'
+	const shellData = $derived(page.data as ShellPageData);
+	const availableGuilds = $derived(shellData.guilds ?? []);
+	const activeGuildId = $derived(
+		page.params.guildId ??
+			shellData.guild?.id ??
+			shellData.user?.defaultGuildId ??
+			availableGuilds[0]?.id ??
+			''
+	);
+	const activeGuild = $derived(
+		shellData.guild ?? availableGuilds.find((guild) => guild.id === activeGuildId) ?? null
+	);
+	const activeGuildBase = $derived(
+		activeGuildId ? resolve('/g/[guildId]', { guildId: activeGuildId }) : ''
+	);
+	const staticDocumentRouteIds = ['/docs', '/terms', '/privacy'];
+	const showQuickActionFab = $derived(!staticDocumentRouteIds.includes(page.route.id ?? ''));
+	const navItems: NavItem[] = $derived(
+		activeGuildId
 			? [
 					{
-						href: resolve('/g/[guildId]/admin', { guildId: activeGuildId }),
-						match: `${activeGuildBase}/admin`,
-						label: '관리',
-						icon: ShieldCheck
-					}
+						href: resolve('/g/[guildId]/series', { guildId: activeGuildId }),
+						match: `${activeGuildBase}/series`,
+						label: '내전',
+						icon: Swords
+					},
+					{
+						href: resolve('/g/[guildId]/auction', { guildId: activeGuildId }),
+						match: `${activeGuildBase}/auction`,
+						label: '경매',
+						icon: Trophy
+					},
+					{
+						href: resolve('/g/[guildId]/records', { guildId: activeGuildId }),
+						match: `${activeGuildBase}/records`,
+						label: '전적',
+						icon: History
+					},
+					{
+						href: resolve('/g/[guildId]/leaderboard', { guildId: activeGuildId }),
+						match: `${activeGuildBase}/leaderboard`,
+						label: '랭킹',
+						icon: Activity
+					},
+					...(activeGuild?.currentUserRole === 'OPERATOR'
+						? [
+								{
+									href: resolve('/g/[guildId]/admin', { guildId: activeGuildId }),
+									match: `${activeGuildBase}/admin`,
+									label: '관리',
+									icon: ShieldCheck
+								}
+							]
+						: [])
 				]
-			: [])
-	]);
+			: []
+	);
 
 	function switchGuild(guildId: string) {
 		goto(resolve('/g/[guildId]', { guildId }));
@@ -84,12 +118,32 @@
 
 	function submitSearch() {
 		const target =
-			searchMode === 'riot'
+			searchMode === 'riot' || !activeGuildId
 				? resolve('/records')
 				: resolve('/g/[guildId]/records', { guildId: activeGuildId });
 		const query = searchQuery.trim();
 		goto(query ? `${target}?q=${globalThis.encodeURIComponent(query)}` : target);
 		searchOpen = false;
+	}
+
+	function readCookie(name: string): string | null {
+		const prefix = `${name}=`;
+		const value = globalThis.document.cookie
+			.split(';')
+			.map((cookie) => cookie.trim())
+			.find((cookie) => cookie.startsWith(prefix));
+		return value ? decodeURIComponent(value.slice(prefix.length)) : null;
+	}
+
+	async function logout() {
+		const csrfToken = readCookie('monkeybot_csrf');
+		const response = await globalThis.fetch(resolve('/api/[...path]', { path: 'logout' }), {
+			method: 'POST',
+			headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined
+		});
+		if (!response.ok) return;
+		globalThis.document.cookie = 'monkeybot_default_guild=; Path=/; Max-Age=0; SameSite=Lax';
+		await goto(resolve('/'));
 	}
 
 	function isActive(match: string): boolean {
@@ -138,41 +192,47 @@
 			</nav>
 
 			<div class="ml-auto flex shrink-0 items-center gap-2">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger
-						aria-label="운영 서버 선택"
-						class="flex h-10 max-w-44 shrink-0 items-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-2.5 text-slate-300 outline-none hover:border-cyan-400/35 hover:text-slate-50 data-[state=open]:border-cyan-400/40 data-[state=open]:bg-cyan-400/10"
-					>
-						<Server size={15} class="shrink-0 text-cyan-200" aria-hidden="true" />
-						<span class="hidden truncate text-xs font-semibold xl:block">{activeGuild.name}</span>
-						<ChevronsUpDown size={13} class="shrink-0 text-slate-500" aria-hidden="true" />
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Portal>
-						<DropdownMenu.Content
-							align="end"
-							sideOffset={8}
-							class="z-50 min-w-64 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-1 text-sm text-slate-200 shadow-2xl shadow-black/40 outline-none"
+				{#if activeGuild && availableGuilds.length > 0}
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger
+							aria-label="운영 서버 선택"
+							class="flex h-10 max-w-44 shrink-0 items-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-2.5 text-slate-300 outline-none hover:border-cyan-400/35 hover:text-slate-50 data-[state=open]:border-cyan-400/40 data-[state=open]:bg-cyan-400/10"
 						>
-							<div class="px-3 py-2 text-[10px] font-semibold text-slate-600">Discord 서버</div>
-							{#each mockGuilds as guild (guild.id)}
-								<DropdownMenu.Item
-									class="grid h-11 cursor-default grid-cols-[minmax(0,1fr)_18px] items-center gap-3 px-3 outline-none data-[highlighted]:bg-[var(--color-app-hover)]"
-									onclick={() => switchGuild(guild.id)}
-								>
-									<span class="min-w-0">
-										<strong class="block truncate text-xs text-slate-100">{guild.name}</strong>
-										<small class="text-[10px] text-slate-600"
-											>{guild.role} · {guild.memberCount}명</small
-										>
-									</span>
-									{#if guild.id === activeGuildId}
-										<Check size={14} class="text-cyan-200" aria-hidden="true" />
-									{/if}
-								</DropdownMenu.Item>
-							{/each}
-						</DropdownMenu.Content>
-					</DropdownMenu.Portal>
-				</DropdownMenu.Root>
+							<Server size={15} class="shrink-0 text-cyan-200" aria-hidden="true" />
+							<span class="hidden truncate text-xs font-semibold xl:block"
+								>{activeGuild.displayName}</span
+							>
+							<ChevronsUpDown size={13} class="shrink-0 text-slate-500" aria-hidden="true" />
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Portal>
+							<DropdownMenu.Content
+								align="end"
+								sideOffset={8}
+								class="z-50 min-w-64 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-1 text-sm text-slate-200 shadow-2xl shadow-black/40 outline-none"
+							>
+								<div class="px-3 py-2 text-[10px] font-semibold text-slate-600">Discord 서버</div>
+								{#each availableGuilds as guild (guild.id)}
+									<DropdownMenu.Item
+										class="grid h-11 cursor-default grid-cols-[minmax(0,1fr)_18px] items-center gap-3 px-3 outline-none data-[highlighted]:bg-[var(--color-app-hover)]"
+										onclick={() => switchGuild(guild.id)}
+									>
+										<span class="min-w-0">
+											<strong class="block truncate text-xs text-slate-100"
+												>{guild.displayName}</strong
+											>
+											<small class="text-[10px] text-slate-600"
+												>{guild.currentUserRole === 'OPERATOR' ? '운영자' : '참가자'} · {guild.memberCount}명</small
+											>
+										</span>
+										{#if guild.id === activeGuildId}
+											<Check size={14} class="text-cyan-200" aria-hidden="true" />
+										{/if}
+									</DropdownMenu.Item>
+								{/each}
+							</DropdownMenu.Content>
+						</DropdownMenu.Portal>
+					</DropdownMenu.Root>
+				{/if}
 
 				<button
 					type="button"
@@ -198,7 +258,9 @@
 						<Avatar.Root
 							class="grid size-8 place-items-center overflow-hidden border border-cyan-400/35 bg-cyan-400/10"
 						>
-							<Avatar.Fallback class="text-xs font-bold text-cyan-100">관</Avatar.Fallback>
+							<Avatar.Fallback class="text-xs font-bold text-cyan-100"
+								>{shellData.user?.displayName.slice(0, 1) ?? 'M'}</Avatar.Fallback
+							>
 						</Avatar.Root>
 						<ChevronDown size={14} class="hidden text-slate-500 sm:block" />
 					</DropdownMenu.Trigger>
@@ -209,8 +271,12 @@
 							class="z-50 min-w-56 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-1 text-sm text-slate-200 shadow-2xl shadow-black/40 outline-none"
 						>
 							<div class="px-3 py-2">
-								<p class="font-semibold text-slate-50">내전 관리자</p>
-								<p class="mt-0.5 text-xs text-slate-500">{activeGuild.name}</p>
+								<p class="font-semibold text-slate-50">
+									{shellData.user?.displayName ?? '내 정보'}
+								</p>
+								{#if activeGuild}
+									<p class="mt-0.5 text-xs text-slate-500">{activeGuild.displayName}</p>
+								{/if}
 							</div>
 							<DropdownMenu.Separator class="my-1 h-px bg-[var(--color-app-border-muted)]" />
 							<DropdownMenu.Item
@@ -223,6 +289,7 @@
 							<DropdownMenu.Separator class="my-1 h-px bg-[var(--color-app-border-muted)]" />
 							<DropdownMenu.Item
 								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold text-red-100 outline-none data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-50"
+								onclick={logout}
 							>
 								<LogOut size={15} />
 								나가기
@@ -311,7 +378,11 @@
 			</div>
 		{/if}
 
-		<main class="mx-auto w-full min-w-0 max-w-[1680px] flex-1 px-4 pt-5 pb-24 lg:px-6 lg:pb-5">
+		<main
+			class={`mx-auto w-full min-w-0 max-w-[1680px] flex-1 px-4 pt-5 lg:px-6 ${
+				showQuickActionFab ? 'pb-40 lg:pb-36' : 'pb-5'
+			}`}
+		>
 			{#if navigating.to}
 				<section
 					transition:fade={{ duration: 120, easing: cubicOut }}
@@ -377,7 +448,7 @@
 			{/if}
 		</main>
 
-		<AppFooter />
+		<AppFooter reserveFabSpace={showQuickActionFab} />
 	</div>
 
 	{#if showQuickActionFab}

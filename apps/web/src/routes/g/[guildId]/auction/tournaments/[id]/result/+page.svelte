@@ -13,7 +13,7 @@
 
 	let { data }: PageProps = $props();
 
-	const isTenPerson = $derived(data.tournamentId.startsWith('a10-'));
+	const isTenPerson = $derived(data.tournament.format === 'TEN_PERSON');
 	const teams = $derived(isTenPerson ? mockAuctionBracketTeams10 : mockAuctionBracketTeams);
 	const matches = $derived(isTenPerson ? mockAuctionResultMatches10 : mockAuctionResultMatches);
 	const championTeamId = $derived(

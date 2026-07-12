@@ -1,366 +1,286 @@
-# MonkeyBot Roadmap
+# MonkeyBot Product Roadmap
 
-작성일: 2026-07-10
+작성일: 2026-07-11
 
 ## 방향
 
-이 로드맵은 `../mookbot_v3`를 새 repository로 단순 복사하는 계획이 아니다. v3의 동작을 기준선으로 삼아 도메인 계약을 먼저 고정하고, core/API/bot/web을 새 구조로 재작성하는 계획이다.
+MonkeyBot은 mookbot_v3를 복사하는 프로젝트가 아니다. 현재 SvelteKit
+프론트엔드에서 확정한 운영 흐름을 기준으로 Rust/Axum API와 PostgreSQL
+원장을 새로 만들고, v3의 MMR과 검증된 운영 규칙만 선별 이식한다.
 
-우선순위는 다음 순서다.
+우선순위:
 
-1. 기능 범위와 도메인 계약을 확정한다.
-2. DB/Core/API의 신뢰성 있는 상태 전이를 먼저 세운다.
-3. Discord bot은 기존 사용자-facing 명령을 유지하되 슬림하게 다시 작성한다.
-4. Web console은 운영 작업대 중심으로 새로 설계한다.
-5. v3 데이터와 운영 배포 경로를 안전하게 연결한다.
+1. 현재 프론트 route와 control을 API 계약으로 고정한다.
+2. PostgreSQL의 tenant, transaction, audit, revert 기반을 만든다.
+3. 최소 Bot으로 실제 길드 설정과 일반 모집 데이터를 생성한다.
+4. 일반 내전과 경매 내전을 vertical slice로 연결한다.
+5. 동시 편집 route에만 WebSocket을 붙인다.
+6. 조회/self/admin과 나머지 Bot 기능을 연결한다.
+7. v3를 건드리지 않는 migration rehearsal 뒤 운영 전환을 판단한다.
+
+상세 task와 exit criteria는 [Backend Development Plan](09-backend-development-plan.md)을
+따른다.
 
 ## 목표 구조
 
-```txt
-MonkeyBot/
+```text
+MonkeyScrimManager/
   apps/
-    bot/          # discord.js command, component handler, notification
-    api/          # HTTP API, auth, permission, websocket, bot notify
-    web/          # SvelteKit 운영 콘솔
-  packages/
-    core/         # DB repository, domain service, Riot, Data Dragon, Valkey, MMR
-    contracts/    # zod schema, shared DTO, route contracts
-    api-client/   # typed fetch client for web and tests
+    web/          SvelteKit frontend only
+    api/          Rust + Axum modular monolith
+    bot/          Discord interaction/notification
+  openapi/        Axum API snapshot
   docs/
+  deploy/
   scripts/
-  infra/
 ```
 
-초기에는 `contracts`와 `api-client`를 작게 시작한다. 모든 타입을 한 번에 추출하지 않고, dashboard, recruitment, series, auction 순서로 실제 route가 필요로 하는 계약부터 고정한다.
+Axum 내부 경계:
 
-## Phase 0: 프로젝트 기준선
+```text
+HTTP/WS adapter
+  -> application command/query
+  -> domain policy
+  -> SQLx repository
+  -> PostgreSQL
+```
 
-목표: 빈 프로젝트를 실행 가능한 TypeScript workspace로 만든다.
+Valkey는 Pub/Sub, presence, rate limit, cache만 담당한다. draft, bid, point,
+lineup, game, MMR 원장은 PostgreSQL에만 둔다.
 
-작업:
+## 확정 제품 규칙
 
-- root `package.json`, `pnpm-workspace.yaml`, TypeScript/Vitest 기본 설정 추가.
-- `apps/api`, `apps/bot`, `apps/web`, `packages/core`, `packages/contracts`, `packages/api-client` scaffold 생성.
-- lint/format/typecheck/test script의 최소 기준 확정.
-- `.env.example` 작성: Discord, Riot, DB, session, web URL, internal token.
-- v3 참조 문서와 새 프로젝트 문서의 관계를 `docs/`에 명시.
+- Discord OAuth2가 유일한 web 인증이다.
+- guild_id가 모든 운영 데이터의 경계다.
+- lane wire enum은 TOP/JUNGLE/MID/BOTTOM/SUPPORT다.
+- 일반 내전과 경매 내전 모두 guild MMR에 반영한다.
+- 경매는 TEN_PERSON 2팀과 TWENTY_PERSON 4팀을 지원한다.
+- bestOf storage는 1, 3, 5를 지원하되 현재 UI가 새로 만드는 series/match는 BO3다.
+- series/recruitment와 tournament/auction recruitment는 별도 ID와 unique FK다.
+- custom match 결과에서 KDA/CS는 필수 입력이 아니다.
+- 중요한 mutation은 expectedRevision과 PostgreSQL transaction을 사용한다.
+- 범용 undo가 아니라 고정 checkpoint revert만 제공한다.
+- 현재 게임/Riot Spectator는 MVP에서 제외한다.
 
-완료 기준:
+## Phase 0. Frontend contract
 
-- `pnpm install` 후 root에서 typecheck/test 명령이 존재한다.
-- 빈 앱이라도 api health, bot env validation, web shell이 실행 가능하다.
-- Activity SDK, React Activity, shadcn-svelte, daisyUI, Skeleton UI dependency가 없다.
+현재 구현된 화면을 제품 표준으로 동결한다.
 
-## Phase 1: 도메인 계약 추출
+대상:
 
-목표: 구현 복사 전에 반드시 지켜야 할 상태와 API 계약을 분리한다.
-
-작업:
-
-- v3 DB schema에서 핵심 entity를 추출한다.
-- recruitment, series, game, user, riot account, auction recruitment, auction tournament, audit log의 상태 모델을 문서화한다.
-- `packages/contracts`에 공통 enum, ID type, DTO schema를 작성한다.
-- WebSocket topic naming을 고정한다.
-- destructive/admin action의 audit payload 기준을 정한다.
-- 고정 단계 revert checkpoint 기준을 정한다.
-
-참조:
-
-- `../mookbot_v3/packages/core/src/db/schema.sql`
-- `../mookbot_v3/apps/api/src/http`
-- `../mookbot_v3/docs/v2-feature-inventory.md`
-- `docs/07-realtime-collaboration.md`
-
-완료 기준:
-
-- contracts 테스트가 core/API 없이 단독 실행된다.
-- 일반 내전과 경매 내전의 주요 상태 전이가 타입으로 표현된다.
-- v3와 달라지는 필드가 migration note에 기록된다.
-
-## Phase 2: Core 이식과 정리
-
-목표: DB, MMR, Riot, Data Dragon, Valkey 로직을 새 프로젝트 기준으로 가져온다.
-
-작업:
-
-- v3 `packages/core/src/db`에서 필요한 repository를 선별 이식한다.
-- MMR/ELO, game stats, picks/bans 저장 로직을 테스트와 함께 가져온다.
-- Riot API client, Data Dragon client, screening logic은 모듈 경계를 재정리해서 이식한다.
-- v3의 `guild_kv`와 Valkey routed KV는 계승하지 않는다.
-- 유실되면 안 되는 draft는 guild-scoped DB 테이블에 저장하고, Valkey는 Pub/Sub과 TTL 기반 임시 상태에만 사용한다.
-- seed, backup, restore, migration script를 새 scripts 구조에 맞춘다.
-
-유지할 규칙:
-
-- 일반 내전은 MMR에 반영한다.
-- 경매 내전도 MMR에 반영한다.
-- `series.id === recruitments.id`를 유지한다.
-- `auction_tournaments.id === auction_recruitments.id`를 유지한다.
-- 주요 삭제는 soft-delete 또는 상태 전이로 보존한다.
+- 공통 shell, guild selector, 대표 길드 redirect
+- operations queue
+- 일반 내전 진행/완료, entry, pick-ban/result input, result ledger
+- 경매 진행/완료, 10인/20인 setup, auction, bracket, lineup, result
+- guild records, Riot records, leaderboard
+- /me, minimal user profile
+- guild admin, service status
 
 완료 기준:
 
-- core unit test가 v3 기준 동작을 검증한다.
-- DB migration을 빈 DB와 v3 호환 DB 양쪽에서 검증할 수 있다.
-- domain helper가 API나 bot framework에 의존하지 않는다.
+- 모든 control이 local-only, HTTP query, HTTP command 중 하나로 분류된다.
+- route별 request/response golden fixture가 있다.
+- OpenAPI와 WS event 초안이 현재 component 의미를 보존한다.
+- 미사용 `lib/contracts/dashboard.ts`는 실사용 operations DTO와 혼합하지 않고 폐기 대상으로
+  분류한다.
+- operations의 `RESULT` 작업은 `/pick-ban`, 완료 원장은 `/result`로 연결한다.
 
-## Phase 3: API 재작성
+## Phase 1. Axum/PostgreSQL foundation
 
-목표: Fastify API를 새 contracts 위에 다시 세운다.
-
-작업:
-
-- session/auth: Discord OAuth2 only, signed httpOnly `sid`, logout, `/api/me`, `/api/me/perms`.
-- recruitment API: 목록, 상세, entry draft, reopen, series 생성.
-- series API: 상세, pickban draft, game result, revert, completed list, balance SVG.
-- auction API: recruitment, tournament, bidding, bracket, match game result.
-- user API: search, profile, MMR history, preferences, Riot accounts.
-- admin API: logs, health, permission diagnostics, destructive action endpoints.
-- WebSocket invalidate server와 topic subscription 구현.
-- 동시 편집 mutation에 `revision` 기반 optimistic concurrency와 DB constraint 기반 중복 방지를 적용한다.
-- API -> bot internal notify endpoint를 유지한다.
-- 고정 단계 revert API를 구현한다.
-
-설계 원칙:
-
-- route handler는 얇게 두고 상태 전이는 core service/repository로 보낸다.
-- audit log 기록을 API boundary에서 누락하지 않는다.
-- 응답 shape는 `packages/contracts` 기준으로 검증한다.
+- Rust workspace, config, error, tracing, health, graceful shutdown.
+- SQLx migration, actual PostgreSQL integration harness.
+- guild composite FK, revision, audit, checkpoint, idempotency, outbox.
+- Discord OAuth session과 guild/operator guard.
+- Bot service principal 인증 기반.
 
 완료 기준:
 
-- v3의 주요 API surface와 parity matrix가 작성된다.
-- 핵심 mutation은 test harness DB로 검증된다.
-- API health, auth, recruitment, series, auction, logs 테스트가 통과한다.
-- 이메일/비밀번호 회원가입, 자체 로그인, 추가 OAuth provider가 없다.
+- 빈 PostgreSQL migration과 restore smoke가 통과한다.
+- cross-guild 접근과 참조가 차단된다.
+- Discord login/logout과 대표 길드 조회가 동작한다.
 
-## Phase 4: Bot 슬림 재작성
+## Phase 2. Read-only operating slice
 
-목표: 기존 Discord UX는 유지하되, 봇 내부 로직을 작게 만든다.
+연결 route:
 
-작업:
+- /g/{guildId}
+- /g/{guildId}/series
+- /g/{guildId}/auction
+- /users/{discordId}
 
-- slash command 이름과 option을 v3 기준으로 등록한다.
-- 사용자 명령: `/도움말`, `/등록`, `/내정보`, `/내정보갱신`, `/내전기록`, `/랭킹`, `/전적`, `/지금게임`, `/전적검토`.
-- 일반 내전 운영 명령: 모집, 인원 추가/삭제, 랜덤 추가, 목록, 복구, 강제 삭제, 조기 종료.
-- 경매 내전 운영 명령: 모집, 인원 추가/삭제, 목록, 강제 삭제, 조기 종료.
-- 관리자 명령: 일괄등록, MMR 수정, 시즌 리셋, 오래된 내전 정리, 로그, 유저 강제 삭제.
-- 운영자 명령: 최근 작업 되돌리기.
-- recruitment/auction message builder와 button/select handler를 새 API client 기준으로 작성한다.
-- 웹 링크는 `WEB_BASE_URL` route로 발급한다.
-- 라인업 이미지와 종료 카드 발행은 best-effort로 유지한다.
-
-정리 대상:
-
-- 봇에서 직접 DB 상태를 많이 바꾸는 코드.
-- Activity 안내 문구.
-- command별 중복 permission/audit helper.
+operations/actionable/active/completed projection을 먼저 연결한다. 화면을 API에
+맞춰 다시 디자인하지 않고 현재 row/section 구조를 유지한다.
 
 완료 기준:
 
-- command deploy가 새 프로젝트에서 실행된다.
-- button/select interaction test가 주요 메시지 상태를 검증한다.
-- 운영자 명령은 API/Core 계약을 통해 상태를 바꾼다.
+- 위 route가 fixture 없이 PostgreSQL 데이터로 렌더링된다.
+- 10인/20인 경매 행, empty state, 정렬, tenant 격리가 검증된다.
 
-## Phase 5: Web 기반 설계
+## Phase 2.5. 최소 Bot 운영 경로
 
-목표: 운영 콘솔의 화면 원칙과 공통 primitive를 먼저 세운다.
+Bot은 Node 22와 discord.js로 구성하고 PostgreSQL에 직접 접근하지 않는다.
+Discord interaction은 Bot service principal로 Axum command API만 호출한다.
 
-작업:
-
-- SvelteKit, Tailwind CSS, Bits UI, lucide 기반 scaffold 구성.
-- `MookPageShell`, `MookPageHeader`, `MookPanel`, `MookDataRow`, `MookStatusBadge`, `MookActionMenu` 같은 최소 primitive 작성.
-- nested card, hero, generic SaaS metric dashboard 금지 규칙을 컴포넌트 문서에 반영한다.
-- API client, auth store, websocket invalidate store를 작성한다.
-- loading, empty, error, unauthorized 상태를 공통화한다.
+- `/초기설정`: 길드, 운영자 역할, 모집 채널 설정.
+- `/내전모집`: 일반 모집 생성과 Discord 메시지 연결.
+- 모집 component: 참가, 취소, 선호 라인, 엔트리 시작.
+- Discord interaction ID 기반 idempotency와 API readiness 확인.
 
 완료 기준:
 
-- 첫 화면 shell이 실제 운영 queue 구조를 담을 수 있다.
-- route-local 색/spacing 보정 없이 기본 primitive로 화면을 만들 수 있다.
-- `apps/web`에는 React, Activity SDK, shadcn-svelte, daisyUI, Skeleton UI가 없다.
+- seed 데이터 없이 실제 test guild interaction으로 모집 snapshot이 생성된다.
+- 동일 interaction replay가 같은 응답을 반환하고 mutation은 한 번만 수행된다.
+- Bot token이 없는 CI에서도 API/Bot contract test가 통과한다.
 
-## Phase 6: 일반 내전 Web Route
+## Phase 3. 일반 내전
 
-목표: 일반 내전 운영을 웹에서 끝까지 처리한다.
+- recruitment snapshot과 entry operation.
+- separate series 생성.
+- pick/ban cell operation.
+- game submit, v3 호환 MMR, score/completion.
+- last game revert와 result ledger.
+- Entry reset/reopen/createSeries와 PickBan submit/deleteLast/revert control 연결.
+- 최소 Bot 모집 경로의 series created/completed notification.
+
+현재 /pick-ban은 side, pick/ban, winner 입력 작업대이며 /result는 읽기
+원장이다. pick/ban은 optional이고 game winner는 확정 시 필수다.
+
+완료 기준:
+
+- 신규 BO3 시리즈 완료와 imported BO1/BO3 조회.
+- game/MMR/audit/checkpoint가 한 transaction.
+- revert 후 MMR/score/status가 일치.
+- Bot 모집부터 결과 알림까지 Axum command 경계를 재사용한다.
+
+## Phase 4. 제한적 실시간 협업
+
+WS route:
+
+```text
+/g/{guildId}/recruitments/{id}/entry
+/g/{guildId}/series/{id}/pick-ban
+/g/{guildId}/auction/recruitments/{id}/draft
+/g/{guildId}/auction/tournaments/{id}/draft
+/g/{guildId}/auction/tournaments/{id}/bracket
+```
+
+HTTP가 mutation을 수행하고 WS는 outbox/Valkey를 통해 invalidate와 presence만
+전달한다.
+
+완료 기준:
+
+- 같은 revision의 두 mutation 중 하나만 성공한다.
+- 409 -> refetch -> 사용자 재적용 흐름이 동작한다.
+- Valkey 장애에도 PostgreSQL 원장 저장은 정상이다.
+
+## Phase 5. 경매 내전
+
+- captain과 initial point를 한 setup command로 확정.
+- draw, bid award, unsold, manual assignment, recent step revert.
+- 2팀 결승과 4팀 준결승/결승 bracket.
+- match lineup role assignment와 lock.
+- game result, guild MMR, result revert.
+
+완료 기준:
+
+- 10인/20인 모두 setup부터 completed result까지 진행된다.
+- 동시 낙찰은 정확히 하나만 commit된다.
+- 완성/lock되지 않은 lineup으로 결과를 입력할 수 없다.
+
+## Phase 6. Records와 self-service
 
 Route:
 
-- `/`
-- `/g/[guildId]`
-- `/g/[guildId]/recruitments/[id]/entry`
-- `/g/[guildId]/series`
-- `/g/[guildId]/series/[id]/pick-ban`
-- `/g/[guildId]/series/[id]/result`
+- /g/{guildId}/records
+- /records
+- /g/{guildId}/leaderboard
+- /users/{discordId}
+- /me
 
-작업:
-
-- dashboard는 처리 대기, 진행 중, 최근 완료 queue로 구성한다.
-- 일반 내전 작업 목록은 모집 마감, 편성, 픽밴, 결과 입력 상태를 row/table로 함께 보여준다.
-- entry editor는 full-width 작업대로 구성한다.
-- pick-ban은 game tabs, side selector, team board, champion command list, result submit rail로 구성한다.
-- result 화면은 게임 원장, picks/bans, MMR 변화, 종료 상태를 명확하게 보여준다.
+guild records는 내부 game 원장이 기준이며 /records는 Riot 외부 전적이다.
+/users/{discordId}는 현재 UI가 소비하는 minimal profile부터 구현한다.
 
 완료 기준:
 
-- 일반 모집 생성 후 웹에서 시리즈 완료까지 진행 가능하다.
-- draft autosave, revision 충돌 처리, WebSocket 재연결 후 전체 재조회가 동작한다.
-- 주요 desktop/mobile viewport에서 레이아웃이 깨지지 않는다.
+- 일반/10인/20인 기록과 expand detail이 재현된다.
+- Riot 계정 add/delete/main/refresh, privacy, champion preference, 대표 길드가 동작한다.
+- Riot 장애가 내부 전적/MMR을 방해하지 않는다.
 
-## Phase 7: 사용자, 랭킹, Riot 계정
+## Phase 7. Guild admin
 
-목표: 운영자가 사용자 상태를 확인하고 유저가 Riot 계정을 관리할 수 있게 한다.
+웹에 구현하는 것:
 
-Route:
+- member 조회와 ACTIVE/INACTIVE
+- manual MMR adjustment ledger
+- display/channel/operator role/public 설정
+- recent checkpoint revert
+- audit logs
+- API/PostgreSQL/Bot/Valkey status
 
-- `/g/[guildId]/records`
-- `/users`
-- `/users/[discordId]`
-- `/g/[guildId]/leaderboard`
-- `/me`
+웹에 만들지 않는 것:
 
-작업:
+- 일괄 등록
+- 시즌 변경/초기화
+- 오래된 내전 정리
+- 범용 maintenance dashboard
 
-- records search는 Discord user, Riot ID, guild 표시 이름 검색을 지원한다.
-- records result는 내부 내전 전적을 중심으로 두고 Riot 외부 요약을 보조로 붙인다.
-- user search는 command/list 중심으로 구현한다.
-- profile은 MMR, 최근 게임, 챔피언 선호, 경매 카드 정보를 dense section으로 구성한다.
-- leaderboard는 라인별/통합 view를 제공한다.
-- 내 정보에서 선호 챔피언, Riot 계정, 외부 공개 범위를 탭으로 관리한다.
-- Riot 계정 추가/삭제/메인 지정/갱신을 구현한다.
+현재 seasonId는 읽기 전용이며 Bot 명령으로 조정한다.
 
 완료 기준:
 
-- guild 내부 전적 검색은 `games.guild_id` 기준으로 격리된다.
-- Discord 등록 사용자와 Riot account가 연결되어 표시된다.
-- profile과 leaderboard가 v3 DB 데이터를 기준으로 읽힌다.
-- 계정 관리 mutation은 audit 또는 user action log 기준을 충족한다.
+- 모든 admin mutation이 expectedRevision을 사용한다.
+- audit가 domain write와 같은 transaction에 남는다.
 
-## Phase 8: 경매 내전 Web Route
+## Phase 8. Remaining Bot
 
-목표: 경매 모집부터 결과까지 웹에서 처리한다.
+Bot은 Discord command parsing, component interaction, message rendering,
+notification에 집중한다. PostgreSQL에 직접 접근하지 않고 Axum API/application
+service를 사용한다.
 
-Route:
-
-- `/g/[guildId]/auction`
-- `/g/[guildId]/auction/recruitments/[id]/draft`
-- `/g/[guildId]/auction/tournaments/[id]/draft`
-- `/g/[guildId]/auction/tournaments/[id]/bracket`
-- `/g/[guildId]/auction/tournaments/[id]/result`
-
-작업:
-
-- team captain selection, point allocation, bidding queue, bid intent, finalize/manual assign/revert를 구현한다.
-- bracket setup, match별 라인업 확정, auction match game result 입력을 구현한다.
-- 경매 match는 게임 시작 전에 양 팀 TOP/JUNGLE/MID/ADC/SUPPORT 라인업을 반드시 확정한다.
-- 경매는 DB 원장을 source of truth로 삼고 UI local state를 원장처럼 쓰지 않는다.
-- 낙찰, 수동 배치, 라인업 확정은 DB transaction과 revision 검증을 통과한 뒤에만 invalidate한다.
-- 팀/매치 entity tile은 허용하되 card pile layout은 피한다.
-
-컴포넌트 작성 현황:
-
-- 완료: `AuctionTournamentCaptainPointSetupBoard`
-  - 경매 시작 전 팀장 선택과 팀별 시작 포인트 설정.
-- 완료: `AuctionTournamentBidDraftWorkbench`
-  - 매물 추첨, 입찰, 유찰, DND 기반 팀 배치.
-- 완료: `AuctionTournamentBracketMatchSetupBoard`
-  - 20인/4팀 경매의 대진 설정.
-- 완료: `AuctionMatchStartingLineupInputBoard`
-  - match별 5인 라인업 입력과 확정.
-- 완료: `AuctionTournamentOverviewBoard`
-  - 대진 결과, match별 스코어, 팀 구성, 참가자별 포인트/MMR 정산을 보여주는 경매 진행 요약 화면.
-- 다음 작업: `AuctionMatchSummaryCard`
-  - 브래킷 화면에서 match를 compact하게 보여주는 카드. 팀 vs 팀, 라인업 확정 여부, 결과 입력 진입만 포함한다.
-- 통합 처리: `AuctionPlayerLedgerBoard`
-  - 별도 컴포넌트로 만들지 않고 `AuctionTournamentOverviewBoard`의 참가자 정산 섹션에 포함한다.
-
-컴포넌트 제외 기준:
-
-- 별도 `AuctionMatchResultBoard`는 만들지 않는다. 게임 단위 결과 입력은 기존 결과 입력 컴포넌트 흐름을 사용한다.
-- 별도 readiness/control dashboard는 만들지 않는다. 경매 진행 요약은 읽기 전용 원장으로만 두고, 조작은 각 단계 화면에서 처리한다.
-- match 진행 전 확인 UI가 필요하면 독립 dashboard가 아니라 `AuctionMatchSummaryCard` 안의 최소 상태 표시로 제한한다.
+- Phase 2.5의 일반 모집 interaction/idempotency 기반을 재사용한다.
+- 경매 모집과 운영 command.
+- 사용자 조회와 web과 같은 admin/domain command.
+- heartbeat와 season rotate mapping.
 
 완료 기준:
 
-- 10인/20인 경매 흐름을 완료할 수 있다.
-- 라인업 미확정 match는 결과 입력으로 넘어갈 수 없다.
-- 입찰, 라인업 확정, 경매 결과 입력은 이전 단계로 되돌릴 수 있다.
-- 경매 게임 기록도 일반 내전과 같은 guild MMR 원장에 반영된다.
-- tournament result와 bot 종료 알림이 연결된다.
+- Web과 Bot의 같은 command가 같은 결과/audit를 만든다.
+- duplicate interaction이 한 번만 실행된다.
 
-## Phase 9: Admin, 운영 안전장치, 배포
+## Phase 9. Migration과 hardening
 
-목표: 실제 운영에 필요한 진단, 감사, 배포 경로를 완성한다.
+- mookbot_v3 D1 및 routed Valkey draft read-only export, cutover write freeze.
+- legacy guild/user/ID mapping.
+- PostgreSQL staging의 aggregate-unit import/quarantine와 shadow read.
+- count, orphan, tenant crossing, MMR/point 합계, active quarantine=0 검증.
+- load/failure/security test.
+- backup/restore/rollback rehearsal.
+- backend dev 30020 배포.
 
-작업:
-
-- `/g/[guildId]/admin`, `/admin/status`, `/admin/perms` 구현.
-- `/g/[guildId]/admin`에서 멤버, 길드 설정, audit log, 최근 revert checkpoint를 관리한다.
-- healthz/deep healthz, internal heartbeat, bot notify status 점검.
-- Dockerfile: api, bot, web.
-- deployment script: build, push, VPS deploy, command registration.
-- migration preflight와 rollback/backup 절차 문서화.
-- v3 production 데이터 이전 또는 같은 DB 사용 전략 확정.
+과거 경매 MMR은 자동 소급하지 않는다. 별도 운영 결정을 먼저 기록한다.
 
 완료 기준:
 
-- staging 또는 VPS에서 bot/api/web/nginx/valkey 구성이 올라온다.
-- 배포 전 DB migration, 배포 후 health check, slash command deploy가 문서화된다.
-- 운영자가 audit log로 주요 destructive action을 추적할 수 있다.
-- 운영자가 최근 실수 작업을 웹 또는 Bot에서 되돌릴 수 있다.
-
-## Phase 10: Parity Audit And Cutover
-
-목표: v3 대비 누락과 불필요한 기능을 최종 판정하고 전환한다.
-
-작업:
-
-- v3 feature inventory 기준 parity matrix 작성.
-- 명령어별 동작 확인.
-- API endpoint별 사용 여부 확인.
-- Web route별 desktop/mobile smoke test.
-- 운영 시나리오 rehearsal:
-  - 일반 내전 모집부터 완료.
-  - 경매 내전 모집부터 완료.
-  - 유저 등록/Riot 계정 갱신.
-  - 관리자 강제 삭제/복구.
-  - audit log 확인.
-- cutover checklist 작성.
-
-완료 기준:
-
-- 필수 기능 누락이 없다.
-- 유지하지 않기로 한 기능은 문서에 명시되어 있다.
-- v3에서 새 프로젝트로 운영 전환할 수 있다.
-
-## 우선 구현 순서
-
-처음 2주 기준의 현실적인 순서는 다음과 같다.
-
-1. root workspace와 package scaffold 생성.
-2. `docs/`에 contracts/parity matrix 초안 추가.
-3. core DB schema와 repository 최소 이식.
-4. auth/session 없는 API health와 read-only dashboard API 작성.
-5. web shell과 dashboard queue 화면 작성.
-6. bot env/command deploy scaffold 작성.
-7. recruitment create/list/detail 흐름 연결.
-8. entry editor route 구현.
-9. series create/pickban/result route 구현.
-10. 일반 내전 E2E smoke 후 경매로 확장.
+- mookbot_v3 source에 write가 없다.
+- restore와 rollback 시간이 측정되어 있다.
+- 기존 서비스 정상 상태를 유지한다.
+- main 배포는 별도 승인 뒤 수행한다.
 
 ## 리스크
 
-- v3 코드를 너무 많이 복사하면 새 프로젝트의 목적이 사라진다.
-- contracts 없이 화면부터 만들면 v3와 같은 route-local 임시 코드가 다시 쌓인다.
-- 봇이 DB를 직접 많이 만지면 API/Core 경계가 흐려진다.
-- 경매 상태를 UI state 중심으로 만들면 복구와 동시성 문제가 커진다.
-- 디자인을 먼저 과하게 만들면 운영 queue/workspace가 묻힌다.
+- frontend fixture를 그대로 DB row로 옮기면 display 문자열과 원장이 섞인다.
+- guildId 없는 repository/API는 tenant 누출 위험이 있다.
+- external HTTP를 transaction 안에서 호출하면 lock 시간이 길어진다.
+- Valkey를 원장으로 쓰면 장애 복구와 정합성이 깨진다.
+- 전체 JSON draft replace는 동시 편집 충돌 범위를 키운다.
+- Bot이 DB에 직접 접근하면 Web과 다른 invariant/audit 경로가 생긴다.
+- v3를 in-place migration하면 현 운영 서비스에 영향을 줄 수 있다.
 
-## 당장 하지 않을 일
+## Non-goals
 
-- v3 `apps/web` route를 그대로 복사.
-- Activity 관련 dependency나 문구 복원.
-- 모든 v3 endpoint를 한 번에 이식.
-- 독립 디자인 시스템 패키지화.
-- 사용 빈도가 낮은 debug/admin 화면까지 1차 버전에 포함.
+- v3 route/endpoint 전부 복사.
+- 모든 문서 기능을 UI가 없는데 선제 구현.
 - MMR 알고리즘 변경.
+- 범용 realtime editing engine.
+- 독립 디자인 시스템 package.
+- 낮은 빈도의 debug/admin UI 복원.

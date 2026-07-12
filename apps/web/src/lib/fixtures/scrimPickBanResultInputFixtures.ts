@@ -1,4 +1,5 @@
 export type ScrimPickBanResultInputSide = 'BLUE' | 'RED';
+export type ScrimPickBanResultInputSidePreset = 'DEFAULT' | 'SWAPPED';
 export type ScrimPickBanResultInputLane = 'TOP' | 'JUNGLE' | 'MID' | 'BOTTOM' | 'SUPPORT';
 
 export interface ScrimPickBanResultInputChampion {
@@ -26,6 +27,7 @@ export interface ScrimPickBanResultInputTeam {
 export interface ScrimPickBanResultInputGame {
 	id: string;
 	label: string;
+	sidePreset?: ScrimPickBanResultInputSidePreset;
 	winner: ScrimPickBanResultInputSide | null;
 	bans: Record<ScrimPickBanResultInputSide, Array<string | null>>;
 	picks: Record<string, string | null>;

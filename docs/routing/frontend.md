@@ -1,6 +1,6 @@
 # Frontend Routing
 
-작성일: 2026-07-10
+작성일: 2026-07-12
 
 ## 범위
 
@@ -23,6 +23,10 @@ Frontend route의 비책임:
 - audit log 기록.
 - Discord interaction 처리.
 
+Workflow root는 API의 UUID `id`와 사람용 `displayNumber`를 구분한다. URL/deep link에는 `id`를
+사용하고 header, `#214`, `A-118` 같은 표시는 `displayNumber`를 사용한다. 현재 mock route ID에
+포함된 숫자를 production label로 재사용하지 않는다.
+
 인증 UI 정책:
 
 - 로그인 시작은 Discord OAuth2로만 제공한다.
@@ -33,9 +37,11 @@ Frontend route의 비책임:
 
 ## 실시간 편집 UI 규칙
 
-WebSocket을 사용하는 작업 화면은 다음 UI 상태를 공통으로 제공한다.
+WebSocket을 사용하는 작업 화면은 현재 component 계약처럼 상태를 두 축으로 제공한다.
 
-- `loading`, `synced`, `dirty`, `saving`, `reconnecting`, `offline`, `conflict`.
+- connection: `connected`, `reconnecting`, `offline`.
+- save: `saved`, `saving`, `dirty`, `conflict`.
+- `loading`은 route/snapshot fetch 상태로 별도 처리한다.
 - 연결과 저장 상태는 `RealtimeEditStateBar`로 표시한다.
 - 저장하지 않은 local 입력을 invalidate만으로 덮어쓰지 않는다.
 - 위험 command는 최신 revision을 확인한 뒤 실행한다.
@@ -63,8 +69,8 @@ WebSocket을 사용하는 작업 화면은 다음 UI 상태를 공통으로 제�
 
 목적:
 
-- 사용자가 접근 가능한 Discord guild 목록을 보여준다.
-- guild 선택 후 `/g/[guildId]` 운영 화면으로 이동한다.
+- 로그인 사용자의 대표 guild를 확인해 `/g/[guildId]`로 redirect한다.
+- 대표 guild가 없으면 `/me?tab=guild`의 설정 흐름으로 보낸다.
 
 Backend 데이터:
 
@@ -86,9 +92,7 @@ Backend 데이터:
 
 - `GET /api/guilds/:guildId/operations`
 
-WebSocket:
-
-- `guild:{guildId}:dashboard`
+WebSocket: 사용하지 않는다.
 
 ### `+layout.svelte`
 
@@ -103,7 +107,7 @@ WebSocket:
 - 오른쪽 guild selector가 현재 `guildId` context를 표시하고 서버 전환 시 해당 guild dashboard로 이동한다.
 - 모집 마감 상태는 `내전` 메뉴에 포함하고, `전적`, `랭킹`, `관리`는 현재 guild 기준 route를 사용한다.
 - `관리`는 현재 guild의 operator에게만 노출하고 `/g/[guildId]/admin`으로 이동한다.
-- `QuickActionFab`을 전역 배치해 미니게임, 빠른 전적 검색, 타이머를 연다.
+- `QuickActionFab`을 전역 배치해 미니게임과 타이머를 연다.
 
 주의:
 
@@ -152,6 +156,8 @@ WebSocket:
 
 - 도메인 API를 SvelteKit `+server.ts`로 재구현하지 않는다.
 - 이 route는 proxy boundary다.
+- 현재 proxy는 `/api/` prefix를 제거한 path를 `API_BASE_URL`에 붙이므로 local/dev 값은 `http://backend:port/api/`처럼 `/api/` suffix를 포함한다.
+- nginx가 browser의 `/api/`를 Axum으로 직접 전달하는 배포 경로와 최종 upstream path가 같아야 한다.
 
 ### `/dd/[...path]`
 
@@ -194,7 +200,7 @@ WebSocket:
 - 참가자 팀/라인 배치.
 - draft autosave.
 - 모집 reopen.
-- series 생성.
+- series 생성. 현재 format control이 없으므로 신규 series는 BO3다.
 
 Bot 딥링크:
 
@@ -202,10 +208,14 @@ Bot 딥링크:
 
 Backend 데이터:
 
-- `GET /api/recruitments/:id`
-- `PATCH /api/recruitments/:id/entry-draft`
-- `POST /api/recruitments/:id/reopen`
-- `POST /api/series`
+- `GET /api/guilds/:guildId/recruitments/:id`
+- `PATCH /api/guilds/:guildId/recruitments/:id/entry-draft`
+- `POST /api/guilds/:guildId/recruitments/:id/entry-draft/reset`
+- `POST /api/guilds/:guildId/recruitments/:id/reopen`
+- `POST /api/guilds/:guildId/series`
+
+현재 mock page에 없는 reset/reopen/createSeries control은 API adapter 단계에서
+`EntryDraftBoard` callback으로 연결해야 하며 backend만 구현하고 숨겨 두지 않는다.
 
 WebSocket:
 
@@ -222,15 +232,16 @@ WebSocket:
 - 상단에는 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 일반 내전 작업 목록으로 보여준다.
 - 하단에는 완료된 일반 내전을 최신 순으로 보여준다.
 - pick-ban 또는 result route로 이동한다.
+- `RESULT`처럼 아직 game 입력이 필요한 작업은 pick-ban route로 이동하고, 완료된 row만 result
+  route로 이동한다.
 
 Backend 데이터:
 
-- `GET /api/recruitments`
-- `GET /api/series`
+- `GET /api/guilds/:guildId/recruitments?state=actionable`
+- `GET /api/guilds/:guildId/series?state=active`
+- `GET /api/guilds/:guildId/series?state=completed`
 
-WebSocket:
-
-- `guild:{guildId}:dashboard`
+WebSocket: 사용하지 않는다.
 
 ### `/g/[guildId]/series/completed` 호환 경로
 
@@ -245,7 +256,7 @@ WebSocket:
 
 Backend 데이터:
 
-- `GET /api/series/completed`
+- `GET /api/guilds/:guildId/series?state=completed`
 
 ### `/g/[guildId]/series/[id]/pick-ban`
 
@@ -256,7 +267,7 @@ Backend 데이터:
 목적:
 
 - 일반 내전 픽/밴 draft.
-- side 선택, game tab, 밴/픽 입력, Hard Fearless 반영.
+- side 선택, game tab, 선택적 밴/픽, 승자 입력.
 - 게임 결과 입력.
 - 마지막 게임 되돌리기.
 - 정해진 지점 되돌리기.
@@ -267,14 +278,14 @@ Bot 딥링크:
 
 Backend 데이터:
 
-- `GET /api/series/:id`
-- `PATCH /api/series/:id/pickban`
-- `POST /api/series/:id/games`
-- `DELETE /api/series/:id/games/last`
-- `POST /api/series/:id/revert`
-- `GET /api/guilds/:guildId/reverts/recent`
-- `POST /api/guilds/:guildId/reverts/apply-last`
-- `GET /api/champions`
+- `GET /api/guilds/:guildId/series/:id`
+- `PATCH /api/guilds/:guildId/series/:id/pickban`
+- `POST /api/guilds/:guildId/series/:id/games`
+- `DELETE /api/guilds/:guildId/series/:id/games/last`
+- `POST /api/guilds/:guildId/series/:id/revert`
+
+현재 mock page에 연결되지 않은 submit/deleteLast/revert는 API adapter 단계에서
+`ScrimPickBanResultInputBoard` control로 연결한다.
 
 WebSocket:
 
@@ -290,15 +301,14 @@ WebSocket:
 
 - 일반 내전 최종 결과.
 - 게임별 pick/ban, 결과, MMR 변화, 참가자 기록 표시.
+- `durationSeconds`가 null이면 `SeriesResultLedgerBoard` adapter가 게임 시간을 `-`로 표시한다.
 
 Backend 데이터:
 
-- `GET /api/series/:id`
-- `GET /api/series/:id/balance.svg`
+- `GET /api/guilds/:guildId/series/:id`
+- `GET /api/guilds/:guildId/series/:id/balance.svg`
 
-WebSocket:
-
-- `guild:{guildId}:series:{id}`
+WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 
 ## 경매 내전 Routes
 
@@ -315,12 +325,11 @@ WebSocket:
 
 Backend 데이터:
 
-- `GET /api/auction-recruitments`
-- `GET /api/auction-tournaments`
+- `GET /api/guilds/:guildId/auction-recruitments?state=actionable`
+- `GET /api/guilds/:guildId/auction-tournaments?state=active`
+- `GET /api/guilds/:guildId/auction-tournaments?state=completed`
 
-WebSocket:
-
-- `guild:{guildId}:auction-dashboard`
+WebSocket: 사용하지 않는다.
 
 ### `/g/[guildId]/auction/recruitments/[id]/draft`
 
@@ -339,8 +348,9 @@ Bot 딥링크:
 
 Backend 데이터:
 
-- `GET /api/auction-recruitments/:id`
-- `POST /api/auction-tournaments`
+- `GET /api/guilds/:guildId/auction-recruitments/:id`
+- `PATCH /api/guilds/:guildId/auction-recruitments/:id/setup-draft`
+- `POST /api/guilds/:guildId/auction-tournaments`
 
 WebSocket:
 
@@ -355,26 +365,13 @@ WebSocket:
 목적:
 
 - 경매 토너먼트 드래프트.
-- 팀장 선택, 포인트 배정, 후보 draw, bid intent, 낙찰, 수동 배치, 유찰, 단계 되돌리기.
+- 후보 draw, 낙찰, 수동 배치, 유찰, 복구, 최근 단계 되돌리기.
 - 최근 입찰/수동 배치 단계 되돌리기.
 
 Backend 데이터:
 
-- `GET /api/auction-tournaments/:id`
-- `PUT /api/auction-tournaments/:id/captains`
-- `PUT /api/auction-tournaments/:id/points`
-- `POST /api/auction-tournaments/:id/start-bidding`
-- `POST /api/auction-tournaments/:id/draw`
-- `POST /api/auction-tournaments/:id/finalize-bid`
-- `POST /api/auction-tournaments/:id/manual-assign`
-- `POST /api/auction-tournaments/:id/cancel-draw`
-- `POST /api/auction-tournaments/:id/bid-intent`
-- `POST /api/auction-tournaments/:id/revert-bid`
-- `POST /api/auction-tournaments/:id/revert-stage`
-- `POST /api/auction-tournaments/:id/start-bracket`
-- `POST /api/auction-tournaments/:id/cancel`
-- `GET /api/guilds/:guildId/reverts/recent`
-- `POST /api/guilds/:guildId/reverts/apply-last`
+- `GET /api/guilds/:guildId/auction-tournaments/:id`
+- `POST /api/guilds/:guildId/auction-tournaments/:id/commands`
 
 WebSocket:
 
@@ -390,9 +387,12 @@ WebSocket:
 
 - 경매 브래킷, match별 라인업 입력, match game result 입력.
 - `?view=result`로 진입하면 `AuctionTournamentBracketResultBoard` 결과 입력 탭을 바로 연다.
-- BO1/BO3 포맷, match 생성, 양 팀 5인 라인업 확정, match game result 입력, 마지막 게임 삭제.
-- 게임 시작 전 TOP/JUNGLE/MID/ADC/SUPPORT 라인업 입력을 반드시 지원한다.
-- 라인업 확정 취소와 match result 되돌리기를 지원한다.
+- 신규 match는 BO3이며 저장된 legacy BO1/BO3와 향후 BO5는 read DTO에서 그대로 표시한다. 현재
+  MVP에는 format 변경 control을 만들지 않는다.
+- match 생성, 양 팀 5인 라인업 확정, match game result 입력, 마지막 게임 삭제.
+- 게임 시작 전 TOP/JUNGLE/MID/BOTTOM/SUPPORT 라인업 입력을 반드시 지원한다.
+- 라인업 확정 취소와 match result 되돌리기는 길드 관리의 checkpoint 복구를 사용한다. bracket
+  화면에 별도 unlock command는 현재 제공하지 않는다.
 - 브래킷 화면은 운영자용 readiness/control dashboard를 별도로 두지 않는다.
 - match 상태 표시는 `AuctionMatchSummaryCard` 같은 compact 진입 카드 안에서만 최소한으로 제공한다.
 - match game result 입력은 별도 경매 전용 결과 입력 컴포넌트를 새로 만들지 않고 기존 game result 입력 흐름을 사용한다.
@@ -405,22 +405,18 @@ WebSocket:
 
 Backend 데이터:
 
-- `GET /api/auction-tournaments/:id`
-- `GET /api/auction-matches/:matchId`
-- `POST /api/auction-tournaments/:id/matches`
-- `PUT /api/auction-matches/:matchId/format`
-- `PATCH /api/auction-matches/:matchId/lineup`
-- `POST /api/auction-matches/:matchId/lineup/lock`
-- `POST /api/auction-matches/:matchId/games`
-- `DELETE /api/auction-matches/:matchId/games/last`
-- `GET /api/guilds/:guildId/reverts/recent`
-- `POST /api/guilds/:guildId/reverts/apply-last`
-- `GET /api/champions`
+- `GET /api/guilds/:guildId/auction-tournaments/:id`
+- `POST /api/guilds/:guildId/auction-tournaments/:id/bracket/commands`
+- `GET /api/guilds/:guildId/auction-matches/:matchId`
+- `PATCH /api/guilds/:guildId/auction-matches/:matchId/lineup`
+- `POST /api/guilds/:guildId/auction-matches/:matchId/lineup/lock`
+- `POST /api/guilds/:guildId/auction-matches/:matchId/games`
+- `DELETE /api/guilds/:guildId/auction-matches/:matchId/games/last`
 
 불변 조건:
 
-- lineups locked 전에는 `POST /api/auction-matches/:matchId/games`를 호출할 수 없다.
-- 각 팀은 TOP/JUNGLE/MID/ADC/SUPPORT가 정확히 1명씩 있어야 한다.
+- lineups locked 전에는 `POST /api/guilds/:guildId/auction-matches/:matchId/games`를 호출할 수 없다.
+- 각 팀은 TOP/JUNGLE/MID/BOTTOM/SUPPORT가 정확히 1명씩 있어야 한다.
 
 WebSocket:
 
@@ -437,21 +433,22 @@ WebSocket:
 
 - 경매 토너먼트 결과.
 - 우승 팀, match 결과, game ledger, pick/ban 기록 표시.
-- 경매 진행 요약은 self-service 입력 완료 후 참가자가 확인하는 읽기 전용 원장으로 둔다.
+- 경매 진행 요약은 self-service 입력 완료 후 참가자가 확인하는 원장으로 둔다.
 - 운영자용 control dashboard가 아니라 팀 구성, 포인트 정산, MMR 변화, match 스코어를 읽기 쉽게 정리한다.
+- 예외적으로 operator에게만 `결과 입력 되돌리기` 단일 command를 제공한다.
 
 컴포넌트 계획:
 
 - 완료: `AuctionTournamentOverviewBoard`
 - 통합: `AuctionPlayerLedgerBoard` 역할은 overview board의 참가자 정산 섹션에 포함한다.
+- 연결 필요: `onRevert(checkpointId, expectedRevision)` callback.
 
 Backend 데이터:
 
-- `GET /api/auction-tournaments/:id`
+- `GET /api/guilds/:guildId/auction-tournaments/:id/result`
+- `POST /api/guilds/:guildId/reverts/:checkpointId/apply`
 
-WebSocket:
-
-- `guild:{guildId}:auction-tournament:{id}`
+WebSocket은 사용하지 않는다. Revert 성공 후 HTTP response/snapshot으로 이동하거나 갱신한다.
 
 ## 사용자 / 통계 Routes
 
@@ -463,43 +460,37 @@ WebSocket:
 
 목적:
 
-- 일반적인 전적 검색 진입점.
-- Discord 사용자, Riot ID, guild 표시 이름으로 검색한다.
-- 내부 내전 전적을 먼저 보여주고 Riot 외부 전적은 보조 정보로 붙인다.
+- 현재 guild의 내부 내전 전적 검색 진입점.
+- Discord 사용자, 연결 Riot ID, guild 표시 이름으로 사용자를 찾는다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/records/search`
-- `GET /api/guilds/:guildId/riot/lookup`
-- `GET /api/guilds/:guildId/riot/recent-matches`
 
 주의:
 
 - 내부 내전 기록은 반드시 현재 guild의 `games` 원장만 조회한다.
-- 현재 사용자가 guild 소속이 아니면 `guilds.is_externally_public`이 true인 공개 범위만 보여준다.
+- 현재 사용자가 guild 소속이 아니면 `guild_config.is_externally_public`이 true인 공개 범위만 보여준다.
 - 공개 범위에는 운영 화면, 감사 로그, 멤버 관리, 권한 정보가 포함되지 않는다.
 
-### `/users`
+### `/records`
 
 파일:
 
-- `apps/web/src/routes/users/+page.svelte`
+- `apps/web/src/routes/records/+page.svelte`
 
 목적:
 
-- 사용자 검색.
-- Discord 사용자, Riot ID, 최근 운영 기록으로 profile 또는 guild records route 진입.
+- navbar Riot ID 검색 결과를 표시한다.
+- Riot profile/rank/champion aggregate/recent match와 10인 상세를 보여준다.
+- guild 내부 custom match 원장과 분리한다.
 
 Backend 데이터:
 
-- `GET /api/users/search`
-- `GET /api/me/guilds`
-- `PUT /api/me/guild-preferences`
+- `GET /api/riot/records?query=GameName%23TagLine&region=kr`
+- `POST /api/riot/records/refresh`
 
-주의:
-
-- 사용자가 속한 guild 선택, 즐겨찾기, 정렬 순서는 `user_guild_preferences`를 기준으로 유지한다.
-- Custom 전적 검색에서 어떤 guild의 기록을 볼지는 검색 결과 화면에서 사용자가 선택한다.
+WebSocket: 사용하지 않는다.
 
 ### `/users/[discordId]`
 
@@ -510,20 +501,13 @@ Backend 데이터:
 목적:
 
 - 사용자 프로필.
-- 라인별 MMR, 최근 내전 전적, 챔피언 선호, 경매 카드, screening report.
+- 현재 MVP에서는 표시 이름, Discord ID, 활동 guild 수, season 수를 보여준다.
 
 Backend 데이터:
 
 - `GET /api/users/:id/profile`
-- `GET /api/users/:id/records`
-- `GET /api/users/:id/mmr-history`
-- `GET /api/users/:id/preferences`
-- `GET /api/users/:id/auction-card`
-- `GET /api/users/:id/screening-report`
 
-WebSocket:
-
-- `user:{discordId}`
+WebSocket: 사용하지 않는다.
 
 ### `/g/[guildId]/leaderboard`
 
@@ -537,13 +521,9 @@ WebSocket:
 
 Backend 데이터:
 
-- `GET /api/leaderboard`
-- `GET /api/leaderboard/composite`
+- `GET /api/guilds/:guildId/leaderboard`
 
-WebSocket:
-
-- `guild:{guildId}:leaderboard:{role}`
-- `guild:{guildId}:leaderboard:COMPOSITE`
+WebSocket: 사용하지 않는다.
 
 ### `/me`
 
@@ -559,8 +539,10 @@ WebSocket:
 
 Backend 데이터:
 
-- `GET /api/users/:id/preferences`
-- `PUT /api/users/me/preferences`
+- `GET /api/me/champion-preferences`
+- `PUT /api/me/champion-preferences/:lane`
+- `GET /api/me/guilds`
+- `PUT /api/me/default-guild`
 - `GET /api/me/riot-accounts`
 - `POST /api/me/riot-accounts`
 - `DELETE /api/me/riot-accounts/:puuid`
@@ -569,9 +551,7 @@ Backend 데이터:
 - `GET /api/me/privacy`
 - `PUT /api/me/privacy`
 
-WebSocket:
-
-- `user:{currentDiscordId}`
+WebSocket: 사용하지 않는다.
 
 ## 도구 Routes
 
@@ -587,25 +567,34 @@ WebSocket:
 - 일반 사용자와 길드 운영자를 위한 정적 기능 설명.
 - Markdown 원본을 build 시 렌더링하며 API나 사용자 상태를 요구하지 않는다.
 
-### `/tools/minigame`
+### `/terms`
 
 파일:
 
-- `apps/web/src/routes/tools/minigame/+page.svelte`
+- `apps/web/src/routes/terms/+page.svelte`
+- `apps/web/src/lib/content/terms.md`
 
 목적:
 
-- 룰렛, 사다리, 코인플립.
-- 내전 운영 중 보조 도구.
+- Discord Bot과 웹 콘솔 이용 조건을 공개하는 정적 이용약관.
+- build 시 Markdown을 렌더링하고 Footer에서 접근한다.
 
-데이터:
+### `/privacy`
 
-- 기본적으로 local UI state.
-- 필요 시 참가자 목록을 query 기반으로 받아올 수 있다.
+파일:
 
-우선순위:
+- `apps/web/src/routes/privacy/+page.svelte`
+- `apps/web/src/lib/content/privacy.md`
 
-- 1차 MVP에는 포함하지 않아도 된다.
+목적:
+
+- 현재 구현된 Discord 인증, 길드 운영 데이터, 세션과 선택적 Riot 연동의 처리 범위를 공개한다.
+- build 시 Markdown을 렌더링하고 Footer에서 접근한다.
+
+`/docs`, `/terms`, `/privacy`는 `StaticMarkdownDocument`를 공유하며 API나 로그인 상태를
+요구하지 않는다. 세 route에서는 운영용 `QuickActionFab`을 표시하지 않는다.
+
+미니게임과 타이머는 독립 route를 만들지 않고 전역 `QuickActionFab` modal로만 제공한다.
 
 ## Admin Routes
 
@@ -624,10 +613,13 @@ WebSocket:
 
 탭:
 
-- `members`: 멤버 검색, 일괄 등록, MMR 조정, 비활성화와 복구.
-- `operations`: 최근 고정 checkpoint 복구와 방치 작업 정리.
-- `settings`: Discord 역할/채널, 시즌, 공개 설정과 시즌 초기화.
+- `members`: 멤버 검색, MMR 조정, 비활성화와 복구.
+- `operations`: 최근 고정 checkpoint 조회와 복구.
+- `settings`: Discord 역할/채널, 현재 시즌 확인과 공개 설정.
 - `logs`: 작업, 대상, 실행자별 감사 로그와 상세 payload.
+
+`mainLane`은 미등록/미설정 member에서 `null`일 수 있다. Adapter와
+`GuildMemberManagementPanel`은 임의 lane을 합성하지 않고 `미설정`으로 표시한다.
 
 호환 경로:
 
@@ -637,32 +629,14 @@ Backend 데이터:
 
 - `GET /api/guilds/:guildId/reverts/recent`
 - `POST /api/guilds/:guildId/reverts/:checkpointId/apply`
-- `GET /api/logs`
-- `GET /api/logs/data`
-- `POST /api/logs/logout`
+- `PATCH /api/guilds/:guildId/members/:memberId/mmr`
+- `PATCH /api/guilds/:guildId/members/:memberId/status`
+- `PUT /api/guilds/:guildId/settings`
+- `GET /api/guilds/:guildId/audit-logs`
 
 권한:
 
-- operator/admin.
-
-### `/admin/perms`
-
-파일:
-
-- `apps/web/src/routes/admin/perms/+page.svelte`
-
-목적:
-
-- 현재 Discord session의 권한 진단.
-- guild/role/operator permission 문제 확인.
-
-Backend 데이터:
-
-- `GET /api/me/perms`
-
-권한:
-
-- 로그인 사용자.
+- 현재 guild operator.
 
 ### `/admin/status`
 
@@ -672,16 +646,15 @@ Backend 데이터:
 
 목적:
 
-- API, bot heartbeat, DB, Valkey, Data Dragon, internal notify 상태 확인.
+- API, PostgreSQL, Bot heartbeat, Valkey 상태 확인.
 
 Backend 데이터:
 
-- `GET /api/healthz/deep`
-- 필요 시 admin status 전용 endpoint.
+- `GET /api/admin/status`
 
 권한:
 
-- operator/admin.
+- service admin allowlist.
 
 ## Frontend 우선순위
 
@@ -704,7 +677,6 @@ Backend 데이터:
 - `/g/[guildId]/auction/tournaments/[id]/draft`
 - `/g/[guildId]/auction/tournaments/[id]/bracket`
 - `/g/[guildId]/auction/tournaments/[id]/result`
-- `/users`
 - `/users/[discordId]`
 - `/g/[guildId]/leaderboard`
 - `/me`
@@ -713,8 +685,6 @@ Backend 데이터:
 
 - `/g/[guildId]/admin`
 - `/admin/status`
-- `/admin/perms`
-- `/tools/minigame`
 
 ## 만들지 않을 Frontend Route
 
@@ -725,3 +695,6 @@ Backend 데이터:
 - `/password/*`: password reset/change flow는 만들지 않는다.
 - `/settings`: 사용자/관리자 설정 요구가 구체화될 때 만든다.
 - `/reports`: 통계 report 제품 요구가 생기기 전까지 만들지 않는다.
+- `/users`: 검색은 `/g/[guildId]/records`에서 처리하고 사용자 상세만 `/users/[discordId]`로 연다.
+- `/admin/perms`: 권한 실패는 해당 guild route의 403 화면에서 처리한다.
+- `/tools/minigame`: 미니게임과 타이머는 `QuickActionFab` modal로 제공한다.

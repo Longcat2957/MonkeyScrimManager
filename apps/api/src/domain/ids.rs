@@ -1,0 +1,190 @@
+use std::{fmt, str::FromStr};
+
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use thiserror::Error;
+use uuid::Uuid;
+
+macro_rules! snowflake_id {
+    ($name:ident) => {
+        #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, sqlx::Type)]
+        #[serde(transparent)]
+        #[sqlx(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn parse(value: impl Into<String>) -> Result<Self, SnowflakeError> {
+                let value = value.into();
+                validate_snowflake(&value)?;
+                Ok(Self(value))
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(&self.0)
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = SnowflakeError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Self::parse(value)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Self::parse(value).map_err(D::Error::custom)
+            }
+        }
+    };
+}
+
+macro_rules! uuid_id {
+    ($name:ident) => {
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            Eq,
+            Hash,
+            Ord,
+            PartialEq,
+            PartialOrd,
+            Serialize,
+            Deserialize,
+            sqlx::Type,
+        )]
+        #[serde(transparent)]
+        #[sqlx(transparent)]
+        pub struct $name(Uuid);
+
+        impl $name {
+            pub fn new() -> Self {
+                Self(Uuid::now_v7())
+            }
+
+            pub const fn from_uuid(value: Uuid) -> Self {
+                Self(value)
+            }
+
+            pub const fn as_uuid(self) -> Uuid {
+                self.0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(formatter)
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(value).map(Self)
+            }
+        }
+
+        impl From<$name> for Uuid {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+    };
+}
+
+snowflake_id!(GuildId);
+snowflake_id!(DiscordUserId);
+snowflake_id!(DiscordRoleId);
+snowflake_id!(DiscordChannelId);
+snowflake_id!(DiscordMessageId);
+snowflake_id!(DiscordInteractionId);
+
+uuid_id!(EntityId);
+uuid_id!(SeasonId);
+uuid_id!(RecruitmentId);
+uuid_id!(SeriesId);
+uuid_id!(AuctionRecruitmentId);
+uuid_id!(AuctionTournamentId);
+uuid_id!(AuctionMatchId);
+uuid_id!(GameId);
+uuid_id!(IdempotencyRecordId);
+uuid_id!(OutboxEventId);
+
+fn validate_snowflake(value: &str) -> Result<(), SnowflakeError> {
+    if value.is_empty()
+        || value.starts_with('0')
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(SnowflakeError);
+    }
+    value.parse::<u64>().map_err(|_| SnowflakeError)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("Discord snowflake must be a non-zero unsigned decimal string")]
+pub struct SnowflakeError;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snowflakes_are_strict_decimal_strings() {
+        assert!(GuildId::parse("123456789012345678").is_ok());
+        for invalid in ["", "0", "01", "-1", "123x", "18446744073709551616"] {
+            assert!(GuildId::parse(invalid).is_err(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn snowflake_deserialization_preserves_the_validation_boundary() {
+        let guild_id = serde_json::from_str::<GuildId>("\"123456789012345678\"")
+            .expect("valid guild ID should deserialize");
+        assert_eq!(guild_id.as_str(), "123456789012345678");
+
+        for invalid in [
+            "\"\"",
+            "\"0\"",
+            "\"01\"",
+            "\"not-a-snowflake\"",
+            "\"18446744073709551616\"",
+        ] {
+            assert!(
+                serde_json::from_str::<GuildId>(invalid).is_err(),
+                "deserialized {invalid}"
+            );
+            assert!(
+                serde_json::from_str::<DiscordUserId>(invalid).is_err(),
+                "deserialized {invalid}"
+            );
+            assert!(
+                serde_json::from_str::<DiscordInteractionId>(invalid).is_err(),
+                "deserialized interaction ID {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_domain_ids_use_uuid_v7() {
+        assert_eq!(EntityId::new().as_uuid().get_version_num(), 7);
+    }
+}

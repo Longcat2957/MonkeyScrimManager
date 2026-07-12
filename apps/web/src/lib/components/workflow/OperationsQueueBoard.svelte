@@ -1,12 +1,13 @@
 <script lang="ts">
-	import { ArrowRight, ClipboardCheck, Gavel, ListFilter, Swords, UsersRound } from 'lucide-svelte';
+	import { ArrowRight, Gavel, ListFilter, Swords, UsersRound } from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
-	import type { OperationKind, OperationsQueueItem } from '$lib/fixtures/operations';
+	import type { OperationDto } from '$lib/contracts/workflow';
 
+	type OperationKind = OperationDto['kind'];
 	type QueueFilter = 'ALL' | OperationKind;
 
 	interface Props {
-		items: OperationsQueueItem[];
+		items: OperationDto[];
 	}
 
 	let { items }: Props = $props();
@@ -16,14 +17,12 @@
 		{ value: 'ALL', label: '전체' },
 		{ value: 'ENTRY', label: '편성' },
 		{ value: 'PICK_BAN', label: '픽밴' },
-		{ value: 'RESULT', label: '결과' },
 		{ value: 'AUCTION', label: '경매' }
 	];
 
 	const kindMeta = {
 		ENTRY: { label: '일반 모집', icon: UsersRound, iconClass: 'text-cyan-200' },
 		PICK_BAN: { label: '일반 내전', icon: Swords, iconClass: 'text-indigo-200' },
-		RESULT: { label: '결과 대기', icon: ClipboardCheck, iconClass: 'text-amber-200' },
 		AUCTION: { label: '경매 내전', icon: Gavel, iconClass: 'text-emerald-200' }
 	} as const;
 
@@ -33,7 +32,7 @@
 	const urgentCount = $derived(items.filter((item) => item.priority === 'urgent').length);
 
 	function statusTone(kind: OperationKind): 'info' | 'warning' | 'success' {
-		if (kind === 'ENTRY' || kind === 'RESULT') return 'warning';
+		if (kind === 'ENTRY') return 'warning';
 		if (kind === 'AUCTION') return 'success';
 		return 'info';
 	}
@@ -41,7 +40,6 @@
 	function actionLabel(kind: OperationKind): string {
 		if (kind === 'ENTRY') return '편성 시작';
 		if (kind === 'PICK_BAN') return '픽밴 열기';
-		if (kind === 'RESULT') return '결과 입력';
 		return '경매 열기';
 	}
 </script>

@@ -3,28 +3,23 @@
 	import { History } from 'lucide-svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import OperationsQueueBoard from '$lib/components/workflow/OperationsQueueBoard.svelte';
-	import { getMockGuild } from '$lib/fixtures/guilds';
-	import { mockOperationsQueue } from '$lib/fixtures/operations';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
-	const guild = $derived(getMockGuild(data.guildId));
-	const guildBase = $derived(resolve('/g/[guildId]', { guildId: data.guildId }));
-	const operations = $derived(
-		mockOperationsQueue.map((item) => ({ ...item, href: `${guildBase}${item.href}` }))
-	);
+	const guild = $derived(data.guild);
+	const operations = $derived(data.operations);
 </script>
 
 <svelte:head>
-	<title>{guild.name} | MonkeyBot</title>
+	<title>{guild.displayName} | MonkeyBot</title>
 </svelte:head>
 
 <div class="space-y-5">
 	<WorkspaceHeader
 		kicker="길드 운영"
-		title={guild.name}
-		description={`${guild.memberCount}명 · ${guild.role}`}
+		title={guild.displayName}
+		description={`${guild.memberCount}명 · ${guild.currentUserRole === 'OPERATOR' ? '운영자' : '참가자'}`}
 	>
 		{#snippet actions()}
 			<a

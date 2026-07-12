@@ -1,6 +1,6 @@
 # MonkeyBot Design Direction
 
-작성일: 2026-07-10
+작성일: 2026-07-11
 
 ## 현재 결정된 것
 
@@ -160,7 +160,7 @@ route는 이 shell 안에서 작업대 내용을 채운다. route마다 별도�
 
 도메인 순서:
 
-- 라인 순서는 TOP / JUNGLE / MID / BOTTOM 또는 ADC / SUPPORT 순서를 유지한다.
+- 라인 데이터 순서는 TOP / JUNGLE / MID / BOTTOM / SUPPORT를 유지한다. 화면 label은 BOTTOM을 원딜로 표시할 수 있다.
 - 양 팀이 대칭으로 비교되는 화면은 좌우 또는 상하 리듬을 유지하고, 팀별 색상은 보조 신호로만 사용한다.
 - 픽밴 순서, 라인업 순서, 경매 후보 queue처럼 도메인 순서가 있는 작업은 UI 배열도 그 순서를 따른다.
 - 자동 advance가 있는 작업은 현재 위치와 다음 위치가 모두 예측 가능해야 한다.

@@ -1,6 +1,6 @@
 # Bot Routing
 
-작성일: 2026-07-10
+작성일: 2026-07-11
 
 ## 범위
 
@@ -44,12 +44,13 @@ Backend:
 
 - 필요 없음 또는 최소 상태 확인.
 
-### `/초기설정 guild_name admin_role_name`
+### `/초기설정 [길드이름] 운영자역할`
 
 목적:
 
 - bot이 설치된 Discord guild를 MonkeyBot 운영 공간으로 활성화한다.
-- guild 표시 이름과 관리 권한 role 이름만 설정한다.
+- 선택한 Discord role ID를 관리 권한의 source로 저장한다.
+- 길드 이름을 생략하면 현재 Discord guild 이름을 사용한다.
 - 설정 완료 후 guild dashboard link를 제공한다.
 
 Backend:
@@ -83,11 +84,13 @@ Backend:
 
 Backend:
 
-- user profile/MMR API.
+- global user profile API.
+- 현재 guild의 records search API를 같은 Discord user ID로 조회해 라인별 MMR을 구성한다.
 
 Web link:
 
-- `/g/{guildId}/users/{discordId}`
+- `/users/{discordId}`
+- `/g/{guildId}/records?q={discordId}`
 
 ### `/내정보갱신`
 
@@ -107,12 +110,12 @@ Backend:
 
 Backend:
 
-- user records/history API.
+- `GET /api/guilds/{guildId}/records/search?q={discordId}`.
 
 Web link:
 
-- `/g/{guildId}/users/{discordId}`
-- `/g/{guildId}/records?user={discordId}`
+- `/users/{discordId}`
+- `/g/{guildId}/records?q={discordId}`
 
 ### `/랭킹 [라인]`
 
@@ -128,51 +131,46 @@ Web link:
 
 - `/g/{guildId}/leaderboard`
 
-### `/전적 [riot_id|user]`
+### `/전적 [riot_id]`
 
 목적:
 
-- 일반 전적 검색.
-- 등록된 Discord user 또는 Riot ID를 기준으로 내부 내전 전적과 Riot 외부 요약을 조회.
-- 내부 내전 전적은 현재 guild 안의 기록만 보여준다.
+- Riot 외부 전적 검색.
+- Riot profile, rank, champion aggregate, recent match를 조회한다.
+- guild 내부 내전 기록은 섞지 않고 `/내전기록`에서 조회한다.
 
 Backend:
 
-- records search API.
 - Riot lookup API/core service.
 
 Web link:
 
-- `/g/{guildId}/records?q={query}`
-
-### `/지금게임 [riot_id|user]`
-
-목적:
-
-- Riot Spectator 현재 게임 조회.
-
-Backend:
-
-- spectator API/core service.
+- `/records?q={riotId}`
 
 ### `/전적검토 [riot_id|user]`
 
-목적:
+MVP command registry에 등록하지 않는다. Screening UI와 API 계약이 별도로 확정된 이후에만
+추가한다.
 
-- 최근 게임 기반 위험도/표본/챔피언 풀/시간대 리포트.
-
-Backend:
-
-- screening API.
+현재 게임/Riot Spectator command는 MVP에서 제공하지 않는다.
 
 ## 일반 내전 운영 Commands
 
-### `/내전모집 정원`
+### `/내전모집`
 
 목적:
 
-- 1v1~5v5 일반 모집 생성.
+- 5v5 일반 모집 생성.
 - Discord 모집 메시지 발행.
+
+처리 순서:
+
+1. 공개 interaction을 즉시 defer한다.
+2. interaction ID를 `Idempotency-Key`로 Axum create command에 전달한다.
+3. response snapshot으로 모집 메시지를 게시한다.
+4. 게시된 channel/message ID를 별도 idempotent bind command로 저장한다.
+
+Bot은 guild counter, ACTIVE season, 참가자, audit, outbox를 직접 변경하지 않는다.
 
 Backend:
 
@@ -257,7 +255,7 @@ Audit:
 
 Backend:
 
-- `POST /api/recruitments/:id/reopen` 또는 bot용 service.
+- `POST /api/guilds/{guildId}/recruitments/:id/reopen`를 service principal로 호출한다.
 
 권한:
 
@@ -271,23 +269,24 @@ Backend:
 
 Backend:
 
-- `GET /api/series`
-- `GET /api/series/completed`
+- `GET /api/guilds/{guildId}/series?state=active`
+- `GET /api/guilds/{guildId}/series?state=completed`
 
 Web link:
 
 - `/g/{guildId}/series`
 - `/g/{guildId}/series#completed`
 
-### `/내전강제삭제 series_id [rollback_mmr]`
+### `/내전강제취소 series_id`
 
 목적:
 
-- 시리즈 강제 삭제 및 선택적 MMR 롤백.
+- 시리즈를 CANCELLED 처리한다. 확정 game/MMR이 있으면 마지막 game tail부터 명시적 revert를
+  선행하며 원장을 물리 삭제하지 않는다.
 
 Backend:
 
-- series destructive admin API/service.
+- series cancel/revert application service.
 
 권한:
 
@@ -328,13 +327,15 @@ Message components:
 
 - 참석 button.
 - 참석 취소 button.
+- 참가 lane select. guild main lane을 기본값으로 사용하며 미설정 사용자는 lane 선택 후에만 참가를
+  확정한다.
 - 정원 도달 시 operator action.
 
 Web link:
 
 - `/g/{guildId}/auction/recruitments/{id}/draft`.
 
-### `/경매인원추가 모집 멤버`
+### `/경매인원추가 모집 멤버 [라인]`
 
 목적:
 
@@ -342,7 +343,7 @@ Web link:
 
 Backend:
 
-- `POST /api/auction-recruitments/:id/members`.
+- `POST /api/guilds/{guildId}/auction-recruitments/:id/members`.
 
 권한:
 
@@ -356,7 +357,7 @@ Backend:
 
 Backend:
 
-- `DELETE /api/auction-recruitments/:id/members/:uid`.
+- `DELETE /api/guilds/{guildId}/auction-recruitments/:id/members/:uid`.
 
 권한:
 
@@ -376,15 +377,15 @@ Web link:
 
 - `/g/{guildId}/auction`
 
-### `/경매강제삭제 모집`
+### `/경매강제취소 모집`
 
 목적:
 
-- 경매 모집과 토너먼트 응급 삭제.
+- 경매 모집과 토너먼트를 CANCELLED 처리한다. lot/action/point/game 원장은 삭제하지 않는다.
 
 Backend:
 
-- auction destructive admin API/service.
+- auction cancel application service.
 
 권한:
 
@@ -402,7 +403,7 @@ Audit:
 
 Backend:
 
-- `POST /api/auction-tournaments/:id/cancel` 또는 bot용 service.
+- `POST /api/guilds/{guildId}/auction-tournaments/:id/cancel`을 service principal로 호출한다.
 
 권한:
 
@@ -444,15 +445,16 @@ Audit:
 
 - Backend에서 기록.
 
-### `/시즌결과리셋 season_id`
+### `/새시즌 name`
 
 목적:
 
-- 시즌 RANKED/AUCTION 데이터 정리.
+- 현재 ACTIVE 시즌을 CLOSED로 종료하고 새 ACTIVE 시즌을 생성한다.
+- 과거 game/MMR/auction ledger를 삭제하거나 0으로 리셋하지 않는다.
 
 Backend:
 
-- season reset API/service.
+- `POST /api/guilds/{guildId}/seasons` season rotate application service.
 
 권한:
 
@@ -466,7 +468,7 @@ Audit:
 
 목적:
 
-- 방치 모집/시리즈/경매 일괄 정리.
+- 방치 모집/시리즈/경매를 조건에 따라 CANCELLED 처리한다. hard delete는 하지 않는다.
 
 Backend:
 
@@ -497,7 +499,8 @@ Web link:
 
 Backend:
 
-- `POST /api/guilds/:guildId/reverts/apply-last`.
+- Bot이 target/채널/최근 작업 기준으로 ACTIVE checkpoint ID를 resolve한 뒤 canonical
+  `POST /api/guilds/:guildId/reverts/{checkpointId}/apply` command를 호출한다.
 
 권한:
 
@@ -511,15 +514,15 @@ Web link:
 
 - `/g/{guildId}/admin?tab=operations`.
 
-### `/유저강제삭제 discord_id`
+### `/유저비활성화 discord_id`
 
 목적:
 
-- 사용자 soft-delete와 관련 데이터 요약/정리.
+- 해당 guild member를 INACTIVE 처리한다. global user와 과거 원장은 삭제하지 않는다.
 
 Backend:
 
-- force delete user API/service.
+- guild member status application service.
 
 권한:
 
@@ -553,12 +556,17 @@ Web link:
 
 - `recruit:start-entry` 처리 후 `/g/{guildId}/recruitments/{id}/entry`.
 
+Button/select handler는 API 호출 전에 interaction을 defer하고, 성공 response의 전체 recruitment
+snapshot으로 원본 메시지를 다시 렌더링한다. join/leave/roles는 OPEN 상태를, start-entry는 operator
+role/OPEN/10명을 backend transaction에서 다시 검증한다.
+
 ### 경매 모집 message components
 
 Handlers:
 
 - `auction-recruit:join:{recruitmentId}`
 - `auction-recruit:leave:{recruitmentId}`
+- `auction-recruit:lane:{recruitmentId}`
 - `auction-recruit:start:{recruitmentId}`
 - `auction-recruit:cancel:{recruitmentId}`
 - `auction-recruit:cancel-confirm:{recruitmentId}`
@@ -566,6 +574,7 @@ Handlers:
 목적:
 
 - 참석/취소.
+- main lane이 없는 사용자의 lane 선택과 참가 확정.
 - operator의 경매 시작.
 - 모집 취소 확인.
 
@@ -621,7 +630,6 @@ Bot이 생성해야 하는 주요 웹 링크:
 - 일반 모집 join/leave/role select.
 - 일반 모집 start-entry link.
 - series created/completed notify.
-- `/로그` link.
 
 ### P1
 
@@ -633,5 +641,6 @@ Bot이 생성해야 하는 주요 웹 링크:
 ### P2
 
 - 관리자 destructive commands.
+- `/로그` link.
 - cleanup/stale commands.
 - full end card/matchup card polish.

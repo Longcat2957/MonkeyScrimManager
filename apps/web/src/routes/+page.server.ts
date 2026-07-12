@@ -1,11 +1,14 @@
 import { resolve } from '$app/paths';
 import { redirect } from '@sveltejs/kit';
-import { DEFAULT_GUILD_COOKIE, DEFAULT_GUILD_ID, isMockGuildId } from '$lib/fixtures/guilds';
+import { meDataSchema } from '$lib/contracts/workflow';
+import { apiGet, apiRoute } from '$lib/server/api';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ cookies }) => {
-	const savedGuildId = cookies.get(DEFAULT_GUILD_COOKIE);
-	const guildId = savedGuildId && isMockGuildId(savedGuildId) ? savedGuildId : DEFAULT_GUILD_ID;
+export const load: PageServerLoad = async ({ fetch, url }) => {
+	const user = await apiGet(fetch, apiRoute(['me']), meDataSchema, { url });
 
-	redirect(307, resolve('/g/[guildId]', { guildId }));
+	if (user.defaultGuildId) {
+		redirect(307, resolve('/g/[guildId]', { guildId: user.defaultGuildId }));
+	}
+	redirect(307, `${resolve('/me')}?tab=guild`);
 };

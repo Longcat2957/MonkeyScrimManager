@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { Gamepad2, Server, ShieldCheck, Sparkles } from 'lucide-svelte';
-	import { untrack } from 'svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import RiotAccountManager from '$lib/components/workflow/RiotAccountManager.svelte';
 	import UserChampionPreferencesEditor from '$lib/components/workflow/UserChampionPreferencesEditor.svelte';
@@ -11,7 +12,7 @@
 	type MeTab = 'champions' | 'riot' | 'guild' | 'privacy';
 
 	let { data }: PageProps = $props();
-	let activeTab = $state<MeTab>(untrack(() => data.initialTab));
+	const activeTab = $derived<MeTab>(data.initialTab);
 
 	const tabs = [
 		{ value: 'champions' as const, label: '선호 챔피언', icon: Sparkles },
@@ -19,6 +20,36 @@
 		{ value: 'guild' as const, label: '대표 길드', icon: Server },
 		{ value: 'privacy' as const, label: '개인정보', icon: ShieldCheck }
 	];
+
+	function selectTab(tab: MeTab) {
+		void goto(`${resolve('/me')}?tab=${tab}`, { replaceState: true, noScroll: true });
+	}
+
+	function readCookie(name: string): string | null {
+		const prefix = `${name}=`;
+		const value = globalThis.document.cookie
+			.split(';')
+			.map((cookie) => cookie.trim())
+			.find((cookie) => cookie.startsWith(prefix));
+		return value ? decodeURIComponent(value.slice(prefix.length)) : null;
+	}
+
+	async function saveDefaultGuild(guildId: string) {
+		const csrfToken = readCookie('monkeybot_csrf');
+		if (!csrfToken) throw new Error('csrf token is unavailable');
+		const response = await globalThis.fetch(
+			resolve('/api/[...path]', { path: 'me/default-guild' }),
+			{
+				method: 'PUT',
+				headers: {
+					'content-type': 'application/json',
+					'X-CSRF-Token': csrfToken
+				},
+				body: JSON.stringify({ guildId })
+			}
+		);
+		if (!response.ok) throw new Error('default guild update failed');
+	}
 </script>
 
 <svelte:head>
@@ -26,7 +57,11 @@
 </svelte:head>
 
 <div class="mx-auto max-w-6xl space-y-4">
-	<WorkspaceHeader kicker="계정" title="내 정보" description="탐솔 · Discord 계정">
+	<WorkspaceHeader
+		kicker="계정"
+		title="내 정보"
+		description={`${data.user.displayName} · Discord 계정`}
+	>
 		{#snippet actions()}
 			<div
 				class="flex max-w-full overflow-x-auto border border-[var(--color-app-border)] bg-[var(--color-app-control)] p-1"
@@ -38,7 +73,7 @@
 						type="button"
 						role="tab"
 						aria-selected={activeTab === tab.value}
-						onclick={() => (activeTab = tab.value)}
+						onclick={() => selectTab(tab.value)}
 						class={`inline-flex h-8 shrink-0 items-center gap-1.5 px-3 text-xs font-semibold ${
 							activeTab === tab.value
 								? 'rounded-sm bg-cyan-400/12 text-cyan-100'
@@ -56,9 +91,16 @@
 	{#if activeTab === 'champions'}
 		<UserChampionPreferencesEditor catalog={data.championCatalog} />
 	{:else if activeTab === 'riot'}
-		<RiotAccountManager version={data.championCatalog.version} />
+		<RiotAccountManager
+			version={data.championCatalog.version}
+			initialAccounts={data.riotAccounts}
+		/>
 	{:else if activeTab === 'guild'}
-		<UserDefaultGuildSettingsPanel />
+		<UserDefaultGuildSettingsPanel
+			initialGuildId={data.defaultGuildId}
+			guilds={data.guilds}
+			onSave={saveDefaultGuild}
+		/>
 	{:else}
 		<UserPrivacySettingsPanel />
 	{/if}

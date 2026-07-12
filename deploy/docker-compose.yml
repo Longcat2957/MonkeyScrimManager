@@ -1,0 +1,66 @@
+services:
+  nginx:
+    image: nginx:1.29-alpine
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', '--header', 'Host: monkeybot.lol', 'http://127.0.0.1/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  postgres:
+    image: postgres:18.4-alpine3.23
+    container_name: postgres
+    restart: unless-stopped
+    env_file:
+      - path: ./postgres/.env
+        required: false
+    ports:
+      - '127.0.0.1:10010:5432'
+    shm_size: 256mb
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: valkey
+    restart: unless-stopped
+    command: valkey-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    expose:
+      - '6379'
+    volumes:
+      - valkey-data:/data
+    networks:
+      - data
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  postgres-data:
+  valkey-data:
+
+networks:
+  data:
+    name: deploy_data
+    internal: true

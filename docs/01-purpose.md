@@ -1,6 +1,6 @@
 # MonkeyBot Purpose
 
-작성일: 2026-07-10
+작성일: 2026-07-11
 
 ## 목적
 
@@ -29,7 +29,7 @@ MonkeyBot은 League of Legends 내전 운영을 위한 Discord 연동 운영 콘
 - Discord bot: 모집 생성, 참가/취소, 라인 선호 입력, 운영자 명령, 알림, 종료 카드 발행.
 - Web console: 운영자가 실제 작업을 처리하는 기본 화면. 대시보드, 편성, 픽밴, 경매, 결과, 사용자/랭킹/로그를 담당.
 - API: 인증, 권한, 도메인 상태 전이, audit log, WebSocket invalidate, bot notify를 담당.
-- Core domain: DB repository, MMR/ELO, Riot API, Data Dragon, Valkey cache, 검증 가능한 순수 로직을 담당.
+- Axum backend: 인증, 권한, application service, SQLx repository, MMR/ELO, Riot API, WebSocket을 담당.
 
 ## 인증 정책
 
@@ -47,12 +47,12 @@ MonkeyBot의 인증은 오직 Discord OAuth2만 지원한다.
 `../mookbot_v3`에서 반드시 기능 기준선으로 삼을 영역은 다음과 같다.
 
 - Discord 사용자 등록과 Riot ID 연결.
-- 사용자 정보, 내전 기록, 랭킹, 전적 검색, 현재 게임, 전적검토 조회.
+- 사용자 정보, 내전 기록, 랭킹, 내부/외부 전적 검색, 전적검토 조회.
 - 일반 내전 모집, 참가/취소, 선호 라인 선택, 운영자 강제 참가/삭제.
 - 일반 내전 엔트리 편성, pick/ban draft, 게임 결과 입력, MMR 반영, 시리즈 완료.
 - 경매 내전 모집, 팀장 선출, 포인트 배정, 입찰, 수동 배치, 브래킷, 경매 결과.
 - 사용자 프로필, MMR 히스토리, 챔피언 선호, Riot 계정 관리.
-- 관리자 기능: MMR 수정, 시즌 결과 리셋, 오래된 내전 정리, 강제 삭제/복구, 되돌리기, audit log.
+- 관리자 기능: MMR 수정, 시즌 전환, 오래된 내전 취소 정리, 강제 취소/복구, 되돌리기, audit log.
 - WebSocket topic invalidate 후 재조회하는 실시간 동기화 방식.
 - soft-delete, audit log, 운영자 권한, 주요 상태 전이 보존 정책.
 
@@ -78,7 +78,7 @@ MonkeyBot의 인증은 오직 Discord OAuth2만 지원한다.
 
 ### 도메인 로직 보존
 
-MMR, series/recruitment id 대응, auction tournament id 대응, game 기록, revert checkpoint, audit log, soft-delete 같은 운영 신뢰성 규칙은 v3 기준을 유지한다. UI를 새로 만들더라도 DB 원장과 상태 전이는 가볍게 바꾸지 않는다.
+MMR, game 기록, revert checkpoint, audit log, soft-delete 같은 운영 신뢰성 규칙은 v3를 참고하되 현재 프론트 계약과 PostgreSQL 제약에 맞춰 다시 정의한다. series와 recruitment, auction tournament와 recruitment는 별도 ID와 unique foreign key로 연결한다.
 
 ### 되돌리기 우선
 
@@ -98,7 +98,7 @@ API response, mutation request, WebSocket topic, domain state를 먼저 문서�
 
 ### 봇은 슬림하게
 
-Discord bot은 Discord 상호작용과 알림에 집중한다. 복잡한 도메인 전이는 API/Core로 이동시키고, 봇 안에는 command parsing, permission check, message rendering, component handler만 남긴다.
+Discord bot은 Discord 상호작용과 알림에 집중한다. 복잡한 도메인 전이는 Axum application service로 이동시키고, 봇 안에는 command parsing, permission check, message rendering, component handler만 남긴다.
 
 ### 웹은 콘솔답게
 

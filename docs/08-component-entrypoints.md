@@ -61,13 +61,13 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 
 ## 일반 내전 Entrypoints
 
-| 컴포넌트                           | 운영 route                                         | 필수 입력                                                                                                 | 데이터 상태 |
-| ---------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------- |
-| `EntryDraftBoard`                  | `/g/[guildId]/recruitments/[id]/entry` 편성 탭     | `participants`, `initialAssignments`; 선택 `synergies`, `headToHead`, `targetCount`, `profileIconVersion` | Mock data   |
-| `SeriesCompletedEntryRosterBoard`  | `/g/[guildId]/recruitments/[id]/entry` 미리보기 탭 | `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                    | Mock data   |
-| `ScrimPickBanResultInputBoard`     | `/g/[guildId]/series/[id]/pick-ban` 입력 탭        | 현재 props 없음. API 연결 전에 controlled 계약으로 변경해야 한다.                                         | Mock data   |
-| `ScrimPickBanResultSetSummaryCard` | `/g/[guildId]/series/[id]/pick-ban` 요약 탭        | `label`, 양 팀, `winner`, `bans`, `picks`, `champions`, `version`                                         | Mock data   |
-| `SeriesResultLedgerBoard`          | `/g/[guildId]/series/[id]/result`                  | `catalog: ChampionCatalog`; 선택 `seriesId`                                                               | Mock data   |
+| 컴포넌트                           | 운영 route                                         | 필수 입력                                                                                                 | 데이터 상태  |
+| ---------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------ |
+| `EntryDraftBoard`                  | `/g/[guildId]/recruitments/[id]/entry` 편성 탭     | `participants`, `initialAssignments`; 선택 `synergies`, `headToHead`, `targetCount`, `profileIconVersion` | Mock data    |
+| `SeriesCompletedEntryRosterBoard`  | `/g/[guildId]/recruitments/[id]/entry` 미리보기 탭 | `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                    | Mock data    |
+| `ScrimPickBanResultInputBoard`     | `/g/[guildId]/series/[id]/pick-ban` 입력 탭        | `teams`, `initialGame`, `champions`, `patchVersion`, `onSubmit`                                           | Mock adapter |
+| `ScrimPickBanResultSetSummaryCard` | `/g/[guildId]/series/[id]/pick-ban` 요약 탭        | `label`, 양 팀, `winner`, `bans`, `picks`, `champions`, `version`                                         | Mock data    |
+| `SeriesResultLedgerBoard`          | `/g/[guildId]/series/[id]/result`                  | `catalog: ChampionCatalog`; 선택 `seriesId`                                                               | Mock data    |
 
 `/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 보여주고 하단에 완료 시리즈를 보여준다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
 
@@ -78,13 +78,13 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 | 컴포넌트                                  | 운영 route                                                  | 필수 입력                                                                                      |
 | ----------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `AuctionTournamentCaptainPointSetupBoard` | `/g/[guildId]/auction/recruitments/[id]/draft`              | `initialMembers`; 선택 `initialCaptainIds`, `teamCount`, `initialPoints`, `profileIconVersion` |
-| `AuctionTournamentBidDraftWorkbench`      | `/g/[guildId]/auction/tournaments/[id]/draft`               | `initialTeams`, `initialQueue`; 선택 `profileIconVersion`                                      |
-| `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket`             | `teams`; 선택 `profileIconVersion`                                                             |
+| `AuctionTournamentBidDraftWorkbench`      | `/g/[guildId]/auction/tournaments/[id]/draft`               | `initialTeams`, `initialQueue`, `revision`, `onCommand`; 선택 `profileIconVersion`             |
+| `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket`             | `teams`, `snapshot`, `onCommand`; 선택 `profileIconVersion`                                    |
 | `AuctionMatchStartingLineupInputBoard`    | `/g/[guildId]/auction/tournaments/[id]/bracket`             | `leftTeam`, `rightTeam`; 선택 `profileIconVersion`                                             |
-| `AuctionTournamentBracketResultBoard`     | `/g/[guildId]/auction/tournaments/[id]/bracket?view=result` | `teams`; 선택 `profileIconVersion`                                                             |
+| `AuctionTournamentBracketResultBoard`     | `/g/[guildId]/auction/tournaments/[id]/bracket?view=result` | `teams`, `matches`, `onSubmitResult`; 선택 `profileIconVersion`                                |
 | `AuctionTournamentOverviewBoard`          | `/g/[guildId]/auction/tournaments/[id]/result`              | `teams`, `matches`, `championTeamId`; 선택 `profileIconVersion`                                |
 
-이 컴포넌트들의 버튼과 drag-and-drop은 현재 local state를 변경한다. API 연동 시 화면 전체 객체를 저장하지 않고 문서화된 작은 operation과 `expectedRevision`을 전달하도록 바꾼다.
+경매 mutation 컴포넌트는 작은 command와 `expectedRevision`을 parent adapter로 전달한다. route의 mock adapter는 local snapshot을 갱신하며, API 연결 시 같은 callback을 HTTP command와 최신 snapshot 반영으로 교체한다.
 
 ## 사용자와 운영 Entrypoints
 
@@ -94,14 +94,15 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 | `RiotAccountManager`            | `/me` Riot 계정 탭                                           | `version`; 계정 목록과 mutation은 내부 목업                                     |
 | `UserChampionPreferencesEditor` | `/me` 선호 챔피언 탭                                         | `catalog`, 선택 `maxPreferences`; 선호 목록과 저장은 내부 목업                  |
 | `UserPrivacySettingsPanel`      | `/me` 개인정보 탭                                            | 외부 프로필, Riot ID, 외부 전적 검색 공개 설정                                  |
-| `UserDefaultGuildSettingsPanel` | `/me` 대표 길드 탭                                           | 루트 접속 시 이동할 기본 guild 선택                                             |
+| `UserDefaultGuildSettingsPanel` | `/me` 대표 길드 탭                                           | `initialGuildId`, `onSave`; 루트 접속 시 이동할 기본 guild 선택                 |
 | `OperationsQueueBoard`          | `/g/[guildId]`                                               | `items: OperationsQueueItem[]`; 작업 링크는 같은 guild의 운영 route를 가리킨다. |
 | `RealtimeEditStateBar`          | 편성, 픽밴, 경매 모집 설정, 경매 드래프트, 경매 브래킷 route | resource, 연결/저장 상태, 편집자, 충돌 처리 callback                            |
-| `QuickActionFab`                | `AppShell` 전역                                              | 선택 `label`; 미니게임, 전적 검색, 타이머 modal을 소유                          |
-| `AppFooter`                     | `AppShell` 전역                                              | 공통 브랜드 Footer와 `/docs` 진입 링크                                          |
-| `GuildMemberManagementPanel`    | `/g/[guildId]/admin` 멤버 탭                                 | guild 멤버 검색, 등록 상태, MMR 조정, 비활성화와 복구                           |
-| `GuildOperationsAdminPanel`     | `/g/[guildId]/admin` 운영 탭                                 | 고정 revert checkpoint 적용과 방치 작업 정리                                    |
-| `GuildSettingsAdminPanel`       | `/g/[guildId]/admin` 길드 설정 탭                            | 운영 역할, 채널, 현재 시즌 확인, 외부 공개와 시즌 초기화                        |
+| `QuickActionFab`                | `AppShell` 전역                                              | 선택 `label`; 미니게임과 타이머 modal을 소유                                    |
+| `StaticMarkdownDocument`        | `/docs`, `/terms`, `/privacy`                                | 정적 Markdown 본문, 목차, 문서 메타데이터                                       |
+| `AppFooter`                     | `AppShell` 전역                                              | 공통 브랜드 Footer와 문서·이용약관·개인정보 처리방침 진입 링크                  |
+| `GuildMemberManagementPanel`    | `/g/[guildId]/admin` 멤버 탭                                 | 멤버 snapshot, revision, MMR·상태 command callback                              |
+| `GuildOperationsAdminPanel`     | `/g/[guildId]/admin` 운영 탭                                 | checkpoint snapshot, revision, 고정 revert command                              |
+| `GuildSettingsAdminPanel`       | `/g/[guildId]/admin` 길드 설정 탭                            | 설정 snapshot, revision, 저장 command                                           |
 | `GuildAuditLogPanel`            | `/g/[guildId]/admin` 감사 로그 탭                            | 작업, 대상, 실행자 필터와 audit 상세                                            |
 
 ## Page-local UI
@@ -177,7 +178,7 @@ ScrimPickBanResultInputChampionCell
 ScrimPickBanResultInputChampionHints
 ```
 
-FAB의 `MiniGameModal`, `QuickRecordSearchModal`, `TimerModal`도 기본적으로 `QuickActionFab`을 통해 연다. 독립 route가 명시되기 전에는 route에서 modal을 직접 조립하지 않는다.
+FAB의 `MiniGameModal`, `TimerModal`은 `QuickActionFab`을 통해 연다. 전적 검색은 헤더와 전적 route만 사용한다.
 
 ## Backend 연결 전 체크
 

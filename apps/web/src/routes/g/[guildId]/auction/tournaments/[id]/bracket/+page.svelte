@@ -1,25 +1,101 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import AuctionMatchStartingLineupInputBoard from '$lib/components/workflow/AuctionMatchStartingLineupInputBoard.svelte';
 	import AuctionTournamentBracketMatchSetupBoard from '$lib/components/workflow/AuctionTournamentBracketMatchSetupBoard.svelte';
 	import AuctionTournamentBracketResultBoard from '$lib/components/workflow/AuctionTournamentBracketResultBoard.svelte';
 	import RealtimeEditStateBar from '$lib/components/workflow/RealtimeEditStateBar.svelte';
+	import {
+		createMockBracketMatches,
+		createMockBracketSetupSnapshot
+	} from '$lib/fixtures/auctionWorkflow';
 	import { mockAuctionBracketTeams, mockAuctionBracketTeams10 } from '$lib/fixtures/workflow';
+	import type {
+		AuctionBracketSetupCommand,
+		AuctionMatchResultCommand
+	} from '$lib/realtime/auction';
+	import { scoreAuctionGames } from '$lib/realtime/auction';
 	import type { PageProps } from './$types';
 
 	type BracketView = 'setup' | 'lineup' | 'result';
 
 	let { data }: PageProps = $props();
-	let activeView = $state<BracketView>(untrack(() => data.initialView));
-	const isTenPerson = $derived(data.tournamentId.startsWith('a10-'));
-	const teams = $derived(isTenPerson ? mockAuctionBracketTeams10 : mockAuctionBracketTeams);
+	const activeView = $derived<BracketView>(data.initialView);
+	const teams = untrack(() =>
+		data.tournament.format === 'TEN_PERSON' ? mockAuctionBracketTeams10 : mockAuctionBracketTeams
+	);
+	let setupSnapshot = $state(createMockBracketSetupSnapshot(teams));
+	let matches = $state(createMockBracketMatches(teams));
 
 	const views: Array<{ value: BracketView; label: string }> = [
 		{ value: 'setup', label: '대진 설정' },
 		{ value: 'lineup', label: '라인업' },
 		{ value: 'result', label: '결과 입력' }
 	];
+
+	function handleSetupCommand(command: AuctionBracketSetupCommand) {
+		if (command.expectedRevision !== setupSnapshot.revision) return;
+
+		if (command.kind === 'LOCK_BRACKET') {
+			setupSnapshot = {
+				...setupSnapshot,
+				locked: true,
+				revision: setupSnapshot.revision + 1
+			};
+			return;
+		}
+
+		const assignments = { ...setupSnapshot.assignments };
+		if (command.kind === 'ASSIGN_TEAM') {
+			for (const slot of Object.keys(assignments) as Array<keyof typeof assignments>) {
+				if (assignments[slot] === command.teamId) assignments[slot] = null;
+			}
+			assignments[command.slot] = command.teamId;
+		} else {
+			assignments[command.slot] = null;
+		}
+
+		setupSnapshot = {
+			revision: setupSnapshot.revision + 1,
+			locked: setupSnapshot.locked,
+			assignments
+		};
+	}
+
+	function handleResultCommand(command: AuctionMatchResultCommand) {
+		matches = matches.map((match) => {
+			if (match.id !== command.matchId || match.revision !== command.expectedRevision) return match;
+
+			const games = [...match.games];
+			games[command.setNumber - 1] = command.game;
+			const { leftScore, rightScore } = scoreAuctionGames(games);
+			const winsRequired = Math.floor(match.bestOf / 2) + 1;
+			const resultEntered = leftScore >= winsRequired || rightScore >= winsRequired;
+			const winnerTeamId = resultEntered
+				? leftScore > rightScore
+					? match.leftTeamId
+					: match.rightTeamId
+				: null;
+
+			return {
+				...match,
+				games,
+				leftScore,
+				rightScore,
+				winnerTeamId,
+				resultEntered,
+				revision: match.revision + 1
+			};
+		});
+	}
+
+	function selectView(view: BracketView) {
+		const url = new globalThis.URL(page.url);
+		url.searchParams.set('view', view);
+		void goto(`${url.pathname}${url.search}`, { replaceState: true, noScroll: true });
+	}
 </script>
 
 <svelte:head>
@@ -43,7 +119,7 @@
 						type="button"
 						role="tab"
 						aria-selected={activeView === view.value}
-						onclick={() => (activeView = view.value)}
+						onclick={() => selectView(view.value)}
 						class={`h-8 shrink-0 px-3 text-xs font-semibold ${
 							activeView === view.value
 								? 'rounded-sm bg-cyan-400/12 text-cyan-100'
@@ -67,6 +143,8 @@
 	{#if activeView === 'setup'}
 		<AuctionTournamentBracketMatchSetupBoard
 			{teams}
+			snapshot={setupSnapshot}
+			onCommand={handleSetupCommand}
 			profileIconVersion={data.championCatalog.version}
 		/>
 	{:else if activeView === 'lineup'}
@@ -80,6 +158,8 @@
 	{:else}
 		<AuctionTournamentBracketResultBoard
 			{teams}
+			{matches}
+			onSubmitResult={handleResultCommand}
 			profileIconVersion={data.championCatalog.version}
 		/>
 	{/if}

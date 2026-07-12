@@ -1,0 +1,81 @@
+services:
+  api-dev:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    image: monkeybot-api:dev
+    container_name: monkeybot-api-dev
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - path: ./api/runtime.env
+        required: false
+    environment:
+      MONKEYBOT_ENV: development
+      MONKEYBOT_BIND_ADDR: 0.0.0.0:8080
+      MONKEYBOT_PUBLIC_ORIGIN: https://dev.monkeybot.lol
+      MONKEYBOT_LOG_FILTER: monkeybot_api=info
+      MONKEYBOT_REQUEST_TIMEOUT_MS: 10000
+      MONKEYBOT_SHUTDOWN_TIMEOUT_MS: 20000
+      MONKEYBOT_MAX_BODY_BYTES: 1048576
+    ports:
+      - '127.0.0.1:30020:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shared-edge
+      - data
+
+  migrate-dev:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    image: monkeybot-api:dev
+    profiles:
+      - migration
+    restart: 'no'
+    entrypoint:
+      - /usr/local/bin/monkeybot-migrate
+    env_file:
+      - path: ./api/migration.env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+  web-dev:
+    image: longcat1132/monkeybot-web:dev
+    container_name: monkeybot-web-dev
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3002
+      ORIGIN: https://dev.monkeybot.lol
+      PUBLIC_APP_NAME: MonkeyBot
+      PUBLIC_WEB_ORIGIN: https://dev.monkeybot.lol
+      API_BASE_URL: http://api-dev:8080/api/
+      OAUTH_BASE_URL: http://api-dev:8080/
+      DATA_DRAGON_BASE_URL: https://ddragon.leagueoflegends.com
+    ports:
+      - '127.0.0.1:30010:3002'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    networks:
+      - shared-edge
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3002/g/guild-msm']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  shared-edge:
+    external: true
+    name: deploy_default
+  data:
+    name: deploy_data
+    internal: true

@@ -1,56 +1,47 @@
 <script lang="ts">
 	import { Dialog } from 'bits-ui';
-	import { ArchiveX, Check, History, RotateCcw, ShieldAlert, X } from 'lucide-svelte';
+	import { Check, History, RotateCcw, ShieldAlert, X } from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
-	import {
-		mockGuildRevertCheckpoints,
-		mockGuildStaleOperations,
-		type GuildRevertCheckpoint,
-		type GuildStaleOperation
-	} from '$lib/fixtures/guildAdmin';
+	import { type GuildRevertCheckpoint } from '$lib/fixtures/guildAdmin';
+	import type { GuildRevertCommand } from '$lib/realtime/admin';
 
-	type PendingAction =
-		| { kind: 'REVERT'; item: GuildRevertCheckpoint }
-		| { kind: 'CLEANUP'; item: GuildStaleOperation };
+	interface Props {
+		checkpoints: GuildRevertCheckpoint[];
+		revision: number;
+		onRevert: (command: GuildRevertCommand) => void | Promise<void>;
+	}
 
-	let checkpoints = $state(mockGuildRevertCheckpoints.map((item) => ({ ...item })));
-	let staleOperations = $state(mockGuildStaleOperations.map((item) => ({ ...item })));
-	let pendingAction = $state<PendingAction | null>(null);
+	let { checkpoints, revision, onRevert }: Props = $props();
+	let pendingAction = $state<GuildRevertCheckpoint | null>(null);
 	let reason = $state('');
 	let confirmOpen = $state(false);
 	let notice = $state('');
+	let submitting = $state(false);
 
 	const canConfirm = $derived(reason.trim().length >= 3);
 
 	function requestRevert(item: GuildRevertCheckpoint) {
-		pendingAction = { kind: 'REVERT', item };
+		pendingAction = item;
 		reason = '';
 		confirmOpen = true;
 	}
 
-	function requestCleanup(item: GuildStaleOperation) {
-		pendingAction = { kind: 'CLEANUP', item };
-		reason = '';
-		confirmOpen = true;
-	}
-
-	function confirmAction() {
-		if (!pendingAction || !canConfirm) return;
-		if (pendingAction.kind === 'REVERT') {
-			checkpoints = checkpoints.map((checkpoint) =>
-				checkpoint.id === pendingAction?.item.id
-					? { ...checkpoint, status: 'REVERTED' as const }
-					: checkpoint
-			);
-			notice = `${pendingAction.item.target} 복구 완료`;
-		} else {
-			staleOperations = staleOperations.filter(
-				(operation) => operation.id !== pendingAction?.item.id
-			);
-			notice = `${pendingAction.item.title} 정리 완료`;
+	async function confirmAction() {
+		if (!pendingAction || !canConfirm || submitting) return;
+		submitting = true;
+		try {
+			await onRevert({
+				kind: 'APPLY_REVERT',
+				checkpointId: pendingAction.id,
+				reason: reason.trim(),
+				expectedRevision: revision
+			});
+			notice = `${pendingAction.target} 복구 완료`;
+			confirmOpen = false;
+			pendingAction = null;
+		} finally {
+			submitting = false;
 		}
-		confirmOpen = false;
-		pendingAction = null;
 	}
 </script>
 
@@ -109,43 +100,6 @@
 			</div>
 		</div>
 	</section>
-
-	<section
-		class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
-	>
-		<header
-			class="flex min-h-14 items-center gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
-		>
-			<ArchiveX size={18} class="shrink-0 text-amber-200" aria-hidden="true" />
-			<div class="min-w-0">
-				<h2 class="truncate text-sm font-semibold text-slate-50">방치 작업</h2>
-				<p class="text-xs text-slate-500">오래된 진행 상태를 취소 처리</p>
-			</div>
-		</header>
-		<div class="divide-y divide-[var(--color-app-border-muted)]">
-			{#each staleOperations as operation (operation.id)}
-				<div
-					class="grid gap-3 px-4 py-3 md:grid-cols-[100px_minmax(0,1fr)_110px_110px] md:items-center"
-				>
-					<StatusPill label={operation.type} tone="warning" />
-					<div class="min-w-0">
-						<strong class="block truncate text-xs text-slate-200">{operation.title}</strong>
-						<small class="text-[10px] text-slate-600">{operation.status}</small>
-					</div>
-					<span class="text-xs font-semibold text-amber-200">{operation.age}</span>
-					<button
-						type="button"
-						onclick={() => requestCleanup(operation)}
-						class="inline-flex h-8 items-center justify-center gap-1.5 border border-rose-300/25 px-2 text-xs font-semibold text-rose-100 hover:bg-rose-400/10"
-					>
-						<ArchiveX size={13} aria-hidden="true" /> 정리
-					</button>
-				</div>
-			{:else}
-				<div class="px-4 py-10 text-center text-sm text-slate-600">방치된 작업 없음</div>
-			{/each}
-		</div>
-	</section>
 </div>
 
 <Dialog.Root bind:open={confirmOpen}>
@@ -159,7 +113,7 @@
 			>
 				<Dialog.Title class="flex items-center gap-2 text-sm font-semibold text-slate-50">
 					<ShieldAlert size={16} class="text-amber-200" />
-					{pendingAction?.kind === 'REVERT' ? '복구 작업 확인' : '방치 작업 정리'}
+					복구 작업 확인
 				</Dialog.Title>
 				<Dialog.Close
 					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100"
@@ -172,14 +126,10 @@
 				<div class="grid gap-4 p-4">
 					<div class="border border-amber-300/20 bg-amber-300/6 px-3 py-2">
 						<strong class="block text-sm text-amber-100">
-							{pendingAction.kind === 'REVERT'
-								? pendingAction.item.action
-								: pendingAction.item.title}
+							{pendingAction.action}
 						</strong>
 						<p class="mt-1 text-xs text-slate-500">
-							{pendingAction.kind === 'REVERT'
-								? pendingAction.item.target
-								: pendingAction.item.status}
+							{pendingAction.target}
 						</p>
 					</div>
 					<label class="grid gap-1.5 text-xs font-semibold text-slate-500">
@@ -198,11 +148,11 @@
 					>
 					<button
 						type="button"
-						disabled={!canConfirm}
+						disabled={!canConfirm || submitting}
 						onclick={confirmAction}
 						class="h-9 border border-amber-300/35 bg-amber-300/10 px-3 text-xs font-semibold text-amber-100 disabled:opacity-35"
 					>
-						{pendingAction.kind === 'REVERT' ? '복구 실행' : '정리 실행'}
+						{submitting ? '복구 중' : '복구 실행'}
 					</button>
 				</footer>
 			{/if}

@@ -1,6 +1,6 @@
 # Realtime Collaboration
 
-작성일: 2026-07-11
+작성일: 2026-07-12
 
 ## 목적
 
@@ -11,25 +11,25 @@
 - 일반 내전 엔트리 편성
 - 일반 내전 픽밴과 결과 입력
 - 경매 팀장/포인트 설정
-- 경매 draw, bid intent, 낙찰, 수동 배치
+- 경매 draw, 낙찰, 유찰, 복구, 수동 배치
 - 경매 match 라인업과 결과 입력
 
-구현 중 판단이 충돌하면 이 문서를 우선한다. DB 구조는 `05-db-schema.md`, HTTP route와 topic 목록은 `routing/backend.md`, 화면 배치는 `routing/frontend.md`를 따르되 동시 편집 동작은 이 문서를 기준으로 한다.
+구현 중 판단이 충돌하면 현재 frontend 동작을 먼저 따르고 이 문서를 수정한다. DB 구조는 `05-db-schema.md`, HTTP route와 topic은 `routing/backend.md`, 상세 구현 순서는 `09-backend-development-plan.md`를 따른다.
 
 ## 결정 사항
 
 ```txt
-DB                     = 영속 상태와 revision의 source of truth
+PostgreSQL             = 영속 상태와 revision의 source of truth
 HTTP API               = 모든 상태 변경과 권한 검증
 WebSocket              = invalidate 전달
-Valkey                 = API instance 간 Pub/Sub, presence, cache, 보조 lock
+Valkey                 = API instance 간 Pub/Sub, presence, rate limit, cache
+Transactional outbox   = commit된 invalidate의 전달 backlog
 Frontend local state   = 아직 저장되지 않은 사용자 입력
 ```
 
 필수 원칙:
 
 - WebSocket message만으로 DB 원장 상태를 확정하지 않는다.
-- Valkey lock만으로 낙찰, 라인업 확정, 결과 입력을 확정하지 않는다.
 - 유실되면 안 되는 draft와 경매 상태를 Valkey에만 저장하지 않는다.
 - 같은 데이터를 DB와 Valkey에 이중 write하지 않는다.
 - 중요한 운영 상태에 last-write-wins를 사용하지 않는다.
@@ -43,7 +43,7 @@ MVP에서는 다음을 구현하지 않는다.
 - WebSocket 기반 전체 state patch 전송.
 - 범용 실시간 문서 편집 엔진.
 - 서로 다른 필드의 자동 merge를 위한 복잡한 diff engine.
-- presence 또는 distributed lock을 정합성 근거로 사용.
+- Valkey/distributed lock 구현.
 - offline mutation queue.
 
 MVP의 충돌 정책은 `revision 검증 -> 409 Conflict -> 최신 snapshot 조회 -> 사용자 재적용`이다.
@@ -53,8 +53,9 @@ MVP의 충돌 정책은 `revision 검증 -> 409 Conflict -> 최신 snapshot 조�
 동시 편집 단위마다 하나의 aggregate revision을 가진다.
 
 ```txt
-recruitment_entry_draft.revision
-series_pickban_draft.revision
+recruitment_entry_drafts.revision
+auction_setup_drafts.revision
+series.revision
 auction_tournament.revision
 auction_match.revision
 ```
@@ -71,11 +72,13 @@ auction_match.revision
 
 ```json
 {
-	"id": "s-104",
-	"revision": 42,
-	"updatedAt": 1783750000,
-	"updatedBy": "328516947210438656",
-	"draft": {}
+	"data": {
+		"id": "0190f480-0000-7000-8000-000000000002",
+		"revision": 42,
+		"updatedAt": "2026-07-11T11:20:00Z",
+		"updatedBy": "328516947210438656",
+		"draft": {}
+	}
 }
 ```
 
@@ -86,9 +89,8 @@ Mutation 요청 예시:
 	"expectedRevision": 42,
 	"operation": {
 		"type": "SET_PICK",
-		"gameNumber": 2,
-		"team": "BLUE",
-		"slot": 3,
+		"setNumber": 2,
+		"userId": "328516947210438656",
 		"championId": "Ahri"
 	}
 }
@@ -98,10 +100,11 @@ Mutation 요청 예시:
 
 ```json
 {
-	"ok": true,
-	"revision": 43,
-	"updatedAt": 1783750012,
-	"updatedBy": "328516947210438656"
+	"data": {
+		"revision": 43,
+		"updatedAt": "2026-07-11T11:20:12Z",
+		"updatedBy": "328516947210438656"
+	}
 }
 ```
 
@@ -109,11 +112,15 @@ Mutation 요청 예시:
 
 ```json
 {
-	"error": "revision_conflict",
-	"expectedRevision": 42,
-	"currentRevision": 43,
-	"updatedAt": 1783750008,
-	"updatedBy": "954301284660912138"
+	"error": {
+		"code": "revision_conflict",
+		"details": {
+			"expectedRevision": 42,
+			"currentRevision": 43,
+			"updatedAt": "2026-07-11T11:20:08Z",
+			"updatedBy": "954301284660912138"
+		}
+	}
 }
 ```
 
@@ -126,7 +133,7 @@ Mutation 요청 예시:
 | 엔트리 편성 | 참가자 1명을 특정 팀/라인으로 이동, 슬롯 비우기 | 전체 배정 JSON PUT 반복        |
 | 픽밴        | 특정 game/team/slot의 pick 또는 ban 설정/해제   | 전체 시리즈 draft 덮어쓰기     |
 | 경매 준비   | 팀장 1명 지정, 팀 포인트 변경                   | 전체 tournament 객체 저장      |
-| 경매 입찰   | draw, bid intent, finalize bid, manual assign   | 브라우저가 낙찰 결과 직접 계산 |
+| 경매 입찰   | draw, 유찰, 낙찰, 복구, 수동 배치               | 브라우저가 낙찰 결과 직접 계산 |
 | 경매 라인업 | 선수 1명의 role 배정, lineup lock               | 전체 bracket 덮어쓰기          |
 | 결과 입력   | 단일 game 결과 생성, 마지막 game 취소           | 클라이언트가 MMR 직접 계산     |
 
@@ -149,17 +156,21 @@ Backend는 다음 순서를 지킨다.
 5. aggregate와 현재 revision 조회
 6. expectedRevision 비교
 7. domain invariant 검증
-8. 상태 변경, revision + 1, audit/checkpoint 기록
-9. DB transaction commit
-10. Valkey Pub/Sub invalidate publish
-11. 새 revision을 HTTP response로 반환
+8. 상태 변경, revision + 1, audit/checkpoint/outbox 기록
+9. PostgreSQL transaction commit
+10. 새 revision을 HTTP response로 반환
+11. outbox relay가 Valkey Pub/Sub에 invalidate publish
 ```
 
 주의:
 
 - 6번이 실패하면 `409 Conflict`를 반환하고 아무 상태도 변경하지 않는다.
-- DB commit 이후 Pub/Sub publish가 실패해도 commit을 rollback하지 않는다.
-- publish 실패는 error log와 metric으로 기록한다.
+- Pub/Sub publish 실패로 domain commit을 rollback하지 않는다.
+- publish 실패는 outbox backlog로 남기고 retry하며 error log와 metric을 기록한다.
+- relay는 짧은 DB transaction에서 row를 lease한 뒤 commit하고, Valkey publish는 transaction
+  밖에서 수행한다. 외부 network I/O 동안 `FOR UPDATE` lock을 유지하지 않는다.
+- 각 claim은 새 lease token을 발급하고 ack/nack은 owner와 token이 모두 일치할 때만 반영한다.
+  만료된 이전 claim의 늦은 응답이 재claim된 row를 덮어쓰지 못해야 한다.
 - HTTP 성공 응답 자체가 현재 client를 동기화할 수 있어야 한다.
 - 다른 client는 reconnect, window focus, 다음 invalidate에서 누락을 복구한다.
 
@@ -175,26 +186,27 @@ Backend는 다음 순서를 지킨다.
 ### Topic 형식
 
 ```txt
-guild:{guildId}:dashboard
-guild:{guildId}:auction-dashboard
 guild:{guildId}:recruitment:{recruitmentId}
 guild:{guildId}:series:{seriesId}
 guild:{guildId}:auction-recruitment:{recruitmentId}
 guild:{guildId}:auction-tournament:{tournamentId}
 guild:{guildId}:auction-match:{matchId}
-guild:{guildId}:leaderboard:{role}
-user:{discordId}
 ```
+
+MVP에서는 dashboard, 목록, records, leaderboard, profile, admin, result 원장에 WebSocket을 사용하지
+않는다. 경매 result의 operator 전용 checkpoint revert도 단일 HTTP command 후 snapshot을 갱신하며
+협업 topic을 추가하지 않는다.
 
 ### Invalidate event
 
 ```json
 {
 	"type": "invalidate",
-	"topic": "guild:123:auction-tournament:a-118",
-	"resourceId": "a-118",
+	"eventId": "0190f4a2-8b3c-7d5e-8f01-23456789abcd",
+	"topic": "guild:123:auction-tournament:0190f49d-3e20-7a41-9810-123456789abc",
+	"resourceId": "0190f49d-3e20-7a41-9810-123456789abc",
 	"revision": 43,
-	"occurredAt": 1783750012
+	"occurredAt": "2026-07-11T11:20:12Z"
 }
 ```
 
@@ -204,27 +216,22 @@ user:{discordId}
 - 단일 resource topic은 `resourceId`와 `revision`을 포함한다.
 - client는 현재 revision 이하의 중복 또는 역순 event를 무시한다.
 - 현재 revision보다 큰 event를 받으면 HTTP GET으로 snapshot을 다시 조회한다.
-- dashboard와 leaderboard 같은 collection topic은 revision 비교 없이 짧게 coalesce한 뒤 한 번 조회한다.
 - WebSocket event의 도착 순서와 HTTP response의 도착 순서는 보장된다고 가정하지 않는다.
+- outbox 전달은 at-least-once이므로 client는 eventId와 revision으로 중복을 허용하고 제거한다.
 
 ## Frontend 상태 머신
 
-각 동시 편집 workspace는 아래 상태를 가진다.
-
-| 상태           | 의미                               | 허용 동작                                        |
-| -------------- | ---------------------------------- | ------------------------------------------------ |
-| `loading`      | 최초 snapshot 조회 중              | 입력 금지                                        |
-| `synced`       | server snapshot과 local state 일치 | 입력 가능                                        |
-| `dirty`        | 아직 전송하지 않은 local 변경 존재 | 추가 입력 가능                                   |
-| `saving`       | mutation 진행 중                   | 같은 대상의 중복 mutation 금지                   |
-| `reconnecting` | WebSocket 재연결 중                | 일반 draft 입력 유지, 위험 command 보류          |
-| `offline`      | WebSocket 연결 실패                | local 입력 유지, 최신 revision 필요 command 금지 |
-| `conflict`     | server revision과 local 변경 충돌  | 충돌 해결 전 해당 대상 저장 금지                 |
-
-`RealtimeEditStateBar`는 이 상태를 간결하게 표시한다.
+현재 frontend 계약처럼 연결 상태와 저장 상태를 분리한다.
 
 ```txt
-synced       -> 연결 아이콘 + 저장됨
+connectionState = connected | reconnecting | offline
+saveState       = saved | saving | dirty | conflict
+```
+
+`loading`은 route/snapshot fetch 상태이며 위 두 enum에 넣지 않는다. `RealtimeEditStateBar`는 두 축을 조합해 간결하게 표시한다.
+
+```txt
+connected + saved -> 연결 아이콘 + 저장됨
 dirty        -> 연결 아이콘 + 저장 대기
 saving      -> 연결 아이콘 + 저장 중
 reconnecting -> 재연결 중
@@ -251,11 +258,11 @@ Draft autosave는 다음 규칙을 따른다.
 Invalidate 수신 시 local state 처리:
 
 ```txt
-local = synced
+saveState = saved
   -> 최신 snapshot 조회
   -> revision과 화면 상태 교체
 
-local = dirty 또는 saving
+saveState = dirty 또는 saving
   -> 최신 snapshot을 별도로 조회
   -> 편집 중 값을 즉시 덮어쓰지 않음
   -> 같은 대상이 변경되었으면 conflict
@@ -303,10 +310,10 @@ HTTP timeout은 실패 확정이 아니다. server에서 commit되었을 수 있
 Valkey에 저장 가능한 것:
 
 ```txt
-ws:{topic}                              # instance 간 Pub/Sub
-guild:{guildId}:presence:{topic}        # 접속자 표시, 짧은 TTL
-guild:{guildId}:lock:{resourceId}       # 중복 실행 완화, 짧은 TTL
-guild:{guildId}:cache:{...}             # 재생성 가능한 cache
+monkeybot:{env}:pubsub:{topic}                 # instance 간 Pub/Sub
+monkeybot:{env}:presence:{topic}:{connection} # 접속자 표시, 짧은 TTL
+monkeybot:{env}:ratelimit:{principal}:{route}  # 보조 rate limit
+monkeybot:{env}:cache:{...}                    # 재생성 가능한 cache
 ```
 
 Valkey에만 저장하면 안 되는 것:
@@ -319,7 +326,8 @@ Valkey에만 저장하면 안 되는 것:
 - lineup lock과 game result.
 - MMR 변경.
 
-Valkey lock은 UX 보조 장치다. lock이 없거나 만료되어도 DB revision, state condition, unique constraint가 잘못된 두 번째 commit을 막아야 한다.
+분산 lock은 MVP Valkey 범위에 포함하지 않는다. 동시 실행 정합성은 PostgreSQL row lock, revision,
+state condition, unique constraint가 보장한다.
 
 ## 경매 내전 추가 규칙
 
@@ -331,11 +339,27 @@ Valkey lock은 UX 보조 장치다. lock이 없거나 만료되어도 DB revisio
 - 이미 active lot이 있으면 새 draw를 거부한다.
 - draw 결과와 revision을 DB에 commit한 뒤 invalidate한다.
 
-### Bid intent
+### 지원 command
 
-- bid intent는 짧은 사용자 의사 표시일 수 있지만 server가 현재 lot과 팀 권한을 검증한다.
-- 최종 낙찰 가격과 승자는 client intent 목록을 그대로 신뢰하지 않는다.
-- bid intent를 Valkey에 두더라도 낙찰 확정에 필요한 최종 검증은 DB에서 다시 수행한다.
+현재 frontend command union만 지원한다.
+
+```text
+DRAW_NEXT
+MARK_UNSOLD
+AWARD_BID
+ASSIGN_CURRENT
+ASSIGN_UNSOLD
+RESTORE_UNSOLD
+REVERT_LAST
+```
+
+bid intent와 실시간 호가 목록은 현재 frontend workflow에 없으므로 MVP API, DB, Valkey에
+추가하지 않는다.
+
+`RESTORE_UNSOLD`는 active target이 없을 때 선택한 유찰 선수를 즉시 current target으로
+복원한다. 일반 queue 복귀나 재추첨 command로 해석하지 않는다.
+`REVERT_LAST`가 낙찰, current 수동 배치, 유찰을 되돌려 선수를 current target으로 복원할 때는
+이전 lot을 `REVERTED`로 보존하고 새 ACTIVE lot을 만든다.
 
 ### Finalize bid
 
@@ -347,7 +371,7 @@ expectedRevision 확인
 winning team / bid 검증
 남은 point 검증 및 차감
 선수 team 배치
-auction bid 원장 기록
+AWARD_BID action / point ledger 기록
 revert checkpoint 기록
 tournament revision 증가
 ```
@@ -379,7 +403,7 @@ Presence는 협업 편의를 위한 정보이며 권한이나 lock이 아니다.
 - subscribe 거부와 권한 실패.
 - revision conflict.
 - mutation latency와 실패 원인.
-- DB commit 후 invalidate publish 실패.
+- outbox publish 실패와 backlog.
 - 경매 finalize 경쟁 요청과 거부 사유.
 
 권장 metric:
@@ -388,6 +412,7 @@ Presence는 협업 편의를 위한 정보이며 권한이나 lock이 아니다.
 ws_connections
 ws_reconnects_total
 ws_publish_failures_total
+outbox_backlog
 revision_conflicts_total{resource_type}
 mutation_duration_ms{operation}
 mutation_rejected_total{reason}
@@ -442,8 +467,8 @@ B가 최신 상태 반영 후 정상 저장
 - [ ] 공통 `revision_conflict` response schema.
 - [ ] guild-scoped topic builder.
 - [ ] session/guild permission 기반 subscribe guard.
-- [ ] DB commit 이후 invalidate publisher.
-- [ ] resource/collection invalidate client store.
+- [ ] transaction과 같은 commit에 outbox event 기록.
+- [ ] outbox relay와 resource invalidate client store.
 - [ ] aggregate별 single-flight autosave queue.
 - [ ] reconnect 후 subscribe + full refetch.
 - [ ] `RealtimeEditStateBar` 연결.

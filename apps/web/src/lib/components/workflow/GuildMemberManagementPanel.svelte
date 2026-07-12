@@ -2,18 +2,20 @@
 	import { Dialog } from 'bits-ui';
 	import { Check, Gauge, Search, UserCheck, UserRound, UsersRound, UserX, X } from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
-	import {
-		mockGuildAdminMembers,
-		type GuildAdminMember,
-		type GuildMemberStatus
-	} from '$lib/fixtures/guildAdmin';
+	import { type GuildAdminMember, type GuildMemberStatus } from '$lib/fixtures/guildAdmin';
 	import { LANES, laneLabel, type Lane } from '$lib/fixtures/workflow';
+	import type { GuildMemberStatusCommand, GuildMmrAdjustmentCommand } from '$lib/realtime/admin';
 
 	type StatusFilter = 'ALL' | GuildMemberStatus;
 
-	let members = $state<GuildAdminMember[]>(
-		mockGuildAdminMembers.map((member) => ({ ...member, laneMmr: { ...member.laneMmr } }))
-	);
+	interface Props {
+		members: GuildAdminMember[];
+		revision: number;
+		onAdjustMmr: (command: GuildMmrAdjustmentCommand) => void | Promise<void>;
+		onSetStatus: (command: GuildMemberStatusCommand) => void | Promise<void>;
+	}
+
+	let { members, revision, onAdjustMmr, onSetStatus }: Props = $props();
 	let query = $state('');
 	let statusFilter = $state<StatusFilter>('ALL');
 	let adjustmentOpen = $state(false);
@@ -22,6 +24,7 @@
 	let adjustmentDelta = $state(0);
 	let adjustmentNote = $state('');
 	let notice = $state('');
+	let submitting = $state(false);
 
 	const selectedMember = $derived(members.find((member) => member.id === selectedMemberId) ?? null);
 	const filteredMembers = $derived(
@@ -45,39 +48,34 @@
 		adjustmentOpen = true;
 	}
 
-	function applyAdjustment() {
-		if (!selectedMember || !canAdjust) return;
-		members = members.map((member) =>
-			member.id === selectedMember.id
-				? {
-						...member,
-						laneMmr: {
-							...member.laneMmr,
-							[selectedLane]: member.laneMmr[selectedLane] + adjustmentDelta
-						}
-					}
-				: member
-		);
-		notice = `${selectedMember.discordName} ${laneLabel[selectedLane]} MMR ${signed(adjustmentDelta)} 반영`;
-		adjustmentOpen = false;
+	async function applyAdjustment() {
+		if (!selectedMember || !canAdjust || submitting) return;
+		submitting = true;
+		try {
+			await onAdjustMmr({
+				kind: 'ADJUST_MMR',
+				memberId: selectedMember.id,
+				lane: selectedLane,
+				delta: adjustmentDelta,
+				note: adjustmentNote.trim(),
+				expectedRevision: revision
+			});
+			notice = `${selectedMember.discordName} ${laneLabel[selectedLane]} MMR ${signed(adjustmentDelta)} 반영`;
+			adjustmentOpen = false;
+		} finally {
+			submitting = false;
+		}
 	}
 
-	function toggleMember(member: GuildAdminMember) {
+	async function toggleMember(member: GuildAdminMember) {
 		const nextStatus: GuildMemberStatus = member.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-		members = members.map((item) =>
-			item.id === member.id ? { ...item, status: nextStatus } : item
-		);
+		await onSetStatus({
+			kind: 'SET_MEMBER_STATUS',
+			memberId: member.id,
+			status: nextStatus,
+			expectedRevision: revision
+		});
 		notice = `${member.discordName} ${nextStatus === 'ACTIVE' ? '복구' : '비활성화'} 완료`;
-	}
-
-	function bulkRegister() {
-		const targets = members.filter(
-			(member) => !member.registered && member.status === 'ACTIVE'
-		).length;
-		members = members.map((member) =>
-			member.status === 'ACTIVE' ? { ...member, registered: true } : member
-		);
-		notice = targets > 0 ? `${targets}명 일괄 등록 완료` : '새로 등록할 멤버 없음';
 	}
 
 	function signed(value: number): string {
@@ -98,23 +96,12 @@
 				<p class="text-xs text-slate-500">등록 상태와 길드 MMR 관리</p>
 			</div>
 		</div>
-		<div class="flex items-center gap-2">
-			{#if notice}
-				<span
-					class="hidden items-center gap-1 text-xs font-semibold text-emerald-300 lg:inline-flex"
-				>
-					<Check size={14} aria-hidden="true" />
-					{notice}
-				</span>
-			{/if}
-			<button
-				type="button"
-				onclick={bulkRegister}
-				class="inline-flex h-9 items-center gap-1.5 border border-cyan-400/35 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/15"
-			>
-				<UserCheck size={14} aria-hidden="true" /> 일괄 등록
-			</button>
-		</div>
+		{#if notice}
+			<span class="hidden items-center gap-1 text-xs font-semibold text-emerald-300 lg:inline-flex">
+				<Check size={14} aria-hidden="true" />
+				{notice}
+			</span>
+		{/if}
 	</header>
 
 	<div
@@ -378,11 +365,11 @@
 					</Dialog.Close>
 					<button
 						type="button"
-						disabled={!canAdjust}
+						disabled={!canAdjust || submitting}
 						onclick={applyAdjustment}
 						class="h-9 border border-cyan-400/40 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-35"
 					>
-						조정 적용
+						{submitting ? '적용 중' : '조정 적용'}
 					</button>
 				</footer>
 			{/if}

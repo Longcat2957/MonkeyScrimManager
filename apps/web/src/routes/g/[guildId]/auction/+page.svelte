@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
 	import { ArrowRight, Gavel, Swords, Trophy, UsersRound } from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
@@ -7,143 +6,24 @@
 
 	let { data }: PageProps = $props();
 
-	const auctionWork = $derived([
-		{
-			id: 'ar10-42',
-			title: '수요 10인 경매',
-			kind: '모집',
-			status: '팀장 설정',
-			detail: '10명 · 2팀',
-			href: resolve('/g/[guildId]/auction/recruitments/[id]/draft', {
-				guildId: data.guildId,
-				id: 'ar10-42'
-			}),
-			icon: UsersRound,
-			tone: 'warning' as const
-		},
-		{
-			id: 'ar20-42',
-			title: '토요 20인 경매',
-			kind: '모집',
-			status: '팀장 설정',
-			detail: '20명 · 4팀',
-			href: resolve('/g/[guildId]/auction/recruitments/[id]/draft', {
-				guildId: data.guildId,
-				id: 'ar20-42'
-			}),
-			icon: UsersRound,
-			tone: 'warning' as const
-		},
-		{
-			id: 'a10-118',
-			title: 'A10-118 경매 내전',
-			kind: '토너먼트',
-			status: '입찰 진행',
-			detail: '2팀 · 4명 낙찰',
-			href: resolve('/g/[guildId]/auction/tournaments/[id]/draft', {
-				guildId: data.guildId,
-				id: 'a10-118'
-			}),
-			icon: Gavel,
-			tone: 'info' as const
-		},
-		{
-			id: 'a20-118',
-			title: 'A20-118 경매 내전',
-			kind: '토너먼트',
-			status: '입찰 진행',
-			detail: '4팀 · 8명 낙찰',
-			href: resolve('/g/[guildId]/auction/tournaments/[id]/draft', {
-				guildId: data.guildId,
-				id: 'a20-118'
-			}),
-			icon: Gavel,
-			tone: 'info' as const
-		},
-		{
-			id: 'a10-117',
-			title: 'A10-117 경매 내전',
-			kind: '토너먼트',
-			status: '대진 진행',
-			detail: '결승 · 라인업 대기',
-			href: resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {
-				guildId: data.guildId,
-				id: 'a10-117'
-			}),
-			icon: Swords,
-			tone: 'warning' as const
-		},
-		{
-			id: 'a20-117',
-			title: 'A20-117 경매 내전',
-			kind: '토너먼트',
-			status: '대진 진행',
-			detail: '준결승 A · 라인업 대기',
-			href: resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {
-				guildId: data.guildId,
-				id: 'a20-117'
-			}),
-			icon: Swords,
-			tone: 'warning' as const
-		},
-		{
-			id: 'a10-115',
-			title: 'A10-115 경매 내전',
-			kind: '토너먼트',
-			status: '결과 입력',
-			detail: '결승 · 1세트 결과 대기',
-			href: `${resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {
-				guildId: data.guildId,
-				id: 'a10-115'
-			})}?view=result`,
-			icon: Swords,
-			tone: 'warning' as const
-		},
-		{
-			id: 'a20-115',
-			title: 'A20-115 경매 내전',
-			kind: '토너먼트',
-			status: '결과 입력',
-			detail: '결승 · 1세트 결과 대기',
-			href: `${resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {
-				guildId: data.guildId,
-				id: 'a20-115'
-			})}?view=result`,
-			icon: Swords,
-			tone: 'warning' as const
-		},
-		{
-			id: 'a10-116',
-			title: 'A10-116 경매 내전',
-			kind: '완료',
-			status: '결과 확정',
-			detail: '2팀 · 우승 2팀',
-			href: resolve('/g/[guildId]/auction/tournaments/[id]/result', {
-				guildId: data.guildId,
-				id: 'a10-116'
-			}),
-			icon: Trophy,
-			tone: 'success' as const
-		},
-		{
-			id: 'a20-116',
-			title: 'A20-116 경매 내전',
-			kind: '완료',
-			status: '결과 확정',
-			detail: '4팀 · 우승 2팀',
-			href: resolve('/g/[guildId]/auction/tournaments/[id]/result', {
-				guildId: data.guildId,
-				id: 'a20-116'
-			}),
-			icon: Trophy,
-			tone: 'success' as const
-		}
-	]);
-	const activeAuctionWork = $derived(auctionWork.filter((item) => item.kind !== '완료'));
-	const completedAuctionWork = $derived(auctionWork.filter((item) => item.kind === '완료'));
+	const activeAuctionWork = $derived(data.view.activeWork);
+	const completedAuctionWork = $derived(data.view.completedWork);
+	const iconByKind = {
+		recruitment: UsersRound,
+		bidding: Gavel,
+		bracket: Swords,
+		completed: Trophy
+	} as const;
+
+	type AuctionWorkItem = (typeof activeAuctionWork)[number];
+
+	function displayNumber(item: AuctionWorkItem): string {
+		return item.kind === '모집' ? `#${item.displayNumber}` : `A-${item.displayNumber}`;
+	}
 </script>
 
-{#snippet AuctionRow(item: (typeof auctionWork)[number], actionLabel: string)}
+{#snippet AuctionRow(item: AuctionWorkItem, actionLabel: string)}
+	{@const Icon = iconByKind[item.iconKind]}
 	<div
 		class="grid gap-3 px-4 py-3 md:grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_116px] md:items-center"
 	>
@@ -151,11 +31,11 @@
 			<span
 				class="grid size-9 shrink-0 place-items-center border border-cyan-400/25 bg-cyan-400/8 text-cyan-200"
 			>
-				<item.icon size={16} aria-hidden="true" />
+				<Icon size={16} aria-hidden="true" />
 			</span>
 			<div class="min-w-0">
 				<strong class="block truncate text-sm text-slate-100">{item.title}</strong>
-				<small class="text-[10px] text-slate-600">#{item.id}</small>
+				<small class="text-[10px] text-slate-600">{displayNumber(item)}</small>
 			</div>
 		</div>
 		<span class="text-xs text-slate-500">{item.kind}</span>
@@ -200,6 +80,10 @@
 		<div class="divide-y divide-[var(--color-app-border-muted)]">
 			{#each activeAuctionWork as item (item.id)}
 				{@render AuctionRow(item, '작업 열기')}
+			{:else}
+				<div class="grid min-h-28 place-items-center px-4 py-8 text-sm text-slate-600">
+					진행 중인 경매 작업이 없습니다.
+				</div>
 			{/each}
 		</div>
 	</section>
@@ -224,6 +108,10 @@
 		<div class="divide-y divide-[var(--color-app-border-muted)]">
 			{#each completedAuctionWork as item (item.id)}
 				{@render AuctionRow(item, '결과 보기')}
+			{:else}
+				<div class="grid min-h-28 place-items-center px-4 py-8 text-sm text-slate-600">
+					완료된 경매가 없습니다.
+				</div>
 			{/each}
 		</div>
 	</section>

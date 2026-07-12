@@ -8,23 +8,18 @@
 		type MockAuctionMember,
 		type MockAuctionTeam
 	} from '$lib/fixtures/workflow';
+	import type {
+		ScrimPickBanResultInputGame,
+		ScrimPickBanResultInputSide,
+		ScrimPickBanResultInputTeam
+	} from '$lib/fixtures/scrimPickBanResultInputFixtures';
+	import type {
+		AuctionBracketMatchSnapshot,
+		AuctionMatchResultCommand
+	} from '$lib/realtime/auction';
 	import PlayerAvatar from './PlayerAvatar.svelte';
 	import PositionIcon from './PositionIcon.svelte';
 	import ScrimPickBanResultInputBoard from './ScrimPickBanResultInputBoard.svelte';
-
-	type AuctionBracketMatch = {
-		id: string;
-		label: string;
-		roundLabel: string;
-		leftTeam: MockAuctionTeam | null;
-		rightTeam: MockAuctionTeam | null;
-		leftScore: number;
-		rightScore: number;
-		winnerTeamId: string | null;
-		lineupsLocked: boolean;
-		resultEntered: boolean;
-		bestOf: 1 | 3 | 5;
-	};
 
 	type AuctionLineupSlot = {
 		lane: Lane;
@@ -33,69 +28,23 @@
 
 	interface Props {
 		teams: MockAuctionTeam[];
+		matches: AuctionBracketMatchSnapshot[];
+		onSubmitResult: (command: AuctionMatchResultCommand) => void | Promise<void>;
 		profileIconVersion?: string | null;
 	}
 
-	let { teams, profileIconVersion = null }: Props = $props();
+	let { teams, matches, onSubmitResult, profileIconVersion = null }: Props = $props();
 
 	let resultModalOpen = $state(false);
 	let activeMatchId = $state<string | null>(null);
 	let selectedSetTab = $state('1');
 	let expanded = $state(false);
 	const isDirectFinal = $derived(teams.length === 2);
-
-	const semiA = $derived<AuctionBracketMatch>({
-		id: 'semi-a',
-		label: '준결승 A',
-		roundLabel: 'SEMIFINAL',
-		leftTeam: teams[0] ?? null,
-		rightTeam: teams[1] ?? null,
-		leftScore: 2,
-		rightScore: 1,
-		winnerTeamId: teams[0]?.id ?? null,
-		lineupsLocked: true,
-		resultEntered: true,
-		bestOf: 1
-	});
-
-	const semiB = $derived<AuctionBracketMatch>({
-		id: 'semi-b',
-		label: '준결승 B',
-		roundLabel: 'SEMIFINAL',
-		leftTeam: teams[2] ?? null,
-		rightTeam: teams[3] ?? null,
-		leftScore: 0,
-		rightScore: 2,
-		winnerTeamId: teams[3]?.id ?? null,
-		lineupsLocked: true,
-		resultEntered: true,
-		bestOf: 1
-	});
-
-	const finalMatch = $derived<AuctionBracketMatch>({
-		id: 'final',
-		label: '결승',
-		roundLabel: 'FINAL',
-		leftTeam: isDirectFinal
-			? (teams[0] ?? null)
-			: semiA.winnerTeamId === semiA.leftTeam?.id
-				? semiA.leftTeam
-				: semiA.rightTeam,
-		rightTeam: isDirectFinal
-			? (teams[1] ?? null)
-			: semiB.winnerTeamId === semiB.leftTeam?.id
-				? semiB.leftTeam
-				: semiB.rightTeam,
-		leftScore: 1,
-		rightScore: 0,
-		winnerTeamId: isDirectFinal ? null : semiA.winnerTeamId,
-		lineupsLocked: true,
-		resultEntered: false,
-		bestOf: 3
-	});
-
-	const semifinalMatches = $derived(isDirectFinal ? [] : [semiA, semiB]);
-	const allMatches = $derived([...semifinalMatches, finalMatch]);
+	const allMatches = $derived(matches);
+	const semifinalMatches = $derived(matches.filter((match) => match.round === 'SEMIFINAL'));
+	const finalMatch = $derived(
+		matches.find((match) => match.round === 'FINAL') ?? matches[matches.length - 1]!
+	);
 	const activeMatch = $derived(allMatches.find((match) => match.id === activeMatchId) ?? null);
 
 	function openResultInput(matchId: string) {
@@ -104,37 +53,110 @@
 		resultModalOpen = true;
 	}
 
-	function teamScore(match: AuctionBracketMatch, side: 'LEFT' | 'RIGHT'): number {
+	function teamScore(match: AuctionBracketMatchSnapshot, side: 'LEFT' | 'RIGHT'): number {
 		return side === 'LEFT' ? match.leftScore : match.rightScore;
 	}
 
-	function teamForSide(match: AuctionBracketMatch, side: 'LEFT' | 'RIGHT'): MockAuctionTeam | null {
-		return side === 'LEFT' ? match.leftTeam : match.rightTeam;
+	function teamForSide(
+		match: AuctionBracketMatchSnapshot,
+		side: 'LEFT' | 'RIGHT'
+	): MockAuctionTeam | null {
+		const teamId = side === 'LEFT' ? match.leftTeamId : match.rightTeamId;
+		return teams.find((team) => team.id === teamId) ?? null;
 	}
 
 	function winnerTeamRowClass(): string {
 		return 'bg-[var(--color-app-surface)]';
 	}
 
-	function teamRowClass(match: AuctionBracketMatch, team: MockAuctionTeam | null): string {
+	function teamRowClass(match: AuctionBracketMatchSnapshot, team: MockAuctionTeam | null): string {
 		const base = 'bg-[var(--color-app-surface)]';
 		if (!match.resultEntered || !match.winnerTeamId || !team) return base;
 		return match.winnerTeamId === team.id ? winnerTeamRowClass() : `${base} opacity-50`;
 	}
 
-	function setNumbers(match: AuctionBracketMatch): number[] {
+	function setNumbers(match: AuctionBracketMatchSnapshot): number[] {
 		return Array.from({ length: match.bestOf }, (_, index) => index + 1);
 	}
 
-	function assignedLineup(team: MockAuctionTeam): AuctionLineupSlot[] {
-		return LANES.map((lane, index) => {
-			const member = team.members[index];
+	function assignedLineup(
+		match: AuctionBracketMatchSnapshot,
+		team: MockAuctionTeam
+	): AuctionLineupSlot[] {
+		const lineup = match.lineups[team.id] ?? {};
+		return LANES.map((lane) => {
+			const member = team.members.find((item) => item.id === lineup[lane]);
 			return member ? { lane, member } : null;
 		}).filter((slot): slot is AuctionLineupSlot => Boolean(slot));
 	}
 
-	function matchFormatLabel(match: AuctionBracketMatch): string {
+	function matchFormatLabel(match: AuctionBracketMatchSnapshot): string {
 		return `Bo${match.bestOf}`;
+	}
+
+	function roundLabel(match: AuctionBracketMatchSnapshot): string {
+		return match.round === 'FINAL' ? 'FINAL' : 'SEMIFINAL';
+	}
+
+	function resultTeams(
+		match: AuctionBracketMatchSnapshot
+	): Record<ScrimPickBanResultInputSide, ScrimPickBanResultInputTeam> {
+		return {
+			BLUE: toResultTeam(match, teamForSide(match, 'LEFT'), 'BLUE'),
+			RED: toResultTeam(match, teamForSide(match, 'RIGHT'), 'RED')
+		};
+	}
+
+	function toResultTeam(
+		match: AuctionBracketMatchSnapshot,
+		team: MockAuctionTeam | null,
+		side: ScrimPickBanResultInputSide
+	): ScrimPickBanResultInputTeam {
+		return {
+			side,
+			name: team?.name ?? '팀 대기',
+			players: team
+				? assignedLineup(match, team).map(({ lane, member }) => ({
+						id: member.id,
+						name: member.name,
+						lane,
+						mmr: member.mmr,
+						riotTier: member.riotTier,
+						preferredChampions: member.mainChampions ?? [],
+						frequentChampions: member.mainChampions ?? []
+					}))
+				: []
+		};
+	}
+
+	function gameForSet(match: AuctionBracketMatchSnapshot, setNumber: number) {
+		return (
+			match.games[setNumber - 1] ?? {
+				id: `${match.id}-set-${setNumber}`,
+				label: `${setNumber}세트`,
+				winner: null,
+				bans: { BLUE: [null, null, null, null, null], RED: [null, null, null, null, null] },
+				picks: Object.fromEntries(
+					Object.values(resultTeams(match)).flatMap((team) =>
+						team.players.map((player) => [player.id, null])
+					)
+				)
+			}
+		);
+	}
+
+	function submitGameResult(
+		match: AuctionBracketMatchSnapshot,
+		setNumber: number,
+		game: ScrimPickBanResultInputGame
+	) {
+		return onSubmitResult({
+			kind: 'SUBMIT_GAME_RESULT',
+			matchId: match.id,
+			setNumber,
+			expectedRevision: match.revision,
+			game
+		});
 	}
 
 	function activeModalTitle(): string {
@@ -185,7 +207,7 @@
 					>
 						<div class="min-w-0">
 							<p class="text-[11px] font-semibold text-amber-200/70">
-								{finalMatch.roundLabel} · {matchFormatLabel(finalMatch)}
+								{roundLabel(finalMatch)} · {matchFormatLabel(finalMatch)}
 							</p>
 							<p class="truncate text-sm font-semibold text-slate-100">{finalMatch.label}</p>
 						</div>
@@ -225,7 +247,7 @@
 									</p>
 								</div>
 								{#if team}
-									{#each assignedLineup(team) as slot (slot.member.id)}
+									{#each assignedLineup(finalMatch, team) as slot (slot.member.id)}
 										<div class="grid grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2">
 											<div class="grid justify-items-center gap-0.5">
 												<PositionIcon role={slot.lane} size="sm" />
@@ -260,7 +282,7 @@
 						>
 							<div class="min-w-0">
 								<p class="text-[11px] font-semibold text-slate-500">
-									{match.roundLabel} · {matchFormatLabel(match)}
+									{roundLabel(match)} · {matchFormatLabel(match)}
 								</p>
 								<p class="truncate text-sm font-semibold text-slate-100">{match.label}</p>
 							</div>
@@ -300,7 +322,7 @@
 										</p>
 									</div>
 									{#if team}
-										{#each assignedLineup(team) as slot (slot.member.id)}
+										{#each assignedLineup(match, team) as slot (slot.member.id)}
 											<div class="grid grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2">
 												<div class="grid justify-items-center gap-0.5">
 													<PositionIcon role={slot.lane} size="sm" />
@@ -345,7 +367,7 @@
 							>
 								<div class="min-w-0">
 									<p class="text-[11px] font-semibold text-slate-500">
-										{match.roundLabel} · {matchFormatLabel(match)}
+										{roundLabel(match)} · {matchFormatLabel(match)}
 									</p>
 									<p class="truncate text-sm font-semibold text-slate-100">{match.label}</p>
 								</div>
@@ -376,7 +398,7 @@
 													</p>
 												</div>
 												<div class="flex -space-x-2">
-													{#each assignedLineup(team) as slot (slot.member.id)}
+													{#each assignedLineup(match, team) as slot (slot.member.id)}
 														<PlayerAvatar
 															name={slot.member.name}
 															role={slot.lane}
@@ -413,7 +435,7 @@
 					>
 						<div class="min-w-0">
 							<p class="text-[11px] font-semibold text-amber-200/70">
-								{finalMatch.roundLabel} · {matchFormatLabel(finalMatch)}
+								{roundLabel(finalMatch)} · {matchFormatLabel(finalMatch)}
 							</p>
 							<p class="truncate text-sm font-semibold text-slate-100">{finalMatch.label}</p>
 						</div>
@@ -444,7 +466,7 @@
 											</p>
 										</div>
 										<div class="flex -space-x-2">
-											{#each assignedLineup(team) as slot (slot.member.id)}
+											{#each assignedLineup(finalMatch, team) as slot (slot.member.id)}
 												<PlayerAvatar
 													name={slot.member.name}
 													role={slot.lane}
@@ -512,14 +534,22 @@
 					{#each setNumbers(activeMatch) as setNumber (setNumber)}
 						<Tabs.Content value={String(setNumber)}>
 							<div class="max-h-[calc(min(52rem,100vh-2rem)-5.75rem)] overflow-y-auto">
-								<ScrimPickBanResultInputBoard />
+								<ScrimPickBanResultInputBoard
+									teams={resultTeams(activeMatch)}
+									initialGame={gameForSet(activeMatch, setNumber)}
+									onSubmit={(game) => submitGameResult(activeMatch, setNumber, game)}
+								/>
 							</div>
 						</Tabs.Content>
 					{/each}
 				</Tabs.Root>
-			{:else}
+			{:else if activeMatch}
 				<div class="max-h-[calc(min(52rem,100vh-2rem)-3rem)] overflow-y-auto">
-					<ScrimPickBanResultInputBoard />
+					<ScrimPickBanResultInputBoard
+						teams={resultTeams(activeMatch)}
+						initialGame={gameForSet(activeMatch, 1)}
+						onSubmit={(game) => submitGameResult(activeMatch, 1, game)}
+					/>
 				</div>
 			{/if}
 		</Dialog.Content>

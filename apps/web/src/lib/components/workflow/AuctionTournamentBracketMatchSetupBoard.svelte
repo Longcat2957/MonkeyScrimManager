@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { Lock, X } from 'lucide-svelte';
 	import { type MockAuctionTeam } from '$lib/fixtures/workflow';
+	import type {
+		AuctionBracketSetupCommand,
+		AuctionBracketSetupSnapshot,
+		AuctionBracketSlotKey
+	} from '$lib/realtime/auction';
 	import PlayerAvatar from './PlayerAvatar.svelte';
 
 	type MatchId = 'A' | 'B';
-	type SlotKey = `${MatchId}_${0 | 1}`;
+	type SlotKey = AuctionBracketSlotKey;
 
 	interface BracketMatch {
 		id: MatchId;
@@ -13,10 +18,12 @@
 
 	interface Props {
 		teams: MockAuctionTeam[];
+		snapshot: AuctionBracketSetupSnapshot;
+		onCommand: (command: AuctionBracketSetupCommand) => void | Promise<void>;
 		profileIconVersion?: string | null;
 	}
 
-	let { teams, profileIconVersion = null }: Props = $props();
+	let { teams, snapshot, onCommand, profileIconVersion = null }: Props = $props();
 
 	const semifinalMatches: BracketMatch[] = [
 		{ id: 'A', name: '준결승 A' },
@@ -31,12 +38,7 @@
 		matches.flatMap((match) => matchSlotIndexes.map((slot) => slotKey(match.id, slot)))
 	);
 
-	let bracket = $state<Record<SlotKey, string | null>>({
-		A_0: null,
-		A_1: null,
-		B_0: null,
-		B_1: null
-	});
+	const bracket = $derived(snapshot.assignments);
 	let draggedTeamId = $state<string | null>(null);
 	let overSlotKey = $state<SlotKey | null>(null);
 
@@ -56,23 +58,27 @@
 	}
 
 	function assignTeam(targetSlotKey: SlotKey, teamId: string) {
-		bracket = Object.fromEntries(
-			activeSlotKeys.map((currentSlotKey) => [
-				currentSlotKey,
-				currentSlotKey === targetSlotKey
-					? teamId
-					: bracket[currentSlotKey] === teamId
-						? null
-						: bracket[currentSlotKey]
-			])
-		) as Record<SlotKey, string | null>;
+		if (snapshot.locked) return;
+		void onCommand({
+			kind: 'ASSIGN_TEAM',
+			slot: targetSlotKey,
+			teamId,
+			expectedRevision: snapshot.revision
+		});
 	}
 
 	function clearSlot(targetSlotKey: SlotKey) {
-		bracket = {
-			...bracket,
-			[targetSlotKey]: null
-		};
+		if (snapshot.locked) return;
+		void onCommand({
+			kind: 'CLEAR_SLOT',
+			slot: targetSlotKey,
+			expectedRevision: snapshot.revision
+		});
+	}
+
+	function lockBracket() {
+		if (!ready || snapshot.locked) return;
+		void onCommand({ kind: 'LOCK_BRACKET', expectedRevision: snapshot.revision });
 	}
 
 	function startTeamDrag(event: globalThis.DragEvent, team: MockAuctionTeam) {
@@ -130,7 +136,7 @@
 				{#each availableTeams as team (team.id)}
 					<div
 						role="listitem"
-						draggable="true"
+						draggable={!snapshot.locked}
 						ondragstart={(event) => startTeamDrag(event, team)}
 						ondragend={clearDragState}
 						class={`grid min-h-20 cursor-grab bg-slate-950/20 px-3 py-3 active:cursor-grabbing ${
@@ -210,6 +216,7 @@
 												type="button"
 												class="grid size-9 place-items-center border border-rose-300/25 bg-rose-500/10 text-rose-200 hover:border-rose-300/45 hover:bg-rose-500/16"
 												aria-label={`${team.name} 슬롯 비우기`}
+												disabled={snapshot.locked}
 												onclick={() => clearSlot(currentSlotKey)}
 											>
 												<X size={17} />
@@ -267,10 +274,11 @@
 				<button
 					type="button"
 					class="inline-flex h-12 w-full items-center justify-center gap-2 border border-emerald-300/35 bg-emerald-400/14 px-4 text-base font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-40"
-					disabled={!ready}
+					disabled={!ready || snapshot.locked}
+					onclick={lockBracket}
 				>
 					<Lock size={16} />
-					대진 확정
+					{snapshot.locked ? '대진 확정됨' : '대진 확정'}
 				</button>
 			</div>
 		</section>

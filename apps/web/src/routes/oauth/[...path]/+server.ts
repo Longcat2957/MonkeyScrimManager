@@ -20,7 +20,8 @@ export const fallback: RequestHandler = async ({ request, params, url, fetch }) 
 		method: request.method,
 		headers: request.headers,
 		body: request.body,
-		duplex: 'half'
+		duplex: 'half',
+		redirect: 'manual'
 	};
 
 	return fetch(upstream, init);

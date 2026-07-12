@@ -8,6 +8,7 @@
 		type QuickRecordSearchResult
 	} from '$lib/fixtures/quickRecordSearch';
 	import { laneLabel, type MockAuctionMember, type MockAuctionTeam } from '$lib/fixtures/workflow';
+	import type { AuctionDraftCommand } from '$lib/realtime/auction';
 	import QuickRecordChampionRow from '$lib/components/fab/QuickRecordChampionRow.svelte';
 	import PlayerAvatar from './PlayerAvatar.svelte';
 	import PositionIcon from './PositionIcon.svelte';
@@ -15,6 +16,8 @@
 	interface Props {
 		initialTeams: MockAuctionTeam[];
 		initialQueue: MockAuctionMember[];
+		revision: number;
+		onCommand: (command: AuctionDraftCommand) => void | Promise<void>;
 		profileIconVersion?: string | null;
 	}
 
@@ -27,7 +30,13 @@
 		previousPoints: number | null;
 	}
 
-	let { initialTeams, initialQueue, profileIconVersion = null }: Props = $props();
+	let {
+		initialTeams,
+		initialQueue,
+		revision,
+		onCommand,
+		profileIconVersion = null
+	}: Props = $props();
 
 	const quickRecordLaneLabel: Record<MockAuctionMember['role'], QuickRecordLane> = {
 		TOP: '탑',
@@ -82,8 +91,9 @@
 		}));
 	}
 
-	function drawNext() {
+	async function drawNext() {
 		if (!canDraw) return;
+		await onCommand({ kind: 'DRAW_NEXT', expectedRevision: revision });
 		const [next, ...rest] = candidateQueue;
 		if (!next) return;
 		currentTarget = next;
@@ -91,8 +101,13 @@
 		resetTargetInteraction();
 	}
 
-	function cancelDraw() {
+	async function cancelDraw() {
 		if (!currentTarget) return;
+		await onCommand({
+			kind: 'MARK_UNSOLD',
+			memberId: currentTarget.id,
+			expectedRevision: revision
+		});
 		unsold = [...unsold, currentTarget];
 		lastRevertableAction = {
 			kind: 'UNSOLD',
@@ -138,7 +153,7 @@
 		return team.points >= points;
 	}
 
-	function finalizeBid(teamId: string) {
+	async function finalizeBid(teamId: string) {
 		if (!currentTarget) return;
 		const team = teams.find((item) => item.id === teamId);
 		if (!team) return;
@@ -152,6 +167,13 @@
 		if (team.points < points) {
 			return;
 		}
+		await onCommand({
+			kind: 'AWARD_BID',
+			memberId: currentTarget.id,
+			teamId,
+			points,
+			expectedRevision: revision
+		});
 
 		const target = currentTarget;
 		const acquired: MockAuctionMember = {
@@ -180,13 +202,19 @@
 		resetTargetInteraction();
 	}
 
-	function assignCurrentTargetToTeam(teamId: string) {
+	async function assignCurrentTargetToTeam(teamId: string) {
 		if (!currentTarget) return;
 		const team = teams.find((item) => item.id === teamId);
 		if (!team) return;
 		if (team.members.length >= 5) {
 			return;
 		}
+		await onCommand({
+			kind: 'ASSIGN_CURRENT',
+			memberId: currentTarget.id,
+			teamId,
+			expectedRevision: revision
+		});
 
 		const target = currentTarget;
 		const acquired: MockAuctionMember = {
@@ -209,10 +237,16 @@
 		resetTargetInteraction();
 	}
 
-	function assignUnsoldMemberToTeam(teamId: string, memberId: string) {
+	async function assignUnsoldMemberToTeam(teamId: string, memberId: string) {
 		const team = teams.find((item) => item.id === teamId);
 		const target = unsold.find((member) => member.id === memberId);
 		if (!team || !target || team.members.length >= 5) return;
+		await onCommand({
+			kind: 'ASSIGN_UNSOLD',
+			memberId,
+			teamId,
+			expectedRevision: revision
+		});
 
 		const acquired: MockAuctionMember = {
 			...target,
@@ -234,18 +268,20 @@
 		resetTargetInteraction();
 	}
 
-	function restoreUnsoldToTarget(memberId: string) {
+	async function restoreUnsoldToTarget(memberId: string) {
 		if (currentTarget) return;
 		const target = unsold.find((member) => member.id === memberId);
 		if (!target) return;
+		await onCommand({ kind: 'RESTORE_UNSOLD', memberId, expectedRevision: revision });
 		unsold = unsold.filter((member) => member.id !== memberId);
 		currentTarget = target;
 		lastRevertableAction = null;
 		resetTargetInteraction();
 	}
 
-	function revertLastAction() {
+	async function revertLastAction() {
 		if (!lastRevertableAction || currentTarget) return;
+		await onCommand({ kind: 'REVERT_LAST', expectedRevision: revision });
 		const action = lastRevertableAction;
 
 		if (action.kind === 'UNSOLD') {

@@ -1,0 +1,1889 @@
+openapi: 3.1.0
+info:
+  title: MonkeyBot API
+  version: 0.1.0
+  description: Axum API contract. Domain operations are added only with their vertical slice.
+servers:
+  - url: https://monkeybot.lol
+  - url: https://dev.monkeybot.lol
+paths:
+  /oauth/discord/start:
+    get:
+      operationId: startDiscordOAuth
+      summary: Start Discord OAuth authorization
+      description: >-
+        Creates a single-use OAuth attempt and redirects the browser to Discord. The optional
+        next path must be a same-origin application path accepted by the backend allowlist.
+      parameters:
+        - name: next
+          in: query
+          required: false
+          description: Allowlisted same-origin path used after a successful callback.
+          schema:
+            type: string
+            default: /
+            example: /g/123456789012345678
+      responses:
+        '302':
+          description: Redirect to the Discord authorization endpoint.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Location:
+              $ref: '#/components/headers/RedirectLocation'
+            Set-Cookie:
+              $ref: '#/components/headers/OAuthStateCookie'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /oauth/callback:
+    get:
+      operationId: completeDiscordOAuth
+      summary: Complete Discord OAuth authorization
+      description: >-
+        Validates the single-use state and PKCE verifier, exchanges the Discord code, rotates the
+        server-side session, and redirects to the allowlisted path stored with the login attempt.
+      parameters:
+        - name: code
+          in: query
+          required: false
+          description: Discord authorization code. Required when Discord did not return an error.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+        - name: state
+          in: query
+          required: true
+          description: Single-use OAuth state that must match the binding cookie.
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 43
+        - name: error
+          in: query
+          required: false
+          description: OAuth error returned by Discord instead of an authorization code.
+          schema:
+            type: string
+            minLength: 1
+        - name: error_description
+          in: query
+          required: false
+          description: Optional Discord OAuth error description.
+          schema:
+            type: string
+      responses:
+        '303':
+          description: >-
+            Login completed. The response sets the host-only session and CSRF cookies, clears the
+            OAuth state binding cookie, and redirects with GET semantics.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Location:
+              $ref: '#/components/headers/RedirectLocation'
+            Set-Cookie:
+              $ref: '#/components/headers/AuthenticatedSessionCookies'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/logout:
+    post:
+      operationId: logout
+      summary: Revoke the current session
+      description: >-
+        Revokes the PostgreSQL session and expires both browser authentication cookies. The
+        X-CSRF-Token value must equal the monkeybot_csrf cookie value.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '200':
+          description: Session revoked and browser cookies expired.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/ClearedSessionCookies'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me:
+    get:
+      operationId: getCurrentUser
+      summary: Get the authenticated user
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: Current user and root redirect context.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/guilds:
+    get:
+      operationId: listCurrentUserGuilds
+      summary: List guilds accessible to the authenticated user
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: Active guild memberships with the current role in each guild.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeGuildsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/default-guild:
+    put:
+      operationId: updateDefaultGuild
+      summary: Update the authenticated user's default guild
+      description: >-
+        The selected guild must be an active guild membership. The X-CSRF-Token value must equal
+        the monkeybot_csrf cookie value.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDefaultGuildRequest'
+      responses:
+        '200':
+          description: Default guild updated.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefaultGuildResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/guilds/{guildId}/setup:
+    post:
+      operationId: setupGuildFromDiscord
+      summary: Set up or restore a guild from a Discord interaction
+      description: >-
+        Bot-only idempotent command. Upserts the Discord actor and guild, configures the operator
+        role, and creates the first active season when required. Replaying the same interaction
+        key and request returns the stored response.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupGuildRequest'
+      responses:
+        '200':
+          description: Guild setup completed or replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupGuildResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}:
+    get:
+      operationId: getGuildContext
+      summary: Get guild layout context
+      description: >-
+        Requires an active membership in the requested guild. Missing guilds and guilds outside
+        the current user's tenant scope both return 404.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: Guild metadata, current role, and active season.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildContextResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/operations:
+    get:
+      operationId: listGuildOperations
+      summary: List actionable guild operations
+      description: >-
+        Returns at most 100 actionable recruitment, series, and auction projections. Urgent rows
+        sort first, followed by updatedAt descending and a stable source/id tie-breaker.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: Current guild operation queue.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments:
+    get:
+      operationId: listGuildRecruitments
+      summary: List actionable general recruitments
+      description: >-
+        Lists closed, unconverted general recruitments ordered by updatedAt and opaque id
+        descending. A non-null nextCursor continues after the last returned row.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/ActionableState'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Actionable general recruitments.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createGuildRecruitment
+      summary: Create a 10-person general recruitment
+      description: >-
+        Bot interaction command. The actor must hold the guild's configured operator role. The
+        active guild season is selected by the backend and targetCount is always 10.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRecruitmentRequest'
+      responses:
+        '201':
+          description: Recruitment created or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/message:
+    put:
+      operationId: bindGuildRecruitmentMessage
+      summary: Bind the Discord recruitment message
+      description: >-
+        Stores the Discord channel and message snowflakes after the initial slash-command reply.
+        The actor must hold the configured operator role.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BindRecruitmentMessageRequest'
+      responses:
+        '200':
+          description: Message reference bound or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/members:
+    post:
+      operationId: joinGuildRecruitment
+      summary: Join a member to an open recruitment
+      description: >-
+        Upserts the Discord actor/member identity and joins the member while capacity remains. The
+        backend serializes capacity checks and treats PostgreSQL as the source of truth.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinRecruitmentRequest'
+      responses:
+        '200':
+          description: Member joined or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/members/{userId}:
+    delete:
+      operationId: leaveGuildRecruitment
+      summary: Leave a member from an open recruitment
+      description: >-
+        Withdraws the joined member and removes any entry assignment. A member can leave as
+        themselves; operator behavior is validated by the backend when a different user is
+        targeted.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActorRequest'
+      responses:
+        '200':
+          description: Member removed or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/members/{userId}/preferred-lanes:
+    put:
+      operationId: updateGuildRecruitmentPreferredLanes
+      summary: Update a joined member's preferred lanes
+      description: >-
+        Replaces the member's ordered preferred lane list. The target must already be a joined
+        participant and the list must contain one to five unique canonical lanes.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPreferredLanesRequest'
+      responses:
+        '200':
+          description: Preferred lanes updated or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/close:
+    post:
+      operationId: closeGuildRecruitmentForEntry
+      summary: Close a full recruitment and start entry editing
+      description: >-
+        The actor must hold the configured operator role. The recruitment must be OPEN with
+        exactly 10 joined participants; success returns the CLOSED snapshot and canonical entry
+        link.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActorRequest'
+      responses:
+        '200':
+          description: Recruitment closed or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/series:
+    get:
+      operationId: listGuildSeries
+      summary: List active or completed general series
+      description: >-
+        Lists the requested series state ordered by updatedAt and opaque id descending. Active
+        selects IN_PROGRESS; completed selects COMPLETED. A non-null nextCursor continues after
+        the last returned row.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/ActiveCompletedState'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Active or completed general series.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeriesListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments:
+    get:
+      operationId: listGuildAuctionRecruitments
+      summary: List actionable auction recruitments
+      description: >-
+        Lists closed, unconverted auction recruitments ordered by updatedAt and opaque id
+        descending. A non-null nextCursor continues after the last returned row.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/ActionableState'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Actionable auction recruitments.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments:
+    get:
+      operationId: listGuildAuctionTournaments
+      summary: List active or completed auction tournaments
+      description: >-
+        Lists the requested tournament state ordered by updatedAt and opaque id descending. Active
+        selects BIDDING, BRACKET_SETUP, and IN_GAME; completed selects COMPLETED. A non-null
+        nextCursor continues after the last returned row.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/ActiveCompletedState'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Active or completed auction tournaments.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /healthz:
+    get:
+      operationId: getLiveness
+      summary: Process liveness
+      responses:
+        '200':
+          description: The API process is alive.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessResponse'
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: Required dependency readiness
+      responses:
+        '200':
+          description: PostgreSQL and migration version are ready. Valkey may be degraded.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: PostgreSQL or migration readiness is unavailable.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  securitySchemes:
+    BotBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-service-token
+      description: >-
+        Bot service-principal credential. It is independent from Discord bot tokens and browser
+        session cookies and is compared against the configured backend secret.
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: monkeybot_session
+      description: Opaque host-only session token. The database stores only its SHA-256 hash.
+    CsrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: >-
+        Required for unsafe browser methods and must exactly match the readable monkeybot_csrf
+        cookie. Origin validation is applied independently.
+  parameters:
+    GuildId:
+      name: guildId
+      in: path
+      required: true
+      description: Discord guild snowflake encoded as a JSON/URL string.
+      schema:
+        $ref: '#/components/schemas/DiscordSnowflake'
+    RecruitmentId:
+      name: recruitmentId
+      in: path
+      required: true
+      description: Recruitment root UUID. It is not the guild-local display number.
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Discord user snowflake targeted by the recruitment interaction.
+      schema:
+        $ref: '#/components/schemas/DiscordSnowflake'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Discord interaction ID. Reuse with an identical route and request replays the stored
+        response; reuse with a different request returns idempotency_conflict.
+      schema:
+        $ref: '#/components/schemas/DiscordSnowflake'
+    ActionableState:
+      name: state
+      in: query
+      required: true
+      description: Select the actionable projection.
+      schema:
+        type: string
+        const: actionable
+    ActiveCompletedState:
+      name: state
+      in: query
+      required: true
+      description: Select active work or completed results.
+      schema:
+        type: string
+        enum: [active, completed]
+    PageCursor:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Opaque URL-safe cursor returned as nextCursor by the same endpoint and state query. Clients
+        must not inspect or construct its contents.
+      schema:
+        type: string
+        minLength: 1
+    PageLimit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of rows to return. Defaults to 50.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+  headers:
+    RequestId:
+      description: Backend-generated UUIDv7 request identifier.
+      schema:
+        type: string
+        format: uuid
+    RedirectLocation:
+      description: Absolute external authorization URL or allowlisted same-origin application URL.
+      schema:
+        type: string
+        format: uri-reference
+    OAuthStateCookie:
+      description: >-
+        `monkeybot_oauth_state`; host-only, HttpOnly, Secure, SameSite=Lax,
+        Path=/oauth/callback, Max-Age=300.
+      schema:
+        type: string
+        example: monkeybot_oauth_state=opaque; Path=/oauth/callback; Max-Age=300; Secure; HttpOnly; SameSite=Lax
+    AuthenticatedSessionCookies:
+      description: >-
+        Three separate Set-Cookie fields: `monkeybot_session` (host-only, HttpOnly, Secure,
+        SameSite=Lax, Path=/), `monkeybot_csrf` (host-only, Secure, SameSite=Lax, Path=/; readable
+        by the browser client), and `monkeybot_oauth_state` expired with Path=/oauth/callback.
+        They must not be folded into one comma-separated field.
+      schema:
+        type: array
+        items:
+          type: string
+    ClearedSessionCookies:
+      description: >-
+        Two separate Set-Cookie fields that expire `monkeybot_session` and `monkeybot_csrf` with
+        Path=/ and Max-Age=0. They must not be folded into one comma-separated field.
+      schema:
+        type: array
+        items:
+          type: string
+  responses:
+    BadRequest:
+      description: Invalid query, path, body, OAuth state, or OAuth callback shape.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: >-
+        Browser session or Bot bearer authentication is absent, invalid, expired, or revoked for
+        the requested principal type.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: CSRF or Origin validation failed, or the principal lacks the required role.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found, including a resource hidden by tenant isolation.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Revision, state, or idempotency conflict.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnprocessableEntity:
+      description: Domain invariant violation such as capacity, membership, or required lanes.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: A required dependency is temporarily unavailable.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: The OAuth start rate limit for the client address was exceeded.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: An internal invariant, stored-data, or programming error occurred.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    DiscordSnowflake:
+      type: string
+      pattern: '^[1-9][0-9]{0,19}$'
+      maxLength: 20
+      description: Canonical unsigned decimal value not greater than 18446744073709551615.
+      example: '123456789012345678'
+    Lane:
+      type: string
+      enum: [TOP, JUNGLE, MID, BOTTOM, SUPPORT]
+    DiscordActor:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, avatarHash, roleIds]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        avatarHash:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        roleIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiscordSnowflake'
+    SetupGuildRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, guildName, guildIconHash, operatorRoleId, seasonName]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        guildName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        guildIconHash:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        operatorRoleId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        seasonName:
+          type: string
+          minLength: 1
+          maxLength: 100
+    SetupGuildCurrentSeason:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+    SetupGuild:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, operatorRoleId, currentSeason, dashboardHref]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        operatorRoleId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        currentSeason:
+          $ref: '#/components/schemas/SetupGuildCurrentSeason'
+        dashboardHref:
+          type: string
+          format: uri-reference
+          pattern: '^/g/'
+    SetupGuildData:
+      type: object
+      additionalProperties: false
+      required: [guild]
+      properties:
+        guild:
+          $ref: '#/components/schemas/SetupGuild'
+    SetupGuildResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/SetupGuildData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    CreateRecruitmentRequest:
+      type: object
+      additionalProperties: false
+      required: [actor]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+    ActorRequest:
+      type: object
+      additionalProperties: false
+      required: [actor]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+    BindRecruitmentMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, channelId, messageId]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        channelId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        messageId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+    JoinRecruitmentRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, member]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        member:
+          $ref: '#/components/schemas/DiscordActor'
+    SetPreferredLanesRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, preferredLanes]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        preferredLanes:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Lane'
+    RecruitmentParticipant:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, preferredLanes]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        preferredLanes:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Lane'
+    RecruitmentMutationItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayNumber
+        - title
+        - status
+        - targetCount
+        - revision
+        - channelId
+        - messageId
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum: [OPEN, CLOSED, CANCELLED]
+        targetCount:
+          type: integer
+          const: 10
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        channelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        messageId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        updatedAt:
+          type: string
+          format: date-time
+    RecruitmentLinks:
+      type: object
+      additionalProperties: false
+      required: [entry]
+      properties:
+        entry:
+          type: string
+          format: uri-reference
+          pattern: '^/g/'
+    RecruitmentSnapshot:
+      type: object
+      additionalProperties: false
+      required: [recruitment, participants, links]
+      properties:
+        recruitment:
+          $ref: '#/components/schemas/RecruitmentMutationItem'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecruitmentParticipant'
+        links:
+          $ref: '#/components/schemas/RecruitmentLinks'
+    RecruitmentSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/RecruitmentSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    ResponseMeta:
+      type: object
+      additionalProperties: false
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+    LogoutData:
+      type: object
+      additionalProperties: false
+      required: [loggedOut]
+      properties:
+        loggedOut:
+          type: boolean
+          const: true
+    LogoutResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/LogoutData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    MeData:
+      type: object
+      additionalProperties: false
+      required: [discordId, displayName, avatarUrl, defaultGuildId, serviceAdmin]
+      properties:
+        discordId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        avatarUrl:
+          oneOf:
+            - type: string
+              format: uri
+            - type: 'null'
+        defaultGuildId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        serviceAdmin:
+          type: boolean
+    MeResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/MeData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildRole:
+      type: string
+      enum: [MEMBER, OPERATOR]
+    GuildAccessSummary:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, iconUrl, memberCount, currentUserRole]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        iconUrl:
+          oneOf:
+            - type: string
+              format: uri
+            - type: 'null'
+        memberCount:
+          type: integer
+          format: int64
+          minimum: 0
+        currentUserRole:
+          $ref: '#/components/schemas/GuildRole'
+    MeGuildsData:
+      type: object
+      additionalProperties: false
+      required: [guilds]
+      properties:
+        guilds:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuildAccessSummary'
+    MeGuildsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/MeGuildsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    UpdateDefaultGuildRequest:
+      type: object
+      additionalProperties: false
+      required: [guildId]
+      properties:
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+    DefaultGuildData:
+      type: object
+      additionalProperties: false
+      required: [defaultGuildId]
+      properties:
+        defaultGuildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+    DefaultGuildResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DefaultGuildData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    CurrentSeason:
+      type: object
+      additionalProperties: false
+      required: [id, name, startedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+        startedAt:
+          type: string
+          format: date-time
+    GuildContextData:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayName
+        - iconUrl
+        - memberCount
+        - currentUserRole
+        - isExternallyPublic
+        - currentSeason
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        iconUrl:
+          oneOf:
+            - type: string
+              format: uri
+            - type: 'null'
+        memberCount:
+          type: integer
+          format: int64
+          minimum: 0
+        currentUserRole:
+          $ref: '#/components/schemas/GuildRole'
+        isExternallyPublic:
+          type: boolean
+        currentSeason:
+          oneOf:
+            - $ref: '#/components/schemas/CurrentSeason'
+            - type: 'null'
+    GuildContextResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildContextData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    OpaquePageCursor:
+      type: string
+      minLength: 1
+      description: >-
+        Opaque URL-safe keyset cursor. Its encoding is an implementation detail and may change.
+    OperationItem:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, status, detail, updatedAt, href, priority]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          description: Stable projection identifier prefixed by its workflow source.
+        kind:
+          type: string
+          enum: [ENTRY, PICK_BAN, AUCTION]
+        title:
+          type: string
+        status:
+          type: string
+          description: Korean presentation label generated from the current workflow state.
+        detail:
+          type: string
+          description: Korean actionable summary generated from current aggregate data.
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC RFC 3339 timestamp.
+        href:
+          type: string
+          format: uri-reference
+        priority:
+          type: string
+          enum: [urgent, normal]
+    OperationsData:
+      type: object
+      additionalProperties: false
+      required: [operations]
+      properties:
+        operations:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/OperationItem'
+    OperationsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/OperationsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    RecruitmentListItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayNumber
+        - title
+        - status
+        - targetCount
+        - joinedCount
+        - assignedCount
+        - revision
+        - updatedAt
+        - href
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+        status:
+          type: string
+          const: CLOSED
+        targetCount:
+          type: integer
+          const: 10
+        joinedCount:
+          type: integer
+          format: int64
+          minimum: 0
+        assignedCount:
+          type: integer
+          format: int64
+          minimum: 0
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC RFC 3339 timestamp.
+        href:
+          type: string
+          format: uri-reference
+    RecruitmentListData:
+      type: object
+      additionalProperties: false
+      required: [recruitments, nextCursor]
+      properties:
+        recruitments:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/RecruitmentListItem'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/OpaquePageCursor'
+            - type: 'null'
+    RecruitmentListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/RecruitmentListData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    SeriesListItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayNumber
+        - title
+        - bestOf
+        - status
+        - team1Score
+        - team2Score
+        - winningTeam
+        - terminalReason
+        - currentSetNumber
+        - outcome
+        - updatedAt
+        - endedAt
+        - href
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+        bestOf:
+          type: integer
+          enum: [1, 3, 5]
+        status:
+          type: string
+          enum: [IN_PROGRESS, COMPLETED]
+        team1Score:
+          type: integer
+          format: int64
+          minimum: 0
+        team2Score:
+          type: integer
+          format: int64
+          minimum: 0
+        winningTeam:
+          oneOf:
+            - type: string
+              enum: [TEAM_1, TEAM_2]
+            - type: 'null'
+        terminalReason:
+          oneOf:
+            - type: string
+              enum: [SCORE_REACHED, EARLY_WIN, EARLY_DRAW]
+            - type: 'null'
+        currentSetNumber:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 5
+            - type: 'null'
+        outcome:
+          oneOf:
+            - type: string
+              enum: [TEAM_1, TEAM_2, DRAW]
+            - type: 'null'
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC RFC 3339 timestamp.
+        endedAt:
+          oneOf:
+            - type: string
+              format: date-time
+              description: UTC RFC 3339 timestamp.
+            - type: 'null'
+        href:
+          type: string
+          format: uri-reference
+    SeriesListData:
+      type: object
+      additionalProperties: false
+      required: [series, nextCursor]
+      properties:
+        series:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SeriesListItem'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/OpaquePageCursor'
+            - type: 'null'
+    SeriesListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/SeriesListData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionFormat:
+      type: string
+      enum: [TEN_PERSON, TWENTY_PERSON]
+    AuctionRecruitmentListItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayNumber
+        - title
+        - format
+        - participantCount
+        - joinedParticipantCount
+        - teamCount
+        - status
+        - revision
+        - updatedAt
+        - href
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+        format:
+          $ref: '#/components/schemas/AuctionFormat'
+        participantCount:
+          type: integer
+          enum: [10, 20]
+        joinedParticipantCount:
+          type: integer
+          format: int64
+          minimum: 0
+        teamCount:
+          type: integer
+          enum: [2, 4]
+        status:
+          type: string
+          const: CLOSED
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC RFC 3339 timestamp.
+        href:
+          type: string
+          format: uri-reference
+    AuctionRecruitmentListData:
+      type: object
+      additionalProperties: false
+      required: [recruitments, nextCursor]
+      properties:
+        recruitments:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AuctionRecruitmentListItem'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/OpaquePageCursor'
+            - type: 'null'
+    AuctionRecruitmentListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionRecruitmentListData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionMatchSummary:
+      type: object
+      additionalProperties: false
+      required: [id, label, matchKey, status, confirmedGameCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+          enum: [준결승 A, 준결승 B, 결승]
+        matchKey:
+          type: string
+          enum: [SEMIFINAL_A, SEMIFINAL_B, FINAL]
+        status:
+          type: string
+          enum: [LINEUP_PENDING, READY, IN_PROGRESS]
+        confirmedGameCount:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionChampionTeam:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    AuctionTournamentListItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayNumber
+        - title
+        - format
+        - participantCount
+        - teamCount
+        - status
+        - revision
+        - activeMemberCount
+        - bidMemberCount
+        - incompleteMatchCount
+        - nextMatch
+        - championTeam
+        - updatedAt
+        - endedAt
+        - href
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+        format:
+          $ref: '#/components/schemas/AuctionFormat'
+        participantCount:
+          type: integer
+          enum: [10, 20]
+        teamCount:
+          type: integer
+          enum: [2, 4]
+        status:
+          type: string
+          enum: [BIDDING, BRACKET_SETUP, IN_GAME, COMPLETED]
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        activeMemberCount:
+          type: integer
+          format: int64
+          minimum: 0
+        bidMemberCount:
+          type: integer
+          format: int64
+          minimum: 0
+        incompleteMatchCount:
+          type: integer
+          format: int64
+          minimum: 0
+        nextMatch:
+          oneOf:
+            - $ref: '#/components/schemas/AuctionMatchSummary'
+            - type: 'null'
+        championTeam:
+          oneOf:
+            - $ref: '#/components/schemas/AuctionChampionTeam'
+            - type: 'null'
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC RFC 3339 timestamp.
+        endedAt:
+          oneOf:
+            - type: string
+              format: date-time
+              description: UTC RFC 3339 timestamp.
+            - type: 'null'
+        href:
+          type: string
+          format: uri-reference
+    AuctionTournamentListData:
+      type: object
+      additionalProperties: false
+      required: [tournaments, nextCursor]
+      properties:
+        tournaments:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AuctionTournamentListItem'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/OpaquePageCursor'
+            - type: 'null'
+    AuctionTournamentListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentListData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    LivenessData:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          const: ok
+    LivenessResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/LivenessData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    ComponentStatus:
+      type: string
+      enum: [available, unavailable, not_configured]
+    DependencySnapshot:
+      type: object
+      additionalProperties: false
+      required: [postgres, migration, valkey]
+      properties:
+        postgres:
+          $ref: '#/components/schemas/ComponentStatus'
+        migration:
+          $ref: '#/components/schemas/ComponentStatus'
+        valkey:
+          $ref: '#/components/schemas/ComponentStatus'
+    ReadinessData:
+      type: object
+      additionalProperties: false
+      required: [status, acceptingRequests, dependencies]
+      properties:
+        status:
+          type: string
+          enum: [ready, degraded, not_ready]
+        acceptingRequests:
+          type: boolean
+        dependencies:
+          $ref: '#/components/schemas/DependencySnapshot'
+    ReadinessResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ReadinessData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    ErrorBody:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+        details: {}
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'

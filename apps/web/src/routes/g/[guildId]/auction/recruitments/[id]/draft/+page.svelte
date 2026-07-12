@@ -16,7 +16,7 @@
 
 	let { data }: PageProps = $props();
 
-	const isTenPerson = $derived(data.recruitmentId.startsWith('ar10-'));
+	const isTenPerson = $derived(data.recruitment.format === 'TEN_PERSON');
 	const recruitmentMembers = $derived(
 		isTenPerson ? mockAuctionRecruitmentMembers10 : mockAuctionRecruitmentMembers
 	);
@@ -38,7 +38,7 @@
 			<a
 				href={resolve('/g/[guildId]/auction/tournaments/[id]/draft', {
 					guildId: data.guildId,
-					id: isTenPerson ? 'a10-118' : 'a20-118'
+					id: data.recruitment.nextTournamentId
 				})}
 				class="inline-flex h-10 items-center gap-2 border border-cyan-400/35 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-100"
 			>
