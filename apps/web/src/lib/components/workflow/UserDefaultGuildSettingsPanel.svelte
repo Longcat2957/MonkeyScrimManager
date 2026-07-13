@@ -10,9 +10,10 @@
 	}
 
 	let { initialGuildId, guilds, onSave }: Props = $props();
-	const startingGuildId = untrack(() => initialGuildId ?? guilds[0]?.id ?? '');
-	let savedGuildId = $state(startingGuildId);
-	let draftGuildId = $state(startingGuildId);
+	const startingSavedGuildId = untrack(() => initialGuildId ?? '');
+	const startingDraftGuildId = untrack(() => initialGuildId ?? guilds[0]?.id ?? '');
+	let savedGuildId = $state(startingSavedGuildId);
+	let draftGuildId = $state(startingDraftGuildId);
 	let savedNotice = $state(false);
 	let submitting = $state(false);
 	let saveError = $state(false);
@@ -76,7 +77,8 @@
 			<button
 				type="button"
 				class="inline-flex h-8 items-center gap-1.5 border border-cyan-400/45 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-100 enabled:hover:bg-cyan-400/15 disabled:opacity-35"
-				disabled={!dirty}
+				disabled={!dirty || submitting}
+				aria-label="대표 길드 저장"
 				onclick={save}
 			>
 				<Save size={14} aria-hidden="true" />
@@ -99,11 +101,13 @@
 			<select
 				bind:value={draftGuildId}
 				onchange={() => (savedNotice = false)}
-				disabled={guilds.length === 0}
+				disabled={guilds.length === 0 || submitting}
 				class="h-11 w-full appearance-none border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 pr-10 text-sm font-semibold text-slate-100 outline-none hover:border-cyan-400/35 focus:border-cyan-400/50"
 			>
 				{#if guilds.length === 0}
 					<option value="">선택 가능한 길드 없음</option>
+				{:else if !savedGuildId}
+					<option value="" disabled>대표 길드 미설정</option>
 				{/if}
 				{#each guilds as guild (guild.id)}
 					<option value={guild.id}

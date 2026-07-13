@@ -14,8 +14,13 @@ export const load: PageLoad = async ({ fetch, url, data }) => {
 		user: data.user,
 		guilds: data.guilds,
 		riotAccounts: data.riotAccounts,
-		championCatalog: await loadChampionCatalog(fetch, {
-			fixtureUrl: STATIC_CHAMPION_FIXTURE_URL
-		})
+		championPreferences: data.championPreferences,
+		privacySettings: data.privacySettings,
+		championCatalog:
+			initialTab === 'champions'
+				? await loadChampionCatalog(fetch, {
+						fixtureUrl: STATIC_CHAMPION_FIXTURE_URL
+					})
+				: null
 	};
 };

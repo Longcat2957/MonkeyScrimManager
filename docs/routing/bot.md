@@ -512,7 +512,7 @@ Audit:
 
 Web link:
 
-- `/g/{guildId}/admin?tab=operations`.
+- MVP에서는 제공하지 않는다. 롤백 기능을 도입할 때 별도 관리 진입점을 확정한다.
 
 ### `/유저비활성화 discord_id`
 

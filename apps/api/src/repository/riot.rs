@@ -1,10 +1,23 @@
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use thiserror::Error;
 use time::OffsetDateTime;
+use unicode_casefold::UnicodeCaseFold;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::domain::DiscordUserId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanonicalRiotAccount {
+    pub puuid: String,
+    pub platform: String,
+    pub routing_region: String,
+    pub game_name: String,
+    pub tag_line: String,
+    pub profile_icon_id: Option<i32>,
+    pub last_synced_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Eq, PartialEq)]
 pub struct RiotAccountRecord {
     pub puuid: String,
     pub platform: String,
@@ -20,16 +33,6 @@ pub struct RiotAccountRecord {
     pub last_synced_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct NewRiotAccount {
-    pub user_id: DiscordUserId,
-    pub puuid: String,
-    pub platform: String,
-    pub routing_region: String,
-    pub game_name: String,
-    pub tag_line: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,20 +54,12 @@ pub async fn list_accounts(
     pool: &PgPool,
     user_id: &DiscordUserId,
 ) -> Result<Vec<RiotAccountRecord>, RiotRepositoryError> {
-    let rows = sqlx::query_as::<_, RiotAccountRow>(
-        "SELECT puuid, platform, routing_region, game_name, tag_line,
-                normalized_game_name, normalized_tag_line, profile_icon_id,
-                is_main, main_position, main_position_updated_at,
-                last_synced_at, created_at, updated_at
-         FROM riot_accounts
-         WHERE user_id = $1
-         ORDER BY is_main DESC, created_at DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows.into_iter().map(RiotAccountRecord::from).collect())
+    let accounts = sqlx::query_as::<_, RiotAccountRecord>(ACCOUNT_SELECT)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+    verify_main_invariant(&accounts)?;
+    Ok(accounts)
 }
 
 pub async fn get_account(
@@ -72,7 +67,7 @@ pub async fn get_account(
     user_id: &DiscordUserId,
     puuid: &str,
 ) -> Result<Option<RiotAccountRecord>, RiotRepositoryError> {
-    let row = sqlx::query_as::<_, RiotAccountRow>(
+    let row = sqlx::query_as::<_, RiotAccountRecord>(
         "SELECT puuid, platform, routing_region, game_name, tag_line,
                 normalized_game_name, normalized_tag_line, profile_icon_id,
                 is_main, main_position, main_position_updated_at,
@@ -84,184 +79,152 @@ pub async fn get_account(
     .bind(puuid)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(RiotAccountRecord::from))
+    Ok(row)
 }
 
-pub async fn add_account(
-    pool: &PgPool,
-    request: NewRiotAccount,
-) -> Result<RiotAccountRecord, RiotRepositoryError> {
-    let mut transaction = pool.begin().await?;
-    let normalized_game_name = normalize_riot_id(&request.game_name)?;
-    let normalized_tag_line = normalize_riot_id(&request.tag_line)?;
-
-    let existing =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM riot_accounts WHERE user_id = $1")
-            .bind(&request.user_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-    let is_main = existing == 0;
-
-    let row = sqlx::query_as::<_, RiotAccountRow>(
-        "INSERT INTO riot_accounts (
-             puuid, user_id, platform, routing_region,
-             game_name, tag_line, normalized_game_name, normalized_tag_line,
-             profile_icon_id, is_main, main_position, main_position_updated_at,
-             last_synced_at, created_at, updated_at
-         ) VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8,
-             NULL, $9, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-         )
-         RETURNING puuid, platform, routing_region, game_name, tag_line,
-                   normalized_game_name, normalized_tag_line, profile_icon_id,
-                   is_main, main_position, main_position_updated_at,
-                   last_synced_at, created_at, updated_at",
-    )
-    .bind(&request.puuid)
-    .bind(&request.user_id)
-    .bind(&request.platform)
-    .bind(&request.routing_region)
-    .bind(&request.game_name)
-    .bind(&request.tag_line)
-    .bind(&normalized_game_name)
-    .bind(&normalized_tag_line)
-    .bind(is_main)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| match error {
-        sqlx::Error::Database(err) if is_unique_violation(err.as_ref()) => {
-            RiotRepositoryError::DuplicateAccount
-        }
-        error => RiotRepositoryError::Sql(error),
-    })?;
-
-    let row = row.ok_or_else(|| RiotRepositoryError::InvalidAccountData)?;
-    transaction.commit().await?;
-    Ok(row.into())
-}
-
-pub async fn delete_account(
+pub async fn link_account(
     pool: &PgPool,
     user_id: &DiscordUserId,
-    puuid: &str,
-) -> Result<Option<RiotAccountRecord>, RiotRepositoryError> {
+    account: &CanonicalRiotAccount,
+) -> Result<Vec<RiotAccountRecord>, RiotRepositoryError> {
+    let (normalized_game_name, normalized_tag_line) = normalized_identity(account)?;
     let mut transaction = pool.begin().await?;
+    lock_user(&mut transaction, user_id).await?;
 
-    let deleted = sqlx::query_as::<_, RiotAccountRow>(
-        "DELETE FROM riot_accounts
-         WHERE user_id = $1 AND puuid = $2
-         RETURNING puuid, platform, routing_region, game_name, tag_line,
-                   normalized_game_name, normalized_tag_line, profile_icon_id,
-                   is_main, main_position, main_position_updated_at,
-                   last_synced_at, created_at, updated_at",
+    let existing_owner = sqlx::query_scalar::<_, String>(
+        "SELECT user_id FROM riot_accounts WHERE puuid = $1 FOR UPDATE",
     )
-    .bind(user_id)
-    .bind(puuid)
+    .bind(&account.puuid)
     .fetch_optional(&mut *transaction)
     .await?;
 
-    if let Some(deleted) = deleted {
-        let deleted = RiotAccountRecord::from(deleted);
-
-        if deleted.is_main {
-            let remaining = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM riot_accounts WHERE user_id = $1",
+    match existing_owner {
+        Some(owner) if owner != user_id.as_str() => {
+            return Err(RiotRepositoryError::AlreadyLinked);
+        }
+        Some(_) => {
+            update_canonical_identity(
+                &mut transaction,
+                user_id,
+                account,
+                &normalized_game_name,
+                &normalized_tag_line,
+            )
+            .await?;
+        }
+        None => {
+            let has_account = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM riot_accounts WHERE user_id = $1)",
             )
             .bind(user_id)
             .fetch_one(&mut *transaction)
             .await?;
-            if remaining > 0 {
-                sqlx::query(
-                    "UPDATE riot_accounts
-                     SET is_main = TRUE
-                     WHERE user_id = $1
-                       AND puuid = (
-                         SELECT puuid
-                         FROM riot_accounts
-                         WHERE user_id = $1
-                         ORDER BY created_at ASC
-                         LIMIT 1
-                     )",
-                )
-                .bind(user_id)
-                .execute(&mut *transaction)
-                .await?;
-            }
-        }
 
-        transaction.commit().await?;
-        return Ok(Some(deleted));
+            sqlx::query(
+                "INSERT INTO riot_accounts (
+                    puuid, user_id, platform, routing_region,
+                    game_name, tag_line, normalized_game_name, normalized_tag_line,
+                    profile_icon_id, is_main, main_position, main_position_updated_at,
+                    last_synced_at, created_at, updated_at
+                 ) VALUES (
+                    $1, $2, $3, $4,
+                    $5, $6, $7, $8,
+                    $9, $10, NULL, NULL,
+                    $11, clock_timestamp(), clock_timestamp()
+                 )",
+            )
+            .bind(&account.puuid)
+            .bind(user_id)
+            .bind(&account.platform)
+            .bind(&account.routing_region)
+            .bind(&account.game_name)
+            .bind(&account.tag_line)
+            .bind(&normalized_game_name)
+            .bind(&normalized_tag_line)
+            .bind(account.profile_icon_id)
+            .bind(!has_account)
+            .bind(account.last_synced_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_write_error)?;
+        }
     }
 
-    transaction.commit().await?;
-    Ok(None)
+    finish_account_mutation(transaction, user_id).await
+}
+
+pub async fn refresh_account(
+    pool: &PgPool,
+    user_id: &DiscordUserId,
+    account: &CanonicalRiotAccount,
+) -> Result<Vec<RiotAccountRecord>, RiotRepositoryError> {
+    let (normalized_game_name, normalized_tag_line) = normalized_identity(account)?;
+    let mut transaction = pool.begin().await?;
+    lock_user(&mut transaction, user_id).await?;
+    require_owned_account(&mut transaction, user_id, &account.puuid).await?;
+    update_canonical_identity(
+        &mut transaction,
+        user_id,
+        account,
+        &normalized_game_name,
+        &normalized_tag_line,
+    )
+    .await?;
+    finish_account_mutation(transaction, user_id).await
 }
 
 pub async fn set_main_account(
     pool: &PgPool,
     user_id: &DiscordUserId,
     puuid: &str,
-) -> Result<Option<RiotAccountRecord>, RiotRepositoryError> {
+) -> Result<Vec<RiotAccountRecord>, RiotRepositoryError> {
     let mut transaction = pool.begin().await?;
+    lock_user(&mut transaction, user_id).await?;
+    require_owned_account(&mut transaction, user_id, puuid).await?;
 
-    let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM riot_accounts WHERE user_id = $1 AND puuid = $2)",
+    sqlx::query(
+        "UPDATE riot_accounts
+         SET is_main = false, updated_at = clock_timestamp()
+         WHERE user_id = $1 AND is_main",
+    )
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE riot_accounts
+         SET is_main = true, updated_at = clock_timestamp()
+         WHERE user_id = $1 AND puuid = $2",
     )
     .bind(user_id)
     .bind(puuid)
-    .fetch_one(&mut *transaction)
+    .execute(&mut *transaction)
     .await?;
-    if !exists {
-        transaction.commit().await?;
-        return Ok(None);
-    }
 
-    sqlx::query("UPDATE riot_accounts SET is_main = FALSE WHERE user_id = $1")
-        .bind(user_id)
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query("UPDATE riot_accounts SET is_main = TRUE WHERE user_id = $1 AND puuid = $2")
-        .bind(user_id)
-        .bind(puuid)
-        .execute(&mut *transaction)
-        .await?;
+    finish_account_mutation(transaction, user_id).await
+}
 
-    let row = sqlx::query_as::<_, RiotAccountRow>(
-        "SELECT puuid, platform, routing_region, game_name, tag_line,
-                normalized_game_name, normalized_tag_line, profile_icon_id,
-                is_main, main_position, main_position_updated_at,
-                last_synced_at, created_at, updated_at
-         FROM riot_accounts
-         WHERE user_id = $1 AND puuid = $2",
+pub async fn delete_account(
+    pool: &PgPool,
+    user_id: &DiscordUserId,
+    puuid: &str,
+) -> Result<Vec<RiotAccountRecord>, RiotRepositoryError> {
+    let mut transaction = pool.begin().await?;
+    lock_user(&mut transaction, user_id).await?;
+
+    let deleted = sqlx::query_scalar::<_, String>(
+        "DELETE FROM riot_accounts
+         WHERE user_id = $1 AND puuid = $2
+         RETURNING puuid",
     )
     .bind(user_id)
     .bind(puuid)
     .fetch_optional(&mut *transaction)
     .await?;
-    transaction.commit().await?;
-    Ok(row.map(RiotAccountRecord::from))
-}
+    if deleted.is_none() {
+        return Err(RiotRepositoryError::NotFound);
+    }
 
-pub async fn touch_last_synced_at(
-    pool: &PgPool,
-    user_id: &DiscordUserId,
-    puuid: &str,
-) -> Result<Option<RiotAccountRecord>, RiotRepositoryError> {
-    let row = sqlx::query_as::<_, RiotAccountRow>(
-        "UPDATE riot_accounts
-         SET last_synced_at = CURRENT_TIMESTAMP,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE user_id = $1 AND puuid = $2
-         RETURNING puuid, platform, routing_region, game_name, tag_line,
-                   normalized_game_name, normalized_tag_line, profile_icon_id,
-                   is_main, main_position, main_position_updated_at,
-                   last_synced_at, created_at, updated_at",
-    )
-    .bind(user_id)
-    .bind(puuid)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(RiotAccountRecord::from))
+    finish_account_mutation(transaction, user_id).await
 }
 
 pub async fn get_privacy_settings(
@@ -269,7 +232,8 @@ pub async fn get_privacy_settings(
     user_id: &DiscordUserId,
 ) -> Result<UserPrivacySettings, RiotRepositoryError> {
     let row = sqlx::query_as::<_, UserPrivacyRow>(
-        "SELECT public_profile_enabled, show_riot_ids, allow_external_record_search, updated_at
+        "SELECT public_profile_enabled, show_riot_ids,
+                allow_external_record_search, updated_at
          FROM user_privacy_settings
          WHERE user_id = $1",
     )
@@ -296,14 +260,14 @@ pub async fn upsert_privacy_settings(
         "INSERT INTO user_privacy_settings (
              user_id, public_profile_enabled, show_riot_ids,
              allow_external_record_search, updated_at
-         ) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-         ON CONFLICT (user_id)
-           DO UPDATE SET
-             public_profile_enabled = EXCLUDED.public_profile_enabled,
+         ) VALUES ($1, $2, $3, $4, clock_timestamp())
+         ON CONFLICT (user_id) DO UPDATE
+         SET public_profile_enabled = EXCLUDED.public_profile_enabled,
              show_riot_ids = EXCLUDED.show_riot_ids,
              allow_external_record_search = EXCLUDED.allow_external_record_search,
-             updated_at = CURRENT_TIMESTAMP
-         RETURNING public_profile_enabled, show_riot_ids, allow_external_record_search, updated_at",
+             updated_at = EXCLUDED.updated_at
+         RETURNING public_profile_enabled, show_riot_ids,
+                   allow_external_record_search, updated_at",
     )
     .bind(user_id)
     .bind(settings.public_profile_enabled)
@@ -311,93 +275,198 @@ pub async fn upsert_privacy_settings(
     .bind(settings.allow_external_record_search)
     .fetch_one(pool)
     .await?;
-
     Ok(row.into_record())
 }
 
-fn normalize_riot_id(value: &str) -> Result<String, RiotRepositoryError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(RiotRepositoryError::InvalidInput);
-    }
-    if trimmed.len() > 64 {
-        return Err(RiotRepositoryError::InvalidInput);
-    }
+pub fn normalize_riot_id_v1(value: &str) -> String {
+    let nfkc = value.nfkc().collect::<String>();
+    nfkc.trim().case_fold().collect()
+}
 
-    let normalized = trimmed.to_lowercase();
-    if normalized.is_empty() {
-        Err(RiotRepositoryError::InvalidInput)
-    } else {
-        Ok(normalized)
+async fn update_canonical_identity(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: &DiscordUserId,
+    account: &CanonicalRiotAccount,
+    normalized_game_name: &str,
+    normalized_tag_line: &str,
+) -> Result<(), RiotRepositoryError> {
+    let result = sqlx::query(
+        "UPDATE riot_accounts
+         SET platform = $3,
+             routing_region = $4,
+             game_name = $5,
+             tag_line = $6,
+             normalized_game_name = $7,
+             normalized_tag_line = $8,
+             profile_icon_id = $9,
+             last_synced_at = $10,
+             updated_at = clock_timestamp()
+         WHERE puuid = $1 AND user_id = $2",
+    )
+    .bind(&account.puuid)
+    .bind(user_id)
+    .bind(&account.platform)
+    .bind(&account.routing_region)
+    .bind(&account.game_name)
+    .bind(&account.tag_line)
+    .bind(normalized_game_name)
+    .bind(normalized_tag_line)
+    .bind(account.profile_icon_id)
+    .bind(account.last_synced_at)
+    .execute(&mut **transaction)
+    .await
+    .map_err(map_write_error)?;
+    if result.rows_affected() == 0 {
+        return Err(RiotRepositoryError::NotFound);
+    }
+    Ok(())
+}
+
+fn normalized_identity(
+    account: &CanonicalRiotAccount,
+) -> Result<(String, String), RiotRepositoryError> {
+    let game_name = normalize_riot_id_v1(&account.game_name);
+    let tag_line = normalize_riot_id_v1(&account.tag_line);
+    if account.puuid.is_empty()
+        || account.platform.is_empty()
+        || account.routing_region.is_empty()
+        || game_name.is_empty()
+        || tag_line.is_empty()
+    {
+        return Err(RiotRepositoryError::InvalidCanonicalAccount);
+    }
+    Ok((game_name, tag_line))
+}
+
+async fn lock_user(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: &DiscordUserId,
+) -> Result<(), RiotRepositoryError> {
+    let exists = sqlx::query_scalar::<_, String>(
+        "SELECT discord_id
+         FROM users
+         WHERE discord_id = $1 AND deleted_at IS NULL
+         FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if exists.is_none() {
+        return Err(RiotRepositoryError::UserNotFound);
+    }
+    Ok(())
+}
+
+async fn require_owned_account(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: &DiscordUserId,
+    puuid: &str,
+) -> Result<(), RiotRepositoryError> {
+    let exists = sqlx::query_scalar::<_, String>(
+        "SELECT puuid
+         FROM riot_accounts
+         WHERE user_id = $1 AND puuid = $2
+         FOR UPDATE",
+    )
+    .bind(user_id)
+    .bind(puuid)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if exists.is_none() {
+        return Err(RiotRepositoryError::NotFound);
+    }
+    Ok(())
+}
+
+async fn finish_account_mutation(
+    mut transaction: Transaction<'_, Postgres>,
+    user_id: &DiscordUserId,
+) -> Result<Vec<RiotAccountRecord>, RiotRepositoryError> {
+    ensure_one_main(&mut transaction, user_id).await?;
+    let accounts = list_in_transaction(&mut transaction, user_id).await?;
+    transaction.commit().await?;
+    Ok(accounts)
+}
+
+async fn ensure_one_main(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: &DiscordUserId,
+) -> Result<(), RiotRepositoryError> {
+    let counts = sqlx::query_as::<_, MainCounts>(
+        "SELECT count(*) AS account_count,
+                count(*) FILTER (WHERE is_main) AS main_count
+         FROM riot_accounts
+         WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if counts.main_count > 1 {
+        return Err(RiotRepositoryError::InvariantViolation);
+    }
+    if counts.account_count > 0 && counts.main_count == 0 {
+        sqlx::query(
+            "UPDATE riot_accounts
+             SET is_main = true, updated_at = clock_timestamp()
+             WHERE puuid = (
+                 SELECT puuid
+                 FROM riot_accounts
+                 WHERE user_id = $1
+                 ORDER BY created_at, puuid
+                 LIMIT 1
+             )",
+        )
+        .bind(user_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn list_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: &DiscordUserId,
+) -> Result<Vec<RiotAccountRecord>, RiotRepositoryError> {
+    let accounts = sqlx::query_as::<_, RiotAccountRecord>(ACCOUNT_SELECT)
+        .bind(user_id)
+        .fetch_all(&mut **transaction)
+        .await?;
+    verify_main_invariant(&accounts)?;
+    Ok(accounts)
+}
+
+fn verify_main_invariant(accounts: &[RiotAccountRecord]) -> Result<(), RiotRepositoryError> {
+    let main_count = accounts.iter().filter(|account| account.is_main).count();
+    if (!accounts.is_empty() && main_count != 1) || (accounts.is_empty() && main_count != 0) {
+        return Err(RiotRepositoryError::InvariantViolation);
+    }
+    Ok(())
+}
+
+fn map_write_error(error: sqlx::Error) -> RiotRepositoryError {
+    let constraint = match &error {
+        sqlx::Error::Database(database) => database.constraint(),
+        _ => None,
+    };
+    match constraint {
+        Some("riot_accounts_pkey") => RiotRepositoryError::AlreadyLinked,
+        Some("riot_accounts_normalized_id_key") => RiotRepositoryError::IdentityConflict,
+        _ => RiotRepositoryError::Sql(error),
     }
 }
 
-fn is_unique_violation(error: &(dyn sqlx::error::DatabaseError + 'static)) -> bool {
-    error.code().as_deref() == Some("23505")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_riot_id_rejects_empty_and_trims_edges() {
-        assert!(matches!(
-            normalize_riot_id(""),
-            Err(RiotRepositoryError::InvalidInput)
-        ));
-        assert!(matches!(
-            normalize_riot_id("  123ABC  "),
-            Ok(value) if value == "123abc"
-        ));
-        assert!(matches!(
-            normalize_riot_id("   "),
-            Err(RiotRepositoryError::InvalidInput)
-        ));
-        assert!(matches!(
-            normalize_riot_id("abc\n\n"),
-            Ok(value) if value == "abc"
-        ));
-    }
-}
+const ACCOUNT_SELECT: &str = "SELECT puuid, platform, routing_region, game_name, tag_line,
+            normalized_game_name, normalized_tag_line, profile_icon_id,
+            is_main, main_position, main_position_updated_at,
+            last_synced_at, created_at, updated_at
+     FROM riot_accounts
+     WHERE user_id = $1
+     ORDER BY is_main DESC, created_at, puuid";
 
 #[derive(Debug, FromRow)]
-struct RiotAccountRow {
-    puuid: String,
-    platform: String,
-    routing_region: String,
-    game_name: String,
-    tag_line: String,
-    normalized_game_name: String,
-    normalized_tag_line: String,
-    profile_icon_id: Option<i32>,
-    is_main: bool,
-    main_position: Option<String>,
-    main_position_updated_at: Option<OffsetDateTime>,
-    last_synced_at: Option<OffsetDateTime>,
-    created_at: OffsetDateTime,
-    updated_at: OffsetDateTime,
-}
-
-impl From<RiotAccountRow> for RiotAccountRecord {
-    fn from(row: RiotAccountRow) -> Self {
-        Self {
-            puuid: row.puuid,
-            platform: row.platform,
-            routing_region: row.routing_region,
-            game_name: row.game_name,
-            tag_line: row.tag_line,
-            normalized_game_name: row.normalized_game_name,
-            normalized_tag_line: row.normalized_tag_line,
-            profile_icon_id: row.profile_icon_id,
-            is_main: row.is_main,
-            main_position: row.main_position,
-            main_position_updated_at: row.main_position_updated_at,
-            last_synced_at: row.last_synced_at,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }
-    }
+struct MainCounts {
+    account_count: i64,
+    main_count: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -421,12 +490,55 @@ impl UserPrivacyRow {
 
 #[derive(Debug, Error)]
 pub enum RiotRepositoryError {
-    #[error("Riot account is already registered")]
-    DuplicateAccount,
-    #[error("Riot account payload contains invalid field")]
-    InvalidInput,
-    #[error("Riot account data is invalid")]
-    InvalidAccountData,
     #[error("PostgreSQL Riot repository operation failed")]
     Sql(#[from] sqlx::Error),
+    #[error("user does not exist")]
+    UserNotFound,
+    #[error("Riot account was not found for this user")]
+    NotFound,
+    #[error("Riot account is already linked to another user")]
+    AlreadyLinked,
+    #[error("canonical Riot ID conflicts with another account")]
+    IdentityConflict,
+    #[error("canonical Riot account is invalid")]
+    InvalidCanonicalAccount,
+    #[error("Riot account main invariant is violated")]
+    InvariantViolation,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalization_is_nfkc_trimmed_and_full_case_folded() {
+        assert_eq!(normalize_riot_id_v1("  ＬＯＮＧＣＡＴ  "), "longcat");
+        assert_eq!(normalize_riot_id_v1("Straße"), "strasse");
+        assert_eq!(normalize_riot_id_v1("Hide  On Bush"), "hide  on bush");
+    }
+
+    #[test]
+    fn in_memory_main_invariant_matches_database_rule() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let account = |suffix: &str, is_main| RiotAccountRecord {
+            puuid: format!("puuid-{suffix}"),
+            platform: "KR".to_owned(),
+            routing_region: "ASIA".to_owned(),
+            game_name: "Name".to_owned(),
+            tag_line: "KR1".to_owned(),
+            normalized_game_name: "name".to_owned(),
+            normalized_tag_line: "kr1".to_owned(),
+            profile_icon_id: None,
+            is_main,
+            main_position: None,
+            main_position_updated_at: None,
+            last_synced_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(verify_main_invariant(&[]).is_ok());
+        assert!(verify_main_invariant(&[account("a", true), account("b", false)]).is_ok());
+        assert!(verify_main_invariant(&[account("a", false)]).is_err());
+        assert!(verify_main_invariant(&[account("a", true), account("b", true)]).is_err());
+    }
 }

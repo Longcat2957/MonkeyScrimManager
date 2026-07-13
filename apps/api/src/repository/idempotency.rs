@@ -105,6 +105,28 @@ pub async fn acquire(
         return Ok(AcquireIdempotencyOutcome::InProgress);
     }
 
+    sqlx::query(
+        "DELETE FROM idempotency_records
+         WHERE scope_key = $1
+           AND guild_id IS NOT DISTINCT FROM $2::text
+           AND principal_type = $3
+           AND principal_id = $4
+           AND method = $5
+           AND route_template = $6
+           AND idempotency_key = $7
+           AND expires_at <= $8",
+    )
+    .bind(command.scope.scope_key())
+    .bind(command.scope.database_guild_id())
+    .bind(command.principal_type.as_str())
+    .bind(command.principal_id)
+    .bind(command.method)
+    .bind(command.route_template)
+    .bind(command.idempotency_key)
+    .bind(command.created_at)
+    .execute(&mut **transaction)
+    .await?;
+
     let inserted = sqlx::query(
         "INSERT INTO idempotency_records (
             id, guild_id, scope_key, principal_type, principal_id, method, route_template,

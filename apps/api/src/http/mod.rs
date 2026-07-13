@@ -1,16 +1,23 @@
 mod auth_routes;
 mod bot_routes;
+mod champion_preference_routes;
 mod context_routes;
 mod extractors;
+mod guild_admin_member_routes;
+mod guild_admin_settings_routes;
+mod guild_audit_log_routes;
+mod guild_record_profile_routes;
+mod guild_season_routes;
 mod middleware;
 mod riot_routes;
 mod routes;
+mod search_suggestion_routes;
 mod workflow_routes;
 
 use axum::{
     Router,
     middleware::from_fn_with_state,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -33,13 +40,50 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             "/internal/guilds/{guild_id}/setup",
             post(bot_routes::setup_guild),
         )
+        .route(
+            "/internal/guilds/{guild_id}/discord-catalog",
+            put(guild_admin_settings_routes::replace_discord_catalog),
+        )
         .route("/api/me", get(context_routes::me))
+        .route(
+            "/api/me/champion-preferences",
+            get(champion_preference_routes::get_champion_preferences),
+        )
+        .route(
+            "/api/me/champion-preferences/{lane}",
+            put(champion_preference_routes::update_champion_preferences),
+        )
         .route("/api/me/guilds", get(context_routes::me_guilds))
         .route(
             "/api/me/default-guild",
             put(context_routes::set_default_guild),
         )
         .route("/api/guilds/{guild_id}", get(context_routes::guild_context))
+        .route(
+            "/api/guilds/{guild_id}/members",
+            get(guild_admin_member_routes::members),
+        )
+        .route(
+            "/api/guilds/{guild_id}/members/{member_id}/mmr",
+            patch(guild_admin_member_routes::adjust_mmr),
+        )
+        .route(
+            "/api/guilds/{guild_id}/members/{member_id}/status",
+            patch(guild_admin_member_routes::set_status),
+        )
+        .route(
+            "/api/guilds/{guild_id}/settings",
+            get(guild_admin_settings_routes::settings)
+                .put(guild_admin_settings_routes::update_settings),
+        )
+        .route(
+            "/api/guilds/{guild_id}/seasons",
+            get(guild_season_routes::seasons).post(guild_season_routes::rotate_season),
+        )
+        .route(
+            "/api/guilds/{guild_id}/audit-logs",
+            get(guild_audit_log_routes::audit_logs),
+        )
         .route(
             "/api/guilds/{guild_id}/operations",
             get(workflow_routes::operations),
@@ -80,8 +124,28 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             "/api/guilds/{guild_id}/auction-tournaments",
             get(workflow_routes::auction_tournaments),
         )
-        .route("/api/riot/records", get(riot_routes::records))
-        .route("/api/riot/records/refresh", post(riot_routes::refresh_records))
+		.route("/api/riot/records", get(riot_routes::records))
+		.route(
+			"/api/riot/records/suggestions",
+			get(search_suggestion_routes::public_riot_suggestions),
+		)
+		.route(
+			"/api/riot/records/matches",
+			get(riot_routes::recent_matches),
+		)
+		.route("/api/riot/records/refresh", post(riot_routes::refresh_records))
+        .route(
+            "/api/guilds/{guild_id}/records/suggestions",
+            get(search_suggestion_routes::guild_member_suggestions),
+        )
+        .route(
+            "/api/guilds/{guild_id}/records/profile",
+            get(guild_record_profile_routes::profile),
+        )
+        .route(
+            "/api/guilds/{guild_id}/records/search",
+            get(guild_record_profile_routes::search),
+        )
         .route(
             "/api/me/riot-accounts",
             get(riot_routes::list_riot_accounts).post(riot_routes::create_riot_account),

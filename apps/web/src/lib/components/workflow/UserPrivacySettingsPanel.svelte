@@ -1,8 +1,14 @@
 <script lang="ts">
-	import { Check, RotateCcw, Save, ShieldCheck } from 'lucide-svelte';
+	import { Check, Save, ShieldCheck } from 'lucide-svelte';
+	import { untrack } from 'svelte';
+	import { updatePrivacySettings } from '$lib/api/privacy';
+	import type { PrivacySettings } from '$lib/contracts/workflow';
 
-	type PrivacyKey = 'publicProfile' | 'showRiotIds' | 'allowExternalRecordSearch';
-	type PrivacySettings = Record<PrivacyKey, boolean>;
+	type PrivacyKey = keyof PrivacySettings;
+
+	interface Props {
+		initialSettings: PrivacySettings;
+	}
 
 	const settings: Array<{ key: PrivacyKey; title: string; description: string }> = [
 		{
@@ -13,7 +19,7 @@
 		{
 			key: 'showRiotIds',
 			title: '연결된 Riot ID 공개',
-			description: '공개 프로필과 전적 검색 결과에 연결된 Riot ID를 표시합니다.'
+			description: '사용자 및 길드 프로필에 Discord 계정과 연결된 Riot ID를 표시합니다.'
 		},
 		{
 			key: 'allowExternalRecordSearch',
@@ -22,32 +28,43 @@
 		}
 	];
 
-	const initialSettings: PrivacySettings = {
-		publicProfile: true,
-		showRiotIds: true,
-		allowExternalRecordSearch: false
-	};
-	let savedSettings = $state<PrivacySettings>({ ...initialSettings });
-	let draftSettings = $state<PrivacySettings>({ ...initialSettings });
+	let { initialSettings }: Props = $props();
+	const startingSettings = untrack(() => ({ ...initialSettings }));
+	let savedSettings = $state<PrivacySettings>({ ...startingSettings });
+	let draftSettings = $state<PrivacySettings>({ ...startingSettings });
 	let savedNotice = $state(false);
+	let saving = $state(false);
+	let error = $state<string | null>(null);
 
 	const dirty = $derived(
 		settings.some((setting) => draftSettings[setting.key] !== savedSettings[setting.key])
 	);
 
 	function toggle(key: PrivacyKey) {
+		if (saving) return;
 		draftSettings = { ...draftSettings, [key]: !draftSettings[key] };
 		savedNotice = false;
+		error = null;
 	}
 
-	function reset() {
-		draftSettings = { ...savedSettings };
+	async function save() {
+		if (!dirty || saving) return;
+		saving = true;
 		savedNotice = false;
-	}
-
-	function save() {
-		savedSettings = { ...draftSettings };
-		savedNotice = true;
+		error = null;
+		try {
+			const settings = await updatePrivacySettings({ ...draftSettings });
+			savedSettings = { ...settings };
+			draftSettings = { ...settings };
+			savedNotice = true;
+		} catch (saveError) {
+			error =
+				saveError instanceof Error
+					? saveError.message
+					: '개인정보 설정 저장 중 오류가 발생했습니다.';
+		} finally {
+			saving = false;
+		}
 	}
 </script>
 
@@ -65,28 +82,25 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
+			{#if error}
+				<span class="text-xs font-semibold text-rose-300" aria-live="assertive">{error}</span>
+			{/if}
 			{#if savedNotice}
-				<span class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-300">
+				<span
+					class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-300"
+					aria-live="polite"
+				>
 					<Check size={14} aria-hidden="true" /> 저장됨
 				</span>
 			{/if}
 			<button
 				type="button"
-				class="grid size-8 place-items-center border border-[var(--color-app-border)] bg-[var(--color-app-control)] text-slate-400 enabled:hover:text-slate-100 disabled:opacity-35"
-				disabled={!dirty}
-				aria-label="개인정보 변경 취소"
-				title="변경 취소"
-				onclick={reset}
-			>
-				<RotateCcw size={15} aria-hidden="true" />
-			</button>
-			<button
-				type="button"
 				class="inline-flex h-8 items-center gap-1.5 border border-cyan-400/45 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-100 enabled:hover:bg-cyan-400/15 disabled:opacity-35"
-				disabled={!dirty}
+				disabled={!dirty || saving}
 				onclick={save}
 			>
-				<Save size={14} aria-hidden="true" /> 저장
+				<Save size={14} aria-hidden="true" />
+				{saving ? '저장 중...' : '저장'}
 			</button>
 		</div>
 	</header>
@@ -103,6 +117,7 @@
 					role="switch"
 					aria-checked={draftSettings[setting.key]}
 					aria-label={setting.title}
+					disabled={saving}
 					onclick={() => toggle(setting.key)}
 					class={`relative h-6 w-11 rounded-full border transition ${
 						draftSettings[setting.key]

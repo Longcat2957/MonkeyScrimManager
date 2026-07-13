@@ -15,13 +15,15 @@
 
 ## 상태 표기
 
-| 상태      | 의미                                              |
-| --------- | ------------------------------------------------- |
-| Routed    | 실제 운영 흐름의 route에서 직접 렌더링 중         |
-| Mock data | route 배치는 완료했지만 API 대신 fixture를 사용함 |
-| Internal  | 상위 컴포넌트 안에서만 사용하는 구현 조각         |
+| 상태      | 의미                                               |
+| --------- | -------------------------------------------------- |
+| Routed    | 실제 운영 흐름의 route에서 직접 렌더링 중          |
+| API data  | Backend authoritative snapshot과 mutation을 사용함 |
+| Mock data | route 배치는 완료했지만 API 대신 fixture를 사용함  |
+| Internal  | 상위 컴포넌트 안에서만 사용하는 구현 조각          |
 
-현재 상위 workflow 컴포넌트는 모두 운영 route에 배치되어 있다. API가 연결되기 전까지 fixture와 local mutation을 사용하므로 route 배치 완료와 Backend 연동 완료를 구분한다.
+현재 상위 workflow 컴포넌트는 모두 운영 route에 배치되어 있다. Route별로 API 연결 시점이 다르므로 route
+배치 완료, Backend 연동 완료, fixture-only 상태를 구분한다.
 
 ## Import 원칙
 
@@ -88,32 +90,52 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 
 ## 사용자와 운영 Entrypoints
 
-| 컴포넌트                        | 운영 위치                                                    | 주요 계약과 상태                                                                |
-| ------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `LeaderboardBoard`              | `/g/[guildId]/leaderboard`                                   | `catalog: ChampionCatalog`; 랭킹 row는 내부 목업                                |
-| `RiotAccountManager`            | `/me` Riot 계정 탭                                           | `version`; 계정 목록과 mutation은 내부 목업                                     |
-| `UserChampionPreferencesEditor` | `/me` 선호 챔피언 탭                                         | `catalog`, 선택 `maxPreferences`; 선호 목록과 저장은 내부 목업                  |
-| `UserPrivacySettingsPanel`      | `/me` 개인정보 탭                                            | 외부 프로필, Riot ID, 외부 전적 검색 공개 설정                                  |
-| `UserDefaultGuildSettingsPanel` | `/me` 대표 길드 탭                                           | `initialGuildId`, `onSave`; 루트 접속 시 이동할 기본 guild 선택                 |
-| `OperationsQueueBoard`          | `/g/[guildId]`                                               | `items: OperationsQueueItem[]`; 작업 링크는 같은 guild의 운영 route를 가리킨다. |
-| `RealtimeEditStateBar`          | 편성, 픽밴, 경매 모집 설정, 경매 드래프트, 경매 브래킷 route | resource, 연결/저장 상태, 편집자, 충돌 처리 callback                            |
-| `QuickActionFab`                | `AppShell` 전역                                              | 선택 `label`; 미니게임과 타이머 modal을 소유                                    |
-| `StaticMarkdownDocument`        | `/docs`, `/terms`, `/privacy`                                | 정적 Markdown 본문, 목차, 문서 메타데이터                                       |
-| `AppFooter`                     | `AppShell` 전역                                              | 공통 브랜드 Footer와 문서·이용약관·개인정보 처리방침 진입 링크                  |
-| `GuildMemberManagementPanel`    | `/g/[guildId]/admin` 멤버 탭                                 | 멤버 snapshot, revision, MMR·상태 command callback                              |
-| `GuildOperationsAdminPanel`     | `/g/[guildId]/admin` 운영 탭                                 | checkpoint snapshot, revision, 고정 revert command                              |
-| `GuildSettingsAdminPanel`       | `/g/[guildId]/admin` 길드 설정 탭                            | 설정 snapshot, revision, 저장 command                                           |
-| `GuildAuditLogPanel`            | `/g/[guildId]/admin` 감사 로그 탭                            | 작업, 대상, 실행자 필터와 audit 상세                                            |
+| 컴포넌트                        | 운영 위치                                                    | 주요 계약과 상태                                                                 |
+| ------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `LeaderboardBoard`              | `/g/[guildId]/leaderboard`                                   | `catalog: ChampionCatalog`; 랭킹 row는 내부 목업                                 |
+| `RiotAccountManager`            | `/me` Riot 계정 탭                                           | `initialAccounts`; Riot ID 연결과 snapshot mutation은 `/api/me/riot-accounts/**` |
+| `UserChampionPreferencesEditor` | `/me` 선호 챔피언 탭                                         | `catalog`, 선택 `maxPreferences`; 선호 목록과 저장은 내부 목업                   |
+| `UserPrivacySettingsPanel`      | `/me` 개인정보 탭                                            | 외부 프로필, Discord↔Riot 연결 관계, 길드 밖 내전 전적 접근 설정                 |
+| `UserDefaultGuildSettingsPanel` | `/me` 대표 길드 탭                                           | `initialGuildId`, `onSave`; 루트 접속 시 이동할 기본 guild 선택                  |
+| `OperationsQueueBoard`          | `/g/[guildId]`                                               | `items: OperationsQueueItem[]`; 작업 링크는 같은 guild의 운영 route를 가리킨다.  |
+| `RealtimeEditStateBar`          | 편성, 픽밴, 경매 모집 설정, 경매 드래프트, 경매 브래킷 route | resource, 연결/저장 상태, 편집자, 충돌 처리 callback                             |
+| `QuickActionFab`                | `AppShell` 전역                                              | 선택 `label`; 미니게임과 타이머 modal을 소유                                     |
+| `StaticMarkdownDocument`        | `/docs`, `/terms`, `/privacy`                                | 정적 Markdown 본문, 목차, 문서 메타데이터                                        |
+| `AppFooter`                     | `AppShell` 전역                                              | 공통 브랜드 Footer와 문서·이용약관·개인정보 처리방침 진입 링크                   |
+| `GuildMemberManagementPanel`    | `/g/[guildId]/admin` 멤버 탭                                 | API member snapshot, revision, 자기 비활성화 방지, MMR·상태 command callback     |
+| `GuildOperationsAdminPanel`     | MVP 미노출, 후속 롤백 기능 검토용                            | checkpoint snapshot, revision, 고정 revert command                               |
+| `GuildSettingsAdminPanel`       | `/g/[guildId]/admin` 길드 설정 탭                            | API settings/catalog snapshot, revision, authoritative 저장 callback             |
+| `GuildAuditLogPanel`            | `/g/[guildId]/admin` 감사 로그 탭                            | API cursor page, local 작업·대상·실행자 필터, raw audit 상세, `더 보기`          |
 
 ## Page-local UI
 
 아래 화면은 아직 공유 workflow 컴포넌트 진입점으로 분리하지 않았다.
 
 - `/records`: Riot 전적 검색과 상세 경기 표가 page-local이다.
-- `/g/[guildId]/records`: 내전 시리즈 목록과 확장 상세가 page-local이다.
+- `/g/[guildId]/admin/seasons`: 현재/종료 시즌 집계, 종료 시즌 확장 상세와 새 시즌 시작 UI가
+  page-local이다. Server load는 `GET /api/guilds/{guildId}/seasons`를 사용하고 새 시즌 시작은
+  `POST /api/guilds/{guildId}/seasons`의 authoritative snapshot으로 화면을 교체한다.
+- `/g/[guildId]/records`: 실제 guild records snapshot, 내전 시리즈 목록과 확장 상세가 page-local이다.
 - `/admin/status`: 운영 상태 UI가 page-local이다.
 
 다른 route에서 같은 업무 UI가 실제로 필요해질 때만 상위 컴포넌트로 추출한다.
+
+`GuildSettingsAdminPanel`은 `$lib/fixtures`를 사용하지 않는다. Settings server load가
+`GET /api/guilds/{guildId}/settings`의 설정, revision, Discord role/channel catalog를 전달하고, PUT 성공
+응답의 full snapshot으로 draft를 다시 맞춘다. Nullable channel은 `설정 안 함`으로 표시하며 catalog에서
+사라진 현재 ID도 fallback option으로 보존한다. 별도 page-local 시즌 UI와 seasons API 계약은 settings
+컴포넌트 계약에 포함하지 않는다.
+
+`GuildAuditLogPanel`도 `$lib/fixtures`를 사용하지 않는다. Logs tab server load가
+`GET /api/guilds/{guildId}/audit-logs?limit=50`의 첫 page를 전달하고, `더 보기` callback은 opaque cursor로
+다음 page를 읽어 누적한다. Component는 canonical action/result presentation과 누적 row 대상 local filter만
+소유하며 감사 원장이나 역사적 표시명을 추론하지 않는다.
+
+`/g/[guildId]/records`도 page-local fixture를 사용하지 않는다. Server load는
+`GET /api/guilds/{guildId}/records/search?q={exactIdentity}&limit=20`의 identity, season summary, canonical
+다섯 lane MMR, champion+lane aggregate와 `SERIES|TOURNAMENT` union을 전달한다. Season 변경은 새 server
+selection이고 type/lane은 현재 읽은 page의 local filter다. `더 보기`는 같은 q/season과 opaque cursor로
+outer group을 append하며, 20인 tournament의 nested series를 별도 outer row로 분리하지 않는다.
 
 ## Data Dragon 사용
 

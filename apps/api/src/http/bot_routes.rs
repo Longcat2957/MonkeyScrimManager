@@ -445,6 +445,13 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "길드 운영자 권한이 필요합니다.",
             None,
         ),
+        BotWorkflowError::MemberInactive => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "member_inactive",
+            "비활성화된 길드 멤버는 이 작업을 수행할 수 없습니다.",
+            None,
+        ),
         BotWorkflowError::RecruitmentNotOpen(status)
         | BotWorkflowError::RecruitmentNotBindable(status) => ApiError::new(
             StatusCode::CONFLICT,

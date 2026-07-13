@@ -57,7 +57,7 @@ function handleErrorResponse(status: number, payload: unknown, url: URL): never 
 		const login = resolve('/oauth/[...path]', { path: 'discord/start' });
 		redirect(303, `${login}?${new URLSearchParams({ next })}`);
 	}
-	if (status === 403 || status === 404 || status === 503) {
+	if (status === 400 || status === 403 || status === 404 || status === 409 || status === 503) {
 		error(status, backendMessage ?? fallbackMessage(status));
 	}
 	if (status >= 500) {
@@ -67,7 +67,9 @@ function handleErrorResponse(status: number, payload: unknown, url: URL): never 
 }
 
 function fallbackMessage(status: number): string {
+	if (status === 400) return '요청 값이 올바르지 않습니다.';
 	if (status === 403) return '요청을 수행할 권한이 없습니다.';
 	if (status === 404) return '요청한 데이터를 찾을 수 없습니다.';
+	if (status === 409) return '요청 대상을 하나로 확정할 수 없습니다.';
 	return 'API 서비스를 일시적으로 사용할 수 없습니다.';
 }

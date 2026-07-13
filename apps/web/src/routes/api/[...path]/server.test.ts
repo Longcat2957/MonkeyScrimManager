@@ -74,4 +74,44 @@ describe('API proxy', () => {
 		expect(response.status).toBe(503);
 		expect(proxyFetch).not.toHaveBeenCalled();
 	});
+
+	it('forwards localhost Riot mutations to the configured API port with body and CSRF headers', async () => {
+		runtimeEnv.API_BASE_URL = 'http://localhost:30020/api/';
+		let forwardedUrl = '';
+		let forwardedBody = '';
+		let forwardedHeaders = new Headers();
+		const proxyFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			forwardedUrl = input.toString();
+			forwardedHeaders = new Headers(init?.headers);
+			forwardedBody = await new Response(init?.body).text();
+			return Response.json({
+				data: { riotAccounts: [] },
+				meta: { requestId: crypto.randomUUID() }
+			});
+		});
+		const body = JSON.stringify({ gameName: 'Longcat', tagLine: 'KR1', platform: 'kr' });
+		const request = new Request('http://localhost:5173/api/me/riot-accounts', {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				cookie: 'monkeybot_session=opaque-session; monkeybot_csrf=csrf-token',
+				'X-CSRF-Token': 'csrf-token'
+			},
+			body
+		});
+
+		const response = await fallback({
+			request,
+			params: { path: 'me/riot-accounts' },
+			url: new URL(request.url),
+			fetch: proxyFetch
+		} as never);
+
+		expect(response.status).toBe(200);
+		expect(forwardedUrl).toBe('http://localhost:30020/api/me/riot-accounts');
+		expect(forwardedHeaders.get('content-type')).toBe('application/json');
+		expect(forwardedHeaders.get('X-CSRF-Token')).toBe('csrf-token');
+		expect(forwardedHeaders.get('cookie')).toContain('monkeybot_session=opaque-session');
+		expect(forwardedBody).toBe(body);
+	});
 });

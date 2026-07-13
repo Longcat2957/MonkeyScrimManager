@@ -1,6 +1,7 @@
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { MonkeyBotApiClient } from './api/client.js';
 import { loadBotConfig } from './config.js';
+import { installGuildCatalogSync } from './discord/catalog-sync.js';
 import { startHealthServer, type ReadinessState } from './health/server.js';
 import { installInteractionDispatcher } from './interactions/dispatcher.js';
 import { createLogger } from './log.js';
@@ -44,7 +45,8 @@ async function main(): Promise<void> {
 	);
 	readinessInterval.unref();
 	const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-	installInteractionDispatcher(client, { api, config, logger });
+	const catalogSync = installGuildCatalogSync(client, api, logger);
+	installInteractionDispatcher(client, { api, catalogSync, config, logger });
 
 	client.once(Events.ClientReady, (readyClient) => {
 		readiness.discord = { ready: true, checkedAt: new Date().toISOString() };
@@ -65,6 +67,7 @@ async function main(): Promise<void> {
 		readiness.shuttingDown = true;
 		readiness.discord = { ready: false, checkedAt: new Date().toISOString() };
 		clearInterval(readinessInterval);
+		catalogSync.close();
 		logger.info({ signal }, 'Discord bot shutting down');
 		client.destroy();
 		await health.close();

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Gamepad2, Server, ShieldCheck, Sparkles } from 'lucide-svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
@@ -41,7 +41,9 @@
 			resolve('/api/[...path]', { path: 'me/default-guild' }),
 			{
 				method: 'PUT',
+				credentials: 'same-origin',
 				headers: {
+					accept: 'application/json',
 					'content-type': 'application/json',
 					'X-CSRF-Token': csrfToken
 				},
@@ -49,6 +51,7 @@
 			}
 		);
 		if (!response.ok) throw new Error('default guild update failed');
+		await invalidateAll();
 	}
 </script>
 
@@ -88,13 +91,13 @@
 		{/snippet}
 	</WorkspaceHeader>
 
-	{#if activeTab === 'champions'}
-		<UserChampionPreferencesEditor catalog={data.championCatalog} />
-	{:else if activeTab === 'riot'}
-		<RiotAccountManager
-			version={data.championCatalog.version}
-			initialAccounts={data.riotAccounts}
+	{#if activeTab === 'champions' && data.championCatalog}
+		<UserChampionPreferencesEditor
+			catalog={data.championCatalog}
+			initialPreferences={data.championPreferences}
 		/>
+	{:else if activeTab === 'riot'}
+		<RiotAccountManager initialAccounts={data.riotAccounts} />
 	{:else if activeTab === 'guild'}
 		<UserDefaultGuildSettingsPanel
 			initialGuildId={data.defaultGuildId}
@@ -102,6 +105,6 @@
 			onSave={saveDefaultGuild}
 		/>
 	{:else}
-		<UserPrivacySettingsPanel />
+		<UserPrivacySettingsPanel initialSettings={data.privacySettings} />
 	{/if}
 </div>

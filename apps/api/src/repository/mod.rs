@@ -1,10 +1,18 @@
 pub mod auth;
 pub mod bot_workflow;
+pub mod champion_preferences;
 pub mod context;
+pub mod guild_admin_members;
+pub mod guild_admin_settings;
+pub mod guild_audit_logs;
+pub mod guild_record_profiles;
+pub mod guild_seasons;
 pub mod idempotency;
 pub mod mmr;
 pub mod outbox;
 pub mod riot;
+pub mod riot_records;
+pub mod search_suggestions;
 pub mod workflow;
 
 use crate::domain::GuildId;

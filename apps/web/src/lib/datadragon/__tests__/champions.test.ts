@@ -9,6 +9,7 @@ import {
 	searchChampions
 } from '../champions';
 import type { DataDragonChampionResponse } from '../types';
+import fullChampionFixture from '../../../../static/fixtures/datadragon/champion-ko_KR.fixture.json';
 
 const championResponse: DataDragonChampionResponse = {
 	type: 'champion',
@@ -64,9 +65,18 @@ describe('Data Dragon champion helpers', () => {
 		const catalog = createChampionCatalog(championResponse);
 
 		expect(searchChampions(catalog, '리신').map((champion) => champion.id)).toEqual(['LeeSin']);
+		expect(searchChampions(catalog, '리 신').map((champion) => champion.id)).toEqual(['LeeSin']);
 		expect(searchChampions(catalog, 'kaisa').map((champion) => champion.id)).toEqual(['Kaisa']);
 		expect(searchChampions(catalog, '145').map((champion) => champion.id)).toEqual(['Kaisa']);
 		expect(searchChampions(catalog, 'fighter').map((champion) => champion.id)).toEqual(['LeeSin']);
+	});
+
+	it('ships every champion in the static fallback catalog', () => {
+		const catalog = createChampionCatalog(fullChampionFixture);
+
+		expect(catalog.champions).toHaveLength(173);
+		expect(searchChampions(catalog, '', { limit: catalog.champions.length })).toHaveLength(173);
+		expect(searchChampions(catalog, '스몰더').map((champion) => champion.id)).toEqual(['Smolder']);
 	});
 
 	it('falls back to a static fixture path when Data Dragon fetch fails', async () => {

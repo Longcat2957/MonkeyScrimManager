@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/api"]
+members = ["apps/api", "apps/riot-api"]
 resolver = "2"
 
 [workspace.package]
@@ -27,4 +27,6 @@ tower = { version = "=0.5.3", features = ["util"] }
 tower-http = { version = "=0.7.0", features = ["limit"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+unicode-casefold = "=0.2.0"
+unicode-normalization = "=0.1.25"
 uuid = { version = "=1.23.4", features = ["serde", "v7"] }

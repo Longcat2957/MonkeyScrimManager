@@ -1,8 +1,9 @@
-import type { GuildAdminSettings, GuildMemberStatus } from '$lib/fixtures/guildAdmin';
+import type { GuildAdminSettings, GuildMemberStatus } from '$lib/contracts/workflow';
 import type { Lane } from '$lib/fixtures/workflow';
 
 export interface GuildMmrAdjustmentCommand {
 	kind: 'ADJUST_MMR';
+	idempotencyKey: string;
 	memberId: string;
 	lane: Lane;
 	delta: number;

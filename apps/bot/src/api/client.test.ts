@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MonkeyBotApiClient, MonkeyBotApiContractError, MonkeyBotApiError } from './client.js';
-import type { Actor, RecruitmentSnapshot, SetupGuildData } from './contracts.js';
+import type {
+	Actor,
+	DiscordCatalogSyncRequest,
+	RecruitmentSnapshot,
+	SetupGuildData
+} from './contracts.js';
 
 const guildId = '200000000000000001';
 const userId = '100000000000000001';
@@ -40,6 +45,29 @@ const setupData: SetupGuildData = {
 		currentSeason: { id: '01900000-0000-7000-8000-000000000201', name: '시즌 1' },
 		dashboardHref: `/g/${guildId}`
 	}
+};
+
+const catalog: DiscordCatalogSyncRequest = {
+	roles: [
+		{ id: '300000000000000001', name: '내전 운영진', position: 3, managed: false },
+		{ id: '300000000000000002', name: '연동 역할', position: 2, managed: true }
+	],
+	channels: [
+		{
+			id: '500000000000000001',
+			name: '내전-모집',
+			parentName: '내전',
+			position: 1,
+			kind: 'TEXT'
+		},
+		{
+			id: '500000000000000002',
+			name: '공지',
+			parentName: null,
+			position: 2,
+			kind: 'ANNOUNCEMENT'
+		}
+	]
 };
 
 function envelope(data: unknown): Response {
@@ -134,6 +162,46 @@ describe('MonkeyBotApiClient', () => {
 		await expect(
 			client.createRecruitment(guildId, { actor }, { idempotencyKey: '400000000000000002' })
 		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
+	});
+
+	it('replaces a Discord catalog without an idempotency header', async () => {
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			void input;
+			void init;
+			return envelope({ syncedAt: '2026-07-13T12:34:56.000Z' });
+		});
+		const client = createClient(fetchMock);
+
+		await expect(client.syncDiscordCatalog(guildId, catalog)).resolves.toEqual({
+			syncedAt: '2026-07-13T12:34:56.000Z'
+		});
+
+		const [input, init] = fetchMock.mock.calls[0] ?? [];
+		expect(String(input)).toBe(`http://api.local:8080/internal/guilds/${guildId}/discord-catalog`);
+		expect((init as RequestInit).method).toBe('PUT');
+		expect(JSON.parse(String((init as RequestInit).body))).toEqual(catalog);
+		const headers = new Headers((init as RequestInit).headers);
+		expect(headers.get('authorization')).toBe(`Bearer ${serviceToken}`);
+		expect(headers.get('content-type')).toBe('application/json');
+		expect(headers.has('idempotency-key')).toBe(false);
+	});
+
+	it('strictly validates Discord catalog request and response limits', async () => {
+		const fetchMock = vi.fn(async () => envelope({ syncedAt: 'not-a-timestamp' }));
+		const client = createClient(fetchMock);
+		const tooManyRoles: DiscordCatalogSyncRequest = {
+			roles: Array.from({ length: 251 }, () => catalog.roles[0]!),
+			channels: []
+		};
+
+		await expect(client.syncDiscordCatalog(guildId, tooManyRoles)).rejects.toBeInstanceOf(
+			MonkeyBotApiContractError
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+
+		await expect(client.syncDiscordCatalog(guildId, catalog)).rejects.toBeInstanceOf(
+			MonkeyBotApiContractError
+		);
 	});
 
 	it('preserves a valid API error without exposing credentials', async () => {

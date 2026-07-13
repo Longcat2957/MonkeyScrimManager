@@ -8,6 +8,26 @@
 - For validation, use non-server commands such as `pnpm check`, `pnpm lint`, `pnpm test`, and `pnpm build`.
 - If runtime confirmation is needed, ask the user to check the already-running dev server instead of starting a new one.
 
+## Backend Runtime
+
+- A backend route change is not complete while the local Axum process still serves the previous binary.
+- After backend route work passes its tests, run `scripts/local-api-reload.sh '/api/<changed-route>'`.
+- The reload script must pass readiness plus direct `30020` and same-origin `5173` proxy smoke checks. A `401`, `403`, or other route-level response is acceptable for an unauthenticated smoke request; `404`, connection failure, and `5xx` are failures.
+- Do not report a backend endpoint as integrated before both smoke paths prove that the running router contains it.
+- This rule does not permit starting or replacing the frontend dev server.
+
+## Delivery Speed
+
+- Follow [`docs/10-development-velocity.md`](docs/10-development-velocity.md) for implementation and validation scope.
+- Before editing, reduce the request to a short acceptance list. Implement the smallest end-to-end slice that satisfies it; do not expand adjacent features during the same pass.
+- Stop repository exploration once the target route, its direct dependencies, and the relevant business rule are identified. Batch independent reads and searches instead of issuing repeated single-file calls.
+- Assign one owner per file. Use sub-agents only for independent implementation tracks or one final high-risk review, not overlapping investigations of the same code.
+- Validate according to change risk. UI copy/style changes do not require backend or workspace-wide tests. Route-local changes use targeted tests first. Full workspace checks are reserved for migrations, shared foundations, release/commit gates, or an explicit user request.
+- Run an unchanged expensive suite at most once after the final relevant edit. Do not stack targeted, package-wide, and workspace-wide versions of the same validation without a concrete reason.
+- Integration fixtures must exercise documented branches, but reuse shared builders and the minimum rows needed. Do not grow a route test into a second reference implementation of the product.
+- Update OpenAPI and narrative docs once the implementation contract is stable, not repeatedly during exploratory edits.
+- For backend routes, runtime reload and direct/proxy smoke are part of the same delivery step; use the existing reload script instead of diagnosing a predictable stale-binary 404 afterward.
+
 ## Requirement Discipline
 
 - Decision priority is always:

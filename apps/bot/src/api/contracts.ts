@@ -47,6 +47,38 @@ export const setupGuildDataSchema = z
 	})
 	.strict();
 
+export const discordCatalogRoleSchema = z
+	.object({
+		id: discordSnowflakeSchema,
+		name: z.string().min(1).max(100),
+		position: z.number().int().nonnegative(),
+		managed: z.boolean()
+	})
+	.strict();
+
+export const discordCatalogChannelSchema = z
+	.object({
+		id: discordSnowflakeSchema,
+		name: z.string().min(1).max(100),
+		parentName: z.string().min(1).max(100).nullable(),
+		position: z.number().int().nonnegative(),
+		kind: z.enum(['TEXT', 'ANNOUNCEMENT'])
+	})
+	.strict();
+
+export const discordCatalogSyncRequestSchema = z
+	.object({
+		roles: z.array(discordCatalogRoleSchema).max(250),
+		channels: z.array(discordCatalogChannelSchema).max(500)
+	})
+	.strict();
+
+export const discordCatalogSyncDataSchema = z
+	.object({
+		syncedAt: timestampSchema
+	})
+	.strict();
+
 export const recruitmentParticipantSchema = z
 	.object({
 		id: discordSnowflakeSchema,
@@ -165,6 +197,10 @@ export type Lane = z.infer<typeof laneSchema>;
 export type Actor = z.infer<typeof actorSchema>;
 export type SetupGuildRequest = z.infer<typeof setupGuildRequestSchema>;
 export type SetupGuildData = z.infer<typeof setupGuildDataSchema>;
+export type DiscordCatalogRole = z.infer<typeof discordCatalogRoleSchema>;
+export type DiscordCatalogChannel = z.infer<typeof discordCatalogChannelSchema>;
+export type DiscordCatalogSyncRequest = z.infer<typeof discordCatalogSyncRequestSchema>;
+export type DiscordCatalogSyncData = z.infer<typeof discordCatalogSyncDataSchema>;
 export type RecruitmentParticipant = z.infer<typeof recruitmentParticipantSchema>;
 export type Recruitment = z.infer<typeof recruitmentSchema>;
 export type RecruitmentSnapshot = z.infer<typeof recruitmentSnapshotSchema>;

@@ -27,6 +27,53 @@ record만 사용하며 Origin Rule은 사용하지 않는다.
 `pg_isready`는 PostgreSQL process health만 확인하며 schema와 runtime 권한은 API `/readyz`와 아래
 검증 절차가 담당한다.
 
+### Local frontend/API integration
+
+Local browser requests also use the same-origin `/api/**` and `/oauth/**` routes. SvelteKit reads
+`API_BASE_URL` and `OAUTH_BASE_URL` from the repository-root ignored `.env.local` and proxies those
+requests to Axum; browser code does not call port `30020` directly and does not need CORS.
+`apps/web/vite.config.ts`의 `envDir`와 root `.env.example`을 같이 유지한다.
+
+```text
+PUBLIC_WEB_ORIGIN=http://localhost:5173
+API_BASE_URL=http://127.0.0.1:30020/api/
+OAUTH_BASE_URL=http://127.0.0.1:30020/
+MONKEYBOT_PUBLIC_ORIGIN=http://localhost:5173
+```
+
+Proxy target은 Axum bind와 같은 IPv4 loopback을 명시해 `localhost`가 IPv6 `::1`로 해석되는 환경의
+connection failure를 피한다. `API_BASE_URL`은 `/api/`와 trailing slash를 모두 포함하고 OAuth base는
+root trailing slash로 끝나야 한다. 따라서 frontend의
+`/api/riot/records?gameName=...&tagLine=...&platform=KR` 요청은 upstream의 같은 `/api/riot/records`
+route에 도착하며 `/api/api/...`로 중복되지 않는다.
+
+Axum은 `MONKEYBOT_RIOT_SERVICE_URL`과 `MONKEYBOT_RIOT_SERVICE_TOKEN`으로 private Riot integration
+service만 호출한다. Riot production/development key는 그 별도 service의
+`MONKEYBOT_RIOT_API_KEY`에만 두고 `PUBLIC_*`, web/Axum environment, response, log에는 넣지 않는다.
+Riot service의 `MONKEYBOT_RIOT_INTERNAL_TOKEN`은 Axum service token과 같은 값이어야 한다. Integration
+service가 없거나 key가 유효하지 않으면 Riot endpoint만 `riot_unavailable` 계열의 normalized `503`을
+반환하며 guild 내부 전적/MMR은 계속 동작해야 한다.
+
+Local Riot service는 Bot health의 `30030`과 충돌하지 않는 `127.0.0.1:30040`, Axum base URL은
+trailing slash를 포함한 `http://127.0.0.1:30040/internal/riot/`를 사용한다. Dev Compose service 이름은 `riot-api-dev`,
+container port는 `8081`, Axum base URL은 `http://riot-api-dev:8081/internal/riot/`다. 공개 nginx는
+`/internal/riot/**`를 route하지 않으며 `riot-api-dev` port를 host/public network에 publish하지 않는다.
+
+```text
+# Axum runtime
+MONKEYBOT_RIOT_SERVICE_URL=http://127.0.0.1:30040/internal/riot/
+MONKEYBOT_RIOT_SERVICE_TOKEN=<shared-internal-token>
+
+# Riot integration service runtime only
+MONKEYBOT_RIOT_API_KEY=<riot-key>
+MONKEYBOT_RIOT_INTERNAL_TOKEN=<shared-internal-token>
+MONKEYBOT_RIOT_SEASON_START_UNIX_SECONDS=1767841200
+```
+
+`MONKEYBOT_RIOT_SEASON_START_UNIX_SECONDS`는 해당 platform의 연간 ranked season 시작 시각이다. Riot
+season 전환 때 명시적으로 갱신하며, records 응답의 `sample.championAggregates.seasonStartUnixSeconds`로
+같은 값을 노출한다.
+
 ### Remote development database
 
 개발 데이터의 기준은 VPS의 `monkeybot-postgres` 컨테이너다. PostgreSQL 포트를 인터넷에 직접
@@ -52,6 +99,7 @@ MONKEYBOT_MIGRATION_DATABASE_URL=postgresql://monkeybot_migrator_dev:...@127.0.0
 ```txt
 /root/monkeybot-infra/api/runtime.env
 /root/monkeybot-infra/api/migration.env
+/root/monkeybot-infra/riot-api/runtime.env
 /root/monkeybot-infra/postgres/.env
 /root/deploy/nginx/certs/origin.pem
 /root/deploy/nginx/certs/origin.key

@@ -8,6 +8,8 @@ export function apiRoute(
 ): string {
 	const path = segments.map((segment) => encodeURIComponent(segment)).join('/');
 	const route = resolve('/api/[...path]', { path });
-	const search = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+	const search = new URLSearchParams(
+		Object.entries(query).map(([key, value]) => [key, String(value)])
+	);
 	return search.size > 0 ? `${route}?${search}` : route;
 }

@@ -19,6 +19,10 @@ use monkeybot_api::{
         },
         mmr::{MmrLaneKey, ensure_and_lock_mmr_rows},
         outbox::{self, AckOutbox, ClaimOutbox, NackOutbox},
+        riot_records::{
+            self, AcquireRiotRecordsRefresh, CanonicalRiotRecordsIdentity,
+            RIOT_RECORDS_REFRESH_LEASE_DURATION, RiotRecordsLookup, RiotRecordsRepositoryError,
+        },
     },
     state::{AppState, ComponentStatus, DependencyProbe},
 };
@@ -79,11 +83,14 @@ async fn run_postgres_foundation_contract() -> TestResult {
     assert_fk_indexes_cover_child_columns(&full).await?;
     assert_constraints_and_tenant_isolation(&full).await?;
     assert_idempotency_contract(&full).await?;
+    assert_expired_idempotency_reuse(&full).await?;
     assert_concurrent_idempotency_contract(&full).await?;
     assert_structured_idempotency_lock_key(&full).await?;
     assert_outbox_uses_database_clock(&full).await?;
     assert_outbox_claim_and_stale_ack(&full).await?;
     assert_concurrent_mmr_initialization(&full).await?;
+    assert_riot_records_snapshot_contract(&full).await?;
+    assert_concurrent_riot_records_refresh_contract(&full).await?;
 
     let snapshot = PostgresReadinessProbe::new(full.clone(), Duration::from_secs(1))
         .check()
@@ -97,7 +104,7 @@ async fn run_postgres_foundation_contract() -> TestResult {
         .max_connections(2)
         .connect(&server.database_url("monkeybot_n_minus_one"))
         .await?;
-    MIGRATOR.run_to(8, &n_minus_one).await?;
+    MIGRATOR.run_to(10, &n_minus_one).await?;
     let snapshot = PostgresReadinessProbe::new(n_minus_one.clone(), Duration::from_secs(1))
         .check()
         .await;
@@ -302,7 +309,200 @@ async fn assert_latest_schema(pool: &PgPool) -> TestResult {
     )
     .fetch_one(pool)
     .await?;
-    assert_eq!(table_count, 51, "unexpected public table count");
+    assert_eq!(table_count, 58, "unexpected public table count");
+    Ok(())
+}
+
+async fn assert_riot_records_snapshot_contract(pool: &PgPool) -> TestResult {
+    let lookup = RiotRecordsLookup::new("KR", "Longcat", "KR1")?;
+    assert!(riot_records::get_snapshot(pool, &lookup).await?.is_none());
+
+    let lease = match riot_records::acquire_refresh(pool, &lookup).await? {
+        AcquireRiotRecordsRefresh::Acquired(lease) => lease,
+        outcome => {
+            return Err(format!("initial Riot refresh was not acquired: {outcome:?}").into());
+        }
+    };
+    assert_eq!(
+        lease.expires_at - lease.acquired_at,
+        time::Duration::seconds(RIOT_RECORDS_REFRESH_LEASE_DURATION.as_secs() as i64)
+    );
+    match riot_records::acquire_refresh(pool, &lookup).await? {
+        AcquireRiotRecordsRefresh::InProgress { snapshot: None, .. } => {}
+        outcome => {
+            return Err(format!("concurrent cache miss was not coalesced: {outcome:?}").into());
+        }
+    }
+
+    let identity = CanonicalRiotRecordsIdentity::new("KR", "test-puuid", "Longcat", "KR1")?;
+    let provider_neutral = json!({
+        "account": { "gameName": "Longcat", "tagLine": "KR1" },
+        "recentMatches": [{ "matchId": "KR_1" }],
+        "sample": { "recentMatches": { "requested": 10, "returned": 1 } }
+    });
+    let stored = riot_records::complete_refresh(pool, &lease, &identity, &provider_neutral).await?;
+    assert_eq!(stored.platform, "KR");
+    assert_eq!(stored.schema_version, 1);
+
+    let cached = riot_records::get_snapshot(pool, &lookup)
+        .await?
+        .ok_or("completed Riot snapshot was not readable")?;
+    assert_eq!(cached.snapshot, provider_neutral);
+    assert_eq!(cached.puuid(), "test-puuid");
+    assert!(!format!("{cached:?}").contains("test-puuid"));
+    assert_eq!(cached.game_name, "Longcat");
+    assert_eq!(cached.tag_line, "KR1");
+    let recent_page = json!({
+        "offset": 10,
+        "requested": 10,
+        "matches": [{ "matchId": "KR_11" }]
+    });
+    assert!(
+        riot_records::get_recent_page(pool, &lookup, 10, 10)
+            .await?
+            .is_none()
+    );
+    let stored_page = riot_records::store_recent_page(pool, &lookup, 10, 10, &recent_page).await?;
+    assert_eq!(stored_page.offset, 10);
+    assert_eq!(stored_page.requested_count, 10);
+    let cached_page = riot_records::get_recent_page(pool, &lookup, 10, 10)
+        .await?
+        .ok_or("stored recent page was not readable")?;
+    assert_eq!(cached_page.page, recent_page);
+    assert!(
+        riot_records::get_recent_page(pool, &lookup, 10, 20)
+            .await?
+            .is_none(),
+        "page cache keys must preserve the exact requested count"
+    );
+    match riot_records::acquire_refresh(pool, &lookup).await? {
+        AcquireRiotRecordsRefresh::Cooldown { snapshot, retry_at } => {
+            assert_eq!(snapshot.snapshot, provider_neutral);
+            assert!(retry_at > snapshot.refreshed_at);
+        }
+        outcome => return Err(format!("30-second cooldown was not enforced: {outcome:?}").into()),
+    }
+
+    sqlx::query(
+        "UPDATE riot_records_snapshots
+         SET refreshed_at = clock_timestamp() - INTERVAL '31 seconds'
+         WHERE platform = 'KR' AND puuid = 'test-puuid'",
+    )
+    .execute(pool)
+    .await?;
+    let before_failure = riot_records::get_snapshot(pool, &lookup)
+        .await?
+        .ok_or("aged Riot snapshot disappeared")?;
+    let failed_lease = match riot_records::acquire_refresh(pool, &lookup).await? {
+        AcquireRiotRecordsRefresh::Acquired(lease) => lease,
+        outcome => return Err(format!("aged Riot refresh was not acquired: {outcome:?}").into()),
+    };
+    assert!(riot_records::abort_refresh(pool, &failed_lease).await?);
+    let after_failure = riot_records::get_snapshot(pool, &lookup)
+        .await?
+        .ok_or("provider failure deleted the last good Riot snapshot")?;
+    assert_eq!(after_failure, before_failure);
+
+    let replacement = match riot_records::acquire_refresh(pool, &lookup).await? {
+        AcquireRiotRecordsRefresh::Acquired(lease) => lease,
+        outcome => {
+            return Err(format!("post-failure Riot refresh was not acquired: {outcome:?}").into());
+        }
+    };
+    riot_records::complete_refresh(
+        pool,
+        &replacement,
+        &identity,
+        &json!({ "generation": "new-top-snapshot" }),
+    )
+    .await?;
+    assert!(
+        riot_records::get_recent_page(pool, &lookup, 10, 10)
+            .await?
+            .is_none(),
+        "a refreshed top snapshot must invalidate ordered recent pages"
+    );
+    Ok(())
+}
+
+async fn assert_concurrent_riot_records_refresh_contract(pool: &PgPool) -> TestResult {
+    let lookup = RiotRecordsLookup::new("KR", "Concurrency", "KR1")?;
+    let initial_lease = match riot_records::acquire_refresh(pool, &lookup).await? {
+        AcquireRiotRecordsRefresh::Acquired(lease) => lease,
+        outcome => {
+            return Err(format!("initial concurrent probe was not acquired: {outcome:?}").into());
+        }
+    };
+    assert!(riot_records::abort_refresh(pool, &initial_lease).await?);
+
+    let barrier = Arc::new(Barrier::new(9));
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        let lookup = lookup.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            riot_records::acquire_refresh(&pool, &lookup).await
+        }));
+    }
+    barrier.wait().await;
+
+    let mut acquired = Vec::new();
+    let mut in_progress = 0;
+    for task in tasks {
+        match task.await?? {
+            AcquireRiotRecordsRefresh::Acquired(lease) => acquired.push(lease),
+            AcquireRiotRecordsRefresh::InProgress { snapshot: None, .. } => in_progress += 1,
+            outcome => return Err(format!("unexpected concurrent outcome: {outcome:?}").into()),
+        }
+    }
+    assert_eq!(
+        acquired.len(),
+        1,
+        "exactly one provider call must be claimed"
+    );
+    assert_eq!(in_progress, 7);
+
+    let expired_lease = acquired.pop().expect("one acquired lease");
+    sqlx::query(
+        "UPDATE riot_records_refresh_gates
+         SET lease_acquired_at = clock_timestamp() - INTERVAL '2 seconds',
+             lease_until = clock_timestamp() - INTERVAL '1 second'
+         WHERE platform = 'KR'
+           AND normalized_game_name = 'concurrency'
+           AND normalized_tag_line = 'kr1'",
+    )
+    .execute(pool)
+    .await?;
+    let replacement_lease = match riot_records::acquire_refresh(pool, &lookup).await? {
+        AcquireRiotRecordsRefresh::Acquired(lease) => lease,
+        outcome => return Err(format!("expired lease was not replaceable: {outcome:?}").into()),
+    };
+    let identity =
+        CanonicalRiotRecordsIdentity::new("KR", "concurrent-puuid", "Concurrency", "KR1")?;
+    let late_completion = riot_records::complete_refresh(
+        pool,
+        &expired_lease,
+        &identity,
+        &json!({ "generation": "expired" }),
+    )
+    .await;
+    assert!(matches!(
+        late_completion,
+        Err(RiotRecordsRepositoryError::LeaseLost)
+    ));
+    riot_records::complete_refresh(
+        pool,
+        &replacement_lease,
+        &identity,
+        &json!({ "generation": "current" }),
+    )
+    .await?;
+    let snapshot = riot_records::get_snapshot(pool, &lookup)
+        .await?
+        .ok_or("replacement lease did not persist a snapshot")?;
+    assert_eq!(snapshot.snapshot, json!({ "generation": "current" }));
     Ok(())
 }
 
@@ -432,6 +632,25 @@ async fn assert_constraints_and_tenant_isolation(pool: &PgPool) -> TestResult {
         .execute(pool)
         .await?;
     }
+    for (guild_id, role_id) in [
+        (guild_a, "300000000000000001"),
+        (guild_b, "300000000000000002"),
+    ] {
+        sqlx::query(
+            "INSERT INTO guild_config (
+                guild_id, display_name, operator_role_id, recruitment_channel_id,
+                entry_channel_id, log_channel_id, is_externally_public, revision,
+                updated_by, updated_at
+             ) VALUES ($1, $2, $3, NULL, NULL, NULL, false, 0, $4, $5)",
+        )
+        .bind(guild_id)
+        .bind(format!("config-{guild_id}"))
+        .bind(role_id)
+        .bind(user_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    }
     for (guild_id, season_id) in [(guild_a, season_a), (guild_b, season_b)] {
         sqlx::query(
             "INSERT INTO seasons (
@@ -493,6 +712,33 @@ async fn assert_constraints_and_tenant_isolation(pool: &PgPool) -> TestResult {
     assert_eq!(
         constraint_name(&invalid_lane),
         Some("guild_members_main_lane_check")
+    );
+
+    let invalid_entry_channel = sqlx::query(
+        "UPDATE guild_config SET entry_channel_id = 'not-a-snowflake' WHERE guild_id = $1",
+    )
+    .bind(guild_a)
+    .execute(pool)
+    .await
+    .expect_err("entry channel must be a Discord snowflake");
+    assert_eq!(
+        constraint_name(&invalid_entry_channel),
+        Some("guild_config_entry_channel_id_check")
+    );
+
+    let everyone_role = sqlx::query(
+        "INSERT INTO guild_discord_roles (
+            guild_id, role_id, name, position, managed, updated_at
+         ) VALUES ($1, $1, '@everyone', 0, false, $2)",
+    )
+    .bind(guild_a)
+    .bind(now)
+    .execute(pool)
+    .await
+    .expect_err("@everyone must not be cached as a selectable role");
+    assert_eq!(
+        constraint_name(&everyone_role),
+        Some("guild_discord_roles_not_everyone_check")
     );
     Ok(())
 }
@@ -587,6 +833,133 @@ async fn assert_idempotency_contract(pool: &PgPool) -> TestResult {
     .await?;
     assert_eq!(conflict, AcquireIdempotencyOutcome::Conflict { record_id });
     transaction.rollback().await?;
+    Ok(())
+}
+
+async fn assert_expired_idempotency_reuse(pool: &PgPool) -> TestResult {
+    let now = OffsetDateTime::from_unix_timestamp(1_750_000_125)?;
+    let expiry = now + time::Duration::hours(1);
+    let scope = TenantScope::guild(GuildId::parse("200000000000000001")?);
+
+    let completed_id = IdempotencyRecordId::new();
+    let original_hash = [12_u8; 32];
+    let mut original = pool.begin().await?;
+    let acquired = idempotency::acquire(
+        &mut original,
+        &AcquireIdempotency {
+            record_id: completed_id,
+            scope: &scope,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: "100000000000000001",
+            method: "PATCH",
+            route_template: "/api/guilds/{guildId}/members/{memberId}/mmr",
+            idempotency_key: "expired-completed",
+            request_hash: &original_hash,
+            created_at: now,
+            expires_at: expiry,
+        },
+    )
+    .await?;
+    assert_eq!(
+        acquired,
+        AcquireIdempotencyOutcome::Acquired {
+            record_id: completed_id
+        }
+    );
+    let completed = idempotency::complete(
+        &mut original,
+        CompleteIdempotency {
+            scope: &scope,
+            record_id: completed_id,
+            response: IdempotentResponse {
+                status_code: 200,
+                body: Some(json!({ "revision": 1 })),
+            },
+            completed_at: now + time::Duration::seconds(1),
+        },
+    )
+    .await?;
+    assert_eq!(completed, CompleteIdempotencyOutcome::Completed);
+    original.commit().await?;
+
+    let replacement_id = IdempotencyRecordId::new();
+    let replacement_hash = [13_u8; 32];
+    let mut replacement = pool.begin().await?;
+    let replaced = idempotency::acquire(
+        &mut replacement,
+        &AcquireIdempotency {
+            record_id: replacement_id,
+            scope: &scope,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: "100000000000000001",
+            method: "PATCH",
+            route_template: "/api/guilds/{guildId}/members/{memberId}/mmr",
+            idempotency_key: "expired-completed",
+            request_hash: &replacement_hash,
+            created_at: expiry,
+            expires_at: expiry + time::Duration::hours(24),
+        },
+    )
+    .await?;
+    assert_eq!(
+        replaced,
+        AcquireIdempotencyOutcome::Acquired {
+            record_id: replacement_id
+        }
+    );
+    replacement.commit().await?;
+
+    let stale_id = IdempotencyRecordId::new();
+    let mut stale = pool.begin().await?;
+    let acquired = idempotency::acquire(
+        &mut stale,
+        &AcquireIdempotency {
+            record_id: stale_id,
+            scope: &scope,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: "100000000000000001",
+            method: "PATCH",
+            route_template: "/api/guilds/{guildId}/members/{memberId}/mmr",
+            idempotency_key: "expired-in-progress",
+            request_hash: &original_hash,
+            created_at: now,
+            expires_at: expiry,
+        },
+    )
+    .await?;
+    assert_eq!(
+        acquired,
+        AcquireIdempotencyOutcome::Acquired {
+            record_id: stale_id
+        }
+    );
+    stale.commit().await?;
+
+    let stale_replacement_id = IdempotencyRecordId::new();
+    let mut stale_replacement = pool.begin().await?;
+    let replaced = idempotency::acquire(
+        &mut stale_replacement,
+        &AcquireIdempotency {
+            record_id: stale_replacement_id,
+            scope: &scope,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: "100000000000000001",
+            method: "PATCH",
+            route_template: "/api/guilds/{guildId}/members/{memberId}/mmr",
+            idempotency_key: "expired-in-progress",
+            request_hash: &replacement_hash,
+            created_at: expiry,
+            expires_at: expiry + time::Duration::hours(24),
+        },
+    )
+    .await?;
+    assert_eq!(
+        replaced,
+        AcquireIdempotencyOutcome::Acquired {
+            record_id: stale_replacement_id,
+        }
+    );
+    stale_replacement.commit().await?;
     Ok(())
 }
 

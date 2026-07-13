@@ -148,6 +148,134 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/me/privacy:
+    get:
+      operationId: getCurrentUserPrivacySettings
+      summary: Get the current user's privacy settings
+      description: >-
+        Returns the stored settings for the authenticated user. If no settings row exists, the
+        server returns the defaults publicProfile=true, showRiotIds=true, and
+        allowExternalRecordSearch=false without creating a row.
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: Authoritative privacy settings snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivacySettingsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: updateCurrentUserPrivacySettings
+      summary: Replace the current user's privacy settings
+      description: >-
+        Atomically stores all three privacy settings and returns the authoritative post-commit
+        snapshot. The X-CSRF-Token value must equal the monkeybot_csrf cookie value.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrivacySettings'
+      responses:
+        '200':
+          description: Privacy settings replaced.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivacySettingsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/champion-preferences:
+    get:
+      operationId: getCurrentUserChampionPreferences
+      summary: Get all champion preferences for the current user
+      description: >-
+        Returns all five canonical lanes. A lane without stored rows is represented by an empty
+        array, and champion IDs retain the user's explicit order.
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: Authoritative champion preference snapshot for all lanes.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChampionPreferencesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/champion-preferences/{lane}:
+    put:
+      operationId: replaceCurrentUserChampionPreferences
+      summary: Replace one lane's ordered champion preferences
+      description: >-
+        Atomically replaces the selected lane. An empty championIds array clears that lane. The
+        response is the complete post-commit five-lane snapshot, not only the changed lane.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/ChampionPreferenceLane'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceChampionPreferencesRequest'
+      responses:
+        '200':
+          description: Lane replaced and the authoritative full snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChampionPreferencesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/me/guilds:
     get:
       operationId: listCurrentUserGuilds
@@ -204,6 +332,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -251,6 +381,47 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /internal/guilds/{guildId}/discord-catalog:
+    put:
+      operationId: replaceGuildDiscordCatalog
+      summary: Replace the guild Discord role and channel catalog
+      description: >-
+        Bot service-principal projection that atomically replaces the complete Discord catalog
+        used by guild settings. This is not a Discord interaction command and does not use an
+        Idempotency-Key. Channels are limited to text or announcement channels where the Bot can
+        view and send messages.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceGuildDiscordCatalogRequest'
+      responses:
+        '200':
+          description: Discord catalog replaced and its authoritative sync time returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscordCatalogSyncResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}:
     get:
       operationId: getGuildContext
@@ -276,6 +447,351 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/members:
+    get:
+      operationId: listGuildAdminMembers
+      summary: Get the guild member administration snapshot
+      description: >-
+        Requires an active operator membership in the requested active guild. Returns the complete
+        authoritative MEMBERS admin snapshot used for revision-checked member mutations.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: Current authoritative guild member administration snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminMembersResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/settings:
+    get:
+      operationId: getGuildAdminSettings
+      summary: Get the guild administration settings snapshot
+      description: >-
+        Requires an active operator membership in the requested active guild. Returns the stored
+        guild settings, revision metadata, catalog sync time, selectable non-managed roles, and
+        Bot-postable Discord channels in one repeatable-read snapshot. A configured resource may
+        be absent from the current catalog after it is deleted in Discord.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: Current authoritative guild settings and Discord catalog snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminSettingsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: updateGuildAdminSettings
+      summary: Replace guild administration settings
+      description: >-
+        Requires an active operator membership, an exact CSRF cookie/header match, and the current
+        guild_config revision. Changed role and non-null channel selections must exist in the
+        current selectable Discord catalog. Unchanged configured IDs may remain when a later
+        catalog no longer contains them. The accepted mutation increments the revision, appends a
+        GUILD_SETTINGS_UPDATED audit row, and returns the complete post-commit snapshot. Season
+        fields are not part of this strict request.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGuildAdminSettingsRequest'
+      responses:
+        '200':
+          description: Guild settings replaced and the authoritative full snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminSettingsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/seasons:
+    get:
+      operationId: getGuildAdminSeasons
+      summary: Get current and completed guild seasons
+      description: >-
+        Requires an active operator membership in the requested active guild. Returns the current
+        active season and completed seasons with authoritative PostgreSQL activity aggregates.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: Current and completed guild season summaries.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminSeasonsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: rotateGuildSeason
+      summary: Close the current guild season and start a new one
+      description: >-
+        Requires an active operator membership, an exact CSRF cookie/header match, the current
+        active season ID, and a browser-generated idempotency key. Atomically closes the old
+        season, creates the new active season, appends the audit row, stores the idempotent
+        response, and preserves all prior records and MMR ledgers.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateGuildSeasonRequest'
+      responses:
+        '200':
+          description: Season rotation committed and the authoritative full snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminSeasonsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/members/{memberId}/mmr:
+    patch:
+      operationId: adjustGuildMemberMmr
+      summary: Append a manual guild member MMR adjustment
+      description: >-
+        Requires an active operator membership, an exact CSRF cookie/header match, the current
+        MEMBERS revision, and a browser-generated idempotency key (a UUID is recommended). Appends
+        a MANUAL_ADJUSTMENT ledger entry instead of replacing the MMR summary directly. A
+        successful mutation returns the complete post-commit member administration snapshot.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/MemberId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdjustGuildMemberMmrRequest'
+      responses:
+        '200':
+          description: MMR adjustment committed and the authoritative full snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminMembersResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/members/{memberId}/status:
+    patch:
+      operationId: updateGuildMemberStatus
+      summary: Update a guild member's active status
+      description: >-
+        Requires an active operator membership, an exact CSRF cookie/header match, and the current
+        MEMBERS revision. Updates the member to ACTIVE or INACTIVE and returns the complete
+        authoritative post-commit member administration snapshot. An operator cannot deactivate
+        their own member row; an attempted self ACTIVE-to-INACTIVE transition returns
+        self_deactivation_forbidden. Guild ownership is not a separate authorization model.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/MemberId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGuildMemberStatusRequest'
+      responses:
+        '200':
+          description: Member status updated and the authoritative full snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminMembersResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The MEMBERS revision is stale, or the authenticated operator attempted to deactivate
+            their own member row.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                selfDeactivationForbidden:
+                  value:
+                    error:
+                      code: self_deactivation_forbidden
+                      message: 자기 자신은 비활성화할 수 없습니다.
+                      requestId: 01900000-0000-7000-8000-000000000001
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/audit-logs:
+    get:
+      operationId: listGuildAdminAuditLogs
+      summary: List guild administration audit log entries
+      description: >-
+        Requires an active operator membership in the requested active guild. Returns append-only
+        canonical audit fields in createdAt and UUID descending keyset order, plus nullable current
+        display-name projections. Category, localized labels, and detail prose are frontend
+        presentation concerns and are not synthesized by this endpoint.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: One authoritative page of guild audit entries.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildAdminAuditLogsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '503':
@@ -723,6 +1239,511 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/records/suggestions:
+    get:
+      operationId: suggestGuildRecordMembers
+      summary: Suggest active guild members for record search
+      description: >-
+        Returns active members whose guild display name starts with the query. The caller must be
+        an active member of the active guild; otherwise the endpoint hides guild existence with a
+        404. A member's main Riot ID and profile icon are included only when show_riot_ids is true.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/SearchSuggestionQuery'
+        - $ref: '#/components/parameters/SearchSuggestionLimit'
+      responses:
+        '200':
+          description: Privacy-filtered guild member suggestions, or an empty list.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchSuggestionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/records/profile:
+    get:
+      operationId: getGuildRecordsProfile
+      summary: Get a guild member profile for custom records
+      description: >-
+        Resolves one active member of the requested active guild by an exact Discord user ID,
+        case-insensitive exact guild display name, or exact normalized Riot ID. The caller must be
+        an active member of the same guild; an inaccessible guild and a missing target both return
+        404. Riot ID resolution and the returned riotAccounts array disclose the Discord-to-Riot
+        linkage only when the target has show_riot_ids enabled. Public Riot records search is
+        independent from this privacy setting. The response never contains a Discord user ID or
+        Riot PUUID.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/GuildRecordsProfileQuery'
+      responses:
+        '200':
+          description: >-
+            Privacy-filtered guild member identity, ordered champion preferences, and every linked
+            Riot account allowed for disclosure. riotAccounts is empty when linkage disclosure is
+            disabled or no linked account exists.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildRecordsProfileResponse'
+              example:
+                data:
+                  member:
+                    displayName: Longcat
+                    avatarUrl: https://cdn.discordapp.com/avatars/1525847677542207548/abcdef.webp?size=128
+                    mainLane: MID
+                  championPreferences:
+                    TOP: [Ornn]
+                    JUNGLE: []
+                    MID: [Ahri, Orianna]
+                    BOTTOM: [Ezreal]
+                    SUPPORT: []
+                  riotAccounts:
+                    - platform: KR
+                      gameName: Longcat
+                      tagLine: KR1
+                      profileIconId: 588
+                      isMain: true
+                meta:
+                  requestId: 01900000-0000-7000-8000-000000000001
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/records/search:
+    get:
+      operationId: searchGuildRecords
+      summary: Get one guild member's custom-match records
+      description: >-
+        Resolves the target with the same exact-identity and privacy rules as the profile endpoint,
+        then returns the selected season's authoritative guild-local records. The caller and target
+        must both be active members of the active guild. Internal game and MMR records are not
+        hidden by personal privacy settings; show_riot_ids controls only Riot-link disclosure and
+        Riot-ID identity resolution. Records contain confirmed games under completed,
+        non-cancelled, non-deleted parents. Type and lane controls are frontend-local filters over
+        the loaded page and are intentionally not API query parameters.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/GuildRecordsProfileQuery'
+        - $ref: '#/components/parameters/GuildRecordsSeasonId'
+        - $ref: '#/components/parameters/GuildRecordsPageCursor'
+        - $ref: '#/components/parameters/GuildRecordsPageLimit'
+      responses:
+        '200':
+          description: >-
+            Privacy-filtered identity plus the full selected-season summary and one stable keyset
+            page of record groups. When seasonId is omitted and no active season exists,
+            selectedSeasonId is null, summary is zero, championRecords and records are empty, and
+            laneMmr still contains the five 1500/0/0 baseline rows. A closed season is not selected
+            implicitly.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildRecordsSearchResponse'
+              examples:
+                activeSeasonWithoutGames:
+                  summary: Active season with no recorded games
+                  value:
+                    data:
+                      member:
+                        displayName: Longcat
+                        avatarUrl: null
+                        mainLane: MID
+                      championPreferences:
+                        TOP: []
+                        JUNGLE: []
+                        MID: [Ahri, Orianna]
+                        BOTTOM: []
+                        SUPPORT: []
+                      riotAccounts:
+                        - platform: KR
+                          gameName: Longcat
+                          tagLine: KR1
+                          profileIconId: 588
+                          isMain: true
+                      seasons:
+                        - id: 019f5701-4eb2-74e1-a5e6-6473a732ce98
+                          name: 시즌 1
+                          status: ACTIVE
+                          startedAt: '2026-07-12T15:45:31.31408Z'
+                          endedAt: null
+                      selectedSeasonId: 019f5701-4eb2-74e1-a5e6-6473a732ce98
+                      summary: { games: 0, wins: 0, losses: 0 }
+                      laneMmr:
+                        - { lane: TOP, mmr: 1500, games: 0, wins: 0 }
+                        - { lane: JUNGLE, mmr: 1500, games: 0, wins: 0 }
+                        - { lane: MID, mmr: 1500, games: 0, wins: 0 }
+                        - { lane: BOTTOM, mmr: 1500, games: 0, wins: 0 }
+                        - { lane: SUPPORT, mmr: 1500, games: 0, wins: 0 }
+                      championRecords: []
+                      records: []
+                      nextCursor: null
+                    meta:
+                      requestId: 01900000-0000-7000-8000-000000000001
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/riot/records:
+    get:
+      operationId: getRiotRecords
+      summary: Get cache-backed external Riot records
+      description: >-
+        Resolves the supplied Riot ID through the private Riot integration service and returns a
+        provider-neutral records page DTO. This endpoint never mixes Riot matches with guild
+        custom-match records. The MVP platform allowlist contains KR only.
+      parameters:
+        - $ref: '#/components/parameters/RiotGameName'
+        - $ref: '#/components/parameters/RiotTagLine'
+        - $ref: '#/components/parameters/RiotPlatformQuery'
+      responses:
+        '200':
+          description: Canonical identity, ranks, current-season ranked aggregates, recent matches, and cache state.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotRecordsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/riot/records/suggestions:
+    get:
+      operationId: suggestPublicRiotAccounts
+      summary: Suggest known Riot identities
+      description: >-
+        Performs a normalized prefix lookup over canonical Riot identities already known through
+        riot_accounts or riot_records_snapshots without calling Riot. Riot identity lookup is not
+        privacy-gated; the response exposes no Discord linkage or PUUID.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SearchSuggestionQuery'
+        - name: platform
+          in: query
+          required: false
+          description: Riot platform routing code. Defaults to KR in the MVP.
+          schema:
+            $ref: '#/components/schemas/RiotPlatform'
+            default: KR
+        - $ref: '#/components/parameters/SearchSuggestionLimit'
+      responses:
+        '200':
+          description: Known Riot identity suggestions, or an empty list.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchSuggestionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/riot/records/refresh:
+    post:
+      operationId: refreshRiotRecords
+      summary: Refresh external Riot records
+      description: >-
+        Authenticated explicit refresh. Uses the same resolver and response DTO as the cache-backed
+        GET route. PostgreSQL enforces a 30-second cooldown and one in-flight provider call per
+        Riot ID. Riot throttling or dependency failure may return a stale cached snapshot.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RiotIdentityRequest'
+      responses:
+        '200':
+          description: Refreshed records, or an explicitly marked stale cached snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotRecordsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/riot/records/matches:
+    get:
+      operationId: getRiotRecentMatchesPage
+      summary: Get the next external Riot match page
+      description: >-
+        Returns one cache-backed recent-match page for the supplied Riot ID. Pages include all
+        queues and are cached by canonical account, offset, and requested count until the records
+        snapshot is explicitly refreshed.
+      parameters:
+        - $ref: '#/components/parameters/RiotGameName'
+        - $ref: '#/components/parameters/RiotTagLine'
+        - $ref: '#/components/parameters/RiotPlatformQuery'
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+            default: 0
+        - name: count
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+      responses:
+        '200':
+          description: One recent-match page and continuation metadata.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotRecentMatchesPageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/riot-accounts:
+    get:
+      operationId: listCurrentUserRiotAccounts
+      summary: List the current user's linked Riot accounts
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: Linked accounts with exactly one main account when the list is non-empty.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotAccountsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: linkCurrentUserRiotAccount
+      summary: Resolve and link a Riot account
+      description: >-
+        Accepts only the human-facing Riot ID and platform. Axum resolves the canonical Riot ID,
+        PUUID, routing region, and profile through the private Riot integration service before a
+        short account-link transaction. Client-supplied PUUID or profile fields are not accepted.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RiotIdentityRequest'
+      responses:
+        '201':
+          description: Account linked and the complete post-commit account snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotAccountsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/riot-accounts/{puuid}/main:
+    put:
+      operationId: setCurrentUserMainRiotAccount
+      summary: Set the main Riot account
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/RiotPuuid'
+      responses:
+        '200':
+          description: Main account updated and the complete post-commit snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotAccountsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/riot-accounts/{puuid}/refresh:
+    post:
+      operationId: refreshCurrentUserRiotAccount
+      summary: Refresh a linked Riot account profile
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/RiotPuuid'
+      responses:
+        '200':
+          description: Account refreshed and the complete post-commit snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotAccountsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/me/riot-accounts/{puuid}:
+    delete:
+      operationId: unlinkCurrentUserRiotAccount
+      summary: Unlink a Riot account
+      description: >-
+        Removes the account from the current user. If accounts remain, the transaction preserves
+        exactly one main account and returns the complete resulting snapshot.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/RiotPuuid'
+      responses:
+        '200':
+          description: Account unlinked and the complete post-commit snapshot returned.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiotAccountsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /healthz:
     get:
       operationId: getLiveness
@@ -804,6 +1825,20 @@ components:
       description: Discord user snowflake targeted by the recruitment interaction.
       schema:
         $ref: '#/components/schemas/DiscordSnowflake'
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      description: Discord user snowflake identifying the guild member being administered.
+      schema:
+        $ref: '#/components/schemas/DiscordSnowflake'
+    ChampionPreferenceLane:
+      name: lane
+      in: path
+      required: true
+      description: Canonical lane whose ordered champion preferences are replaced.
+      schema:
+        $ref: '#/components/schemas/Lane'
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -813,6 +1848,21 @@ components:
         response; reuse with a different request returns idempotency_conflict.
       schema:
         $ref: '#/components/schemas/DiscordSnowflake'
+    BrowserIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Browser-generated key for a user-initiated unsafe command; UUIDv4 is recommended and used
+        by the web client. Reuse with an identical route and request replays the stored response;
+        reuse with a different request returns idempotency_conflict. This is distinct from a Bot
+        command's Discord interaction ID.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[!-~]+$'
+      example: 2c26bd12-cfdd-4d13-b5b2-17c6db65c7f1
     ActionableState:
       name: state
       in: query
@@ -849,6 +1899,103 @@ components:
         minimum: 1
         maximum: 100
         default: 50
+    SearchSuggestionQuery:
+      name: q
+      in: query
+      required: true
+      description: Prefix used by navbar autocomplete after endpoint-specific normalization.
+      schema:
+        type: string
+        minLength: 2
+    SearchSuggestionLimit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of suggestions to return.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 8
+        default: 8
+    GuildRecordsProfileQuery:
+      name: q
+      in: query
+      required: true
+      description: >-
+        Exact Discord user ID, guild display name, or full GameName#TagLine. Leading and trailing
+        whitespace is removed. Display names are matched case-insensitively; Riot IDs use the
+        canonical NFKC, trim, and Unicode case-fold normalization.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 100
+      examples:
+        displayName:
+          value: Longcat
+        riotId:
+          value: Longcat#KR1
+        discordId:
+          value: '1525847677542207548'
+    GuildRecordsSeasonId:
+      name: seasonId
+      in: query
+      required: false
+      description: >-
+        Guild-owned season UUID to select. When omitted, the active season is selected. If the
+        guild has no active season, selectedSeasonId is null even when closed seasons exist. An
+        unknown or foreign-guild UUID returns 404.
+      schema:
+        type: string
+        format: uuid
+    GuildRecordsPageCursor:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Opaque canonical URL-safe cursor returned by this endpoint. It represents the last
+        (playedAt, id, kind) tuple and must be reused with the same q and seasonId selection.
+      schema:
+        $ref: '#/components/schemas/OpaquePageCursor'
+    GuildRecordsPageLimit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of SERIES or TOURNAMENT groups to return. Defaults to 20.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+    RiotGameName:
+      name: gameName
+      in: query
+      required: true
+      description: Human-facing Riot game name without the `#` separator.
+      schema:
+        $ref: '#/components/schemas/RiotGameName'
+      example: Longcat
+    RiotTagLine:
+      name: tagLine
+      in: query
+      required: true
+      description: Human-facing Riot tag line without the `#` separator.
+      schema:
+        $ref: '#/components/schemas/RiotTagLine'
+      example: KR1
+    RiotPlatformQuery:
+      name: platform
+      in: query
+      required: true
+      description: Riot platform routing code. The MVP allowlist contains KR only.
+      schema:
+        $ref: '#/components/schemas/RiotPlatform'
+    RiotPuuid:
+      name: puuid
+      in: path
+      required: true
+      description: Opaque PUUID previously resolved and stored by the backend.
+      schema:
+        $ref: '#/components/schemas/RiotPuuidValue'
   headers:
     RequestId:
       description: Backend-generated UUIDv7 request identifier.
@@ -925,7 +2072,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Conflict:
-      description: Revision, state, or idempotency conflict.
+      description: Revision, state, idempotency, or ambiguous exact-identity lookup conflict.
       headers:
         X-Request-ID:
           $ref: '#/components/headers/RequestId'
@@ -952,7 +2099,9 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     RateLimited:
-      description: The OAuth start rate limit for the client address was exceeded.
+      description: >-
+        A local route limit or upstream provider limit was exceeded. When supplied by the provider,
+        error.details.retryAfterSeconds contains the non-negative retry delay.
       headers:
         X-Request-ID:
           $ref: '#/components/headers/RequestId'
@@ -1064,6 +2213,85 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/SetupGuildData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DiscordCatalogRoleInput:
+      type: object
+      additionalProperties: false
+      required: [id, name, position, managed]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Leading and trailing whitespace is removed before storage.
+        position:
+          type: integer
+          format: int32
+          minimum: 0
+        managed:
+          type: boolean
+    DiscordCatalogChannelKind:
+      type: string
+      enum: [TEXT, ANNOUNCEMENT]
+    DiscordCatalogChannelInput:
+      type: object
+      additionalProperties: false
+      required: [id, name, parentName, position, kind]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Leading and trailing whitespace is removed before storage.
+        parentName:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 100
+            - type: 'null'
+        position:
+          type: integer
+          format: int32
+          minimum: 0
+        kind:
+          $ref: '#/components/schemas/DiscordCatalogChannelKind'
+    ReplaceGuildDiscordCatalogRequest:
+      type: object
+      additionalProperties: false
+      required: [roles, channels]
+      properties:
+        roles:
+          type: array
+          maxItems: 250
+          description: Role IDs must be unique and must not contain the guild's @everyone role.
+          items:
+            $ref: '#/components/schemas/DiscordCatalogRoleInput'
+        channels:
+          type: array
+          maxItems: 500
+          description: Channel IDs must be unique within the replacement snapshot.
+          items:
+            $ref: '#/components/schemas/DiscordCatalogChannelInput'
+    DiscordCatalogSyncData:
+      type: object
+      additionalProperties: false
+      required: [syncedAt]
+      properties:
+        syncedAt:
+          type: string
+          format: date-time
+    DiscordCatalogSyncResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DiscordCatalogSyncData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     CreateRecruitmentRequest:
@@ -1260,6 +2488,40 @@ components:
           $ref: '#/components/schemas/MeData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
+    PrivacySettings:
+      type: object
+      additionalProperties: false
+      required: [publicProfile, showRiotIds, allowExternalRecordSearch]
+      properties:
+        publicProfile:
+          type: boolean
+          description: Whether public user-profile projections may expose this user.
+        showRiotIds:
+          type: boolean
+          description: >-
+            Whether Discord or guild user projections may disclose the relationship to linked
+            Riot IDs. This does not restrict public Riot ID lookup or Riot records search.
+        allowExternalRecordSearch:
+          type: boolean
+          description: >-
+            Whether users outside the target guild may access this user's custom-match records in
+            a public guild. This does not restrict same-guild records or public Riot records.
+    PrivacySettingsData:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings:
+          $ref: '#/components/schemas/PrivacySettings'
+    PrivacySettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/PrivacySettingsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     GuildRole:
       type: string
       enum: [MEMBER, OPERATOR]
@@ -1325,6 +2587,1256 @@ components:
           $ref: '#/components/schemas/DefaultGuildData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
+    SearchSuggestionKind:
+      type: string
+      enum: [riotAccount, guildMember]
+    SearchSuggestion:
+      type: object
+      additionalProperties: false
+      required: [kind, value, label, description, profileIconId]
+      properties:
+        kind:
+          $ref: '#/components/schemas/SearchSuggestionKind'
+        value:
+          type: string
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+        description:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        profileIconId:
+          oneOf:
+            - type: integer
+              format: int32
+              minimum: 0
+            - type: 'null'
+    SearchSuggestionsData:
+      type: object
+      additionalProperties: false
+      required: [suggestions]
+      properties:
+        suggestions:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/SearchSuggestion'
+    SearchSuggestionsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/SearchSuggestionsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildRecordsProfileMember:
+      type: object
+      additionalProperties: false
+      required: [displayName, avatarUrl, mainLane]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+        avatarUrl:
+          oneOf:
+            - type: string
+              format: uri
+            - type: 'null'
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+    GuildRecordsVisibleRiotAccount:
+      type: object
+      additionalProperties: false
+      description: >-
+        Privacy-filtered Riot identity linked to the resolved Discord user. This projection
+        intentionally excludes PUUID, routing region, timestamps, and owner identifiers.
+      required: [platform, gameName, tagLine, profileIconId, isMain]
+      properties:
+        platform:
+          $ref: '#/components/schemas/RiotPlatform'
+        gameName:
+          $ref: '#/components/schemas/RiotGameName'
+        tagLine:
+          $ref: '#/components/schemas/RiotTagLine'
+        profileIconId:
+          oneOf:
+            - type: integer
+              format: int32
+              minimum: 0
+            - type: 'null'
+        isMain:
+          type: boolean
+    GuildRecordsProfileData:
+      type: object
+      additionalProperties: false
+      required: [member, championPreferences, riotAccounts]
+      properties:
+        member:
+          $ref: '#/components/schemas/GuildRecordsProfileMember'
+        championPreferences:
+          $ref: '#/components/schemas/ChampionPreferences'
+        riotAccounts:
+          type: array
+          description: >-
+            Every linked Riot identity when show_riot_ids is true, ordered with the main account
+            first. Empty when linkage disclosure is disabled, the setting row is absent, or the
+            user has no linked account.
+          items:
+            $ref: '#/components/schemas/GuildRecordsVisibleRiotAccount'
+    GuildRecordsProfileResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildRecordsProfileData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildRecordsSeason:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, startedAt, endedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          $ref: '#/components/schemas/GuildSeasonStatus'
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+    GuildRecordsSummary:
+      type: object
+      additionalProperties: false
+      required: [games, wins, losses]
+      properties:
+        games:
+          type: integer
+          format: int64
+          minimum: 0
+        wins:
+          type: integer
+          format: int64
+          minimum: 0
+        losses:
+          type: integer
+          format: int64
+          minimum: 0
+      description: >-
+        Target-perspective aggregate over every confirmed game in the selected season. Every game
+        has one winning side, so games equals wins plus losses. DRAW is only a completed series
+        outcome.
+    GuildRecordsLaneMmr:
+      type: object
+      additionalProperties: false
+      required: [lane, mmr, games, wins]
+      properties:
+        lane:
+          $ref: '#/components/schemas/Lane'
+        mmr:
+          type: number
+          format: double
+        games:
+          type: integer
+          format: int64
+          minimum: 0
+        wins:
+          type: integer
+          format: int64
+          minimum: 0
+      description: >-
+        Current selected-season lane summary. A missing user_lane_mmr row is projected as MMR 1500,
+        zero games, and zero wins without creating a database row. Wins never exceeds games.
+    GuildRecordsChampionRecord:
+      type: object
+      additionalProperties: false
+      required: [championId, lane, games, wins, losses]
+      properties:
+        championId:
+          $ref: '#/components/schemas/ChampionId'
+        lane:
+          $ref: '#/components/schemas/Lane'
+        games:
+          type: integer
+          format: int64
+          minimum: 1
+        wins:
+          type: integer
+          format: int64
+          minimum: 0
+        losses:
+          type: integer
+          format: int64
+          minimum: 0
+      description: >-
+        One champion-and-lane aggregate over confirmed games. Rows are ordered by games descending,
+        wins descending, championId ascending, then canonical lane order. Games equals wins plus
+        losses.
+    GuildRecordsResult:
+      type: string
+      enum: [WIN, LOSS, DRAW]
+      description: Target-perspective result.
+    GuildRecordsSide:
+      type: string
+      enum: [BLUE, RED]
+    GuildRecordsStage:
+      type: string
+      enum: [SEMIFINAL_A, SEMIFINAL_B, FINAL]
+    GuildRecordsLineup:
+      type: object
+      additionalProperties: false
+      required: [displayName, lane, championId, isTarget]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+        lane:
+          $ref: '#/components/schemas/Lane'
+        championId:
+          oneOf:
+            - $ref: '#/components/schemas/ChampionId'
+            - type: 'null'
+        isTarget:
+          type: boolean
+    GuildRecordsGameTarget:
+      type: object
+      additionalProperties: false
+      required: [side, lane, championId, mmrBefore, mmrAfter]
+      oneOf:
+        - properties:
+            mmrBefore:
+              type: number
+              format: double
+            mmrAfter:
+              type: number
+              format: double
+        - properties:
+            mmrBefore:
+              type: 'null'
+            mmrAfter:
+              type: 'null'
+      properties:
+        side:
+          $ref: '#/components/schemas/GuildRecordsSide'
+        lane:
+          $ref: '#/components/schemas/Lane'
+        championId:
+          oneOf:
+            - $ref: '#/components/schemas/ChampionId'
+            - type: 'null'
+        mmrBefore:
+          oneOf:
+            - type: number
+              format: double
+            - type: 'null'
+        mmrAfter:
+          oneOf:
+            - type: number
+              format: double
+            - type: 'null'
+      description: >-
+        The target's confirmed participant projection. Champion is nullable when no trusted pick
+        was stored; MMR values are null together when no applicable GAME_RESULT ledger exists.
+    GuildRecordsGame:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - gameNumber
+        - playedAt
+        - winningSide
+        - target
+        - blueTeam
+        - redTeam
+        - blueBans
+        - redBans
+      properties:
+        id:
+          type: string
+          format: uuid
+        gameNumber:
+          type: integer
+          minimum: 1
+          maximum: 5
+        playedAt:
+          type: string
+          format: date-time
+        winningSide:
+          $ref: '#/components/schemas/GuildRecordsSide'
+        target:
+          $ref: '#/components/schemas/GuildRecordsGameTarget'
+        blueTeam:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/GuildRecordsLineup'
+        redTeam:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/GuildRecordsLineup'
+        blueBans:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/ChampionId'
+        redBans:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/ChampionId'
+    GuildRecordsSeriesSource:
+      type: string
+      enum: [REGULAR, AUCTION]
+    GuildRecordsSeries:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - id
+        - source
+        - title
+        - participantCount
+        - playedAt
+        - result
+        - teamName
+        - opponentName
+        - stage
+        - wins
+        - losses
+        - mmrDelta
+        - games
+      properties:
+        kind:
+          type: string
+          const: SERIES
+        id:
+          type: string
+          format: uuid
+        source:
+          $ref: '#/components/schemas/GuildRecordsSeriesSource'
+        title:
+          type: string
+          minLength: 1
+        participantCount:
+          type: integer
+          const: 10
+        playedAt:
+          type: string
+          format: date-time
+          description: Latest confirmed target game time in this series.
+        result:
+          $ref: '#/components/schemas/GuildRecordsResult'
+        teamName:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        opponentName:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        stage:
+          oneOf:
+            - $ref: '#/components/schemas/GuildRecordsStage'
+            - type: 'null'
+        wins:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+        mmrDelta:
+          oneOf:
+            - type: number
+              format: double
+            - type: 'null'
+          description: >-
+            Sum of every target game MMR delta, or null when any included game lacks the applicable
+            GAME_RESULT ledger.
+        games:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/GuildRecordsGame'
+      description: >-
+        A completed regular series or completed ten-person auction final. The games array length
+        equals wins plus losses.
+    GuildRecordsTournamentSeries:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - stage
+        - opponentName
+        - playedAt
+        - result
+        - wins
+        - losses
+        - mmrDelta
+        - games
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+        stage:
+          $ref: '#/components/schemas/GuildRecordsStage'
+        opponentName:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        playedAt:
+          type: string
+          format: date-time
+          description: Latest confirmed target game time in this bracket series.
+        result:
+          $ref: '#/components/schemas/GuildRecordsResult'
+        wins:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+        mmrDelta:
+          oneOf:
+            - type: number
+              format: double
+            - type: 'null'
+          description: >-
+            Sum of every included target game MMR delta, or null when any game lacks the applicable
+            GAME_RESULT ledger.
+        games:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/GuildRecordsGame'
+      description: Games array length equals wins plus losses.
+    GuildRecordsTournament:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - id
+        - title
+        - participantCount
+        - playedAt
+        - teamName
+        - spentPoints
+        - placement
+        - wins
+        - losses
+        - mmrDelta
+        - roster
+        - series
+      properties:
+        kind:
+          type: string
+          const: TOURNAMENT
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+        participantCount:
+          type: integer
+          const: 20
+        playedAt:
+          type: string
+          format: date-time
+          description: Latest confirmed target game time across the included bracket series.
+        teamName:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        spentPoints:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+        placement:
+          oneOf:
+            - type: integer
+              enum: [1, 2, 3]
+            - type: 'null'
+        wins:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+        mmrDelta:
+          oneOf:
+            - type: number
+              format: double
+            - type: 'null'
+        roster:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/GuildRecordsLineup'
+        series:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/GuildRecordsTournamentSeries'
+      description: >-
+        One completed twenty-person auction tournament. Wins and losses aggregate the nested
+        confirmed games; mmrDelta is null when any nested game lacks its applicable GAME_RESULT
+        ledger.
+    GuildRecordsRecord:
+      oneOf:
+        - $ref: '#/components/schemas/GuildRecordsSeries'
+        - $ref: '#/components/schemas/GuildRecordsTournament'
+      discriminator:
+        propertyName: kind
+        mapping:
+          SERIES: '#/components/schemas/GuildRecordsSeries'
+          TOURNAMENT: '#/components/schemas/GuildRecordsTournament'
+    GuildRecordsSearchData:
+      type: object
+      additionalProperties: false
+      required:
+        - member
+        - championPreferences
+        - riotAccounts
+        - seasons
+        - selectedSeasonId
+        - summary
+        - laneMmr
+        - championRecords
+        - records
+        - nextCursor
+      properties:
+        member:
+          $ref: '#/components/schemas/GuildRecordsProfileMember'
+        championPreferences:
+          $ref: '#/components/schemas/ChampionPreferences'
+        riotAccounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuildRecordsVisibleRiotAccount'
+        seasons:
+          type: array
+          description: Active season first, followed by closed seasons in descending start order.
+          items:
+            $ref: '#/components/schemas/GuildRecordsSeason'
+        selectedSeasonId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        summary:
+          $ref: '#/components/schemas/GuildRecordsSummary'
+        laneMmr:
+          type: array
+          minItems: 5
+          maxItems: 5
+          description: Exactly TOP, JUNGLE, MID, BOTTOM, SUPPORT in canonical order.
+          prefixItems:
+            - allOf:
+                - $ref: '#/components/schemas/GuildRecordsLaneMmr'
+                - properties:
+                    lane:
+                      const: TOP
+            - allOf:
+                - $ref: '#/components/schemas/GuildRecordsLaneMmr'
+                - properties:
+                    lane:
+                      const: JUNGLE
+            - allOf:
+                - $ref: '#/components/schemas/GuildRecordsLaneMmr'
+                - properties:
+                    lane:
+                      const: MID
+            - allOf:
+                - $ref: '#/components/schemas/GuildRecordsLaneMmr'
+                - properties:
+                    lane:
+                      const: BOTTOM
+            - allOf:
+                - $ref: '#/components/schemas/GuildRecordsLaneMmr'
+                - properties:
+                    lane:
+                      const: SUPPORT
+          items: false
+        championRecords:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuildRecordsChampionRecord'
+        records:
+          type: array
+          maxItems: 50
+          description: >-
+            Stable keyset page ordered by playedAt descending, id descending, then kind descending.
+            Twenty-person tournament series are nested and never paginated as separate outer rows.
+          items:
+            $ref: '#/components/schemas/GuildRecordsRecord'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/OpaquePageCursor'
+            - type: 'null'
+    GuildRecordsSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildRecordsSearchData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    ChampionId:
+      type: string
+      minLength: 1
+      maxLength: 64
+      description: Canonical Data Dragon champion identifier such as Aatrox or LeeSin.
+    OrderedChampionIds:
+      type: array
+      maxItems: 10
+      uniqueItems: true
+      description: Ordered unique champion IDs. An empty array clears the lane.
+      items:
+        $ref: '#/components/schemas/ChampionId'
+    ChampionPreferences:
+      type: object
+      additionalProperties: false
+      required: [TOP, JUNGLE, MID, BOTTOM, SUPPORT]
+      properties:
+        TOP:
+          $ref: '#/components/schemas/OrderedChampionIds'
+        JUNGLE:
+          $ref: '#/components/schemas/OrderedChampionIds'
+        MID:
+          $ref: '#/components/schemas/OrderedChampionIds'
+        BOTTOM:
+          $ref: '#/components/schemas/OrderedChampionIds'
+        SUPPORT:
+          $ref: '#/components/schemas/OrderedChampionIds'
+    ChampionPreferencesData:
+      type: object
+      additionalProperties: false
+      required: [preferences]
+      properties:
+        preferences:
+          $ref: '#/components/schemas/ChampionPreferences'
+    ChampionPreferencesResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ChampionPreferencesData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    ReplaceChampionPreferencesRequest:
+      type: object
+      additionalProperties: false
+      required: [championIds]
+      properties:
+        championIds:
+          $ref: '#/components/schemas/OrderedChampionIds'
+    RiotPlatform:
+      type: string
+      enum: [KR]
+    RiotRoutingRegion:
+      type: string
+      enum: [ASIA]
+    RiotGameName:
+      type: string
+      minLength: 1
+      maxLength: 64
+      description: Trimmed Riot game name. Control characters and `#` are rejected.
+    RiotTagLine:
+      type: string
+      minLength: 1
+      maxLength: 16
+      description: Trimmed Riot tag line. Control characters and `#` are rejected.
+    RiotPuuidValue:
+      type: string
+      minLength: 1
+      maxLength: 256
+      pattern: '^[A-Za-z0-9_-]+$'
+      description: Provider-issued opaque PUUID. Clients never create this value.
+    RiotIdentityRequest:
+      type: object
+      additionalProperties: false
+      required: [gameName, tagLine, platform]
+      properties:
+        gameName:
+          $ref: '#/components/schemas/RiotGameName'
+        tagLine:
+          $ref: '#/components/schemas/RiotTagLine'
+        platform:
+          $ref: '#/components/schemas/RiotPlatform'
+    RiotCanonicalAccount:
+      type: object
+      additionalProperties: false
+      required: [puuid, gameName, tagLine]
+      properties:
+        puuid:
+          $ref: '#/components/schemas/RiotPuuidValue'
+        gameName:
+          $ref: '#/components/schemas/RiotGameName'
+        tagLine:
+          $ref: '#/components/schemas/RiotTagLine'
+    RiotRank:
+      type: object
+      additionalProperties: false
+      required: [queueType, tier, rank, leaguePoints, wins, losses]
+      properties:
+        queueType:
+          type: string
+          enum: [RANKED_SOLO_5x5, RANKED_FLEX_SR]
+        tier:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        rank:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        leaguePoints:
+          type: integer
+          format: int32
+          minimum: 0
+        wins:
+          type: integer
+          format: int32
+          minimum: 0
+        losses:
+          type: integer
+          format: int32
+          minimum: 0
+    RiotChampionAggregate:
+      type: object
+      additionalProperties: false
+      required:
+        - championName
+        - games
+        - wins
+        - kills
+        - deaths
+        - assists
+        - creepScore
+        - goldEarned
+        - tripleKills
+        - quadraKills
+        - pentaKills
+      properties:
+        championName:
+          type: string
+          minLength: 1
+        games:
+          type: integer
+          format: int32
+          minimum: 1
+        wins:
+          type: integer
+          format: int32
+          minimum: 0
+        kills:
+          type: integer
+          format: int32
+          minimum: 0
+        deaths:
+          type: integer
+          format: int32
+          minimum: 0
+        assists:
+          type: integer
+          format: int32
+          minimum: 0
+        creepScore:
+          type: integer
+          format: int32
+          minimum: 0
+        goldEarned:
+          type: integer
+          format: int64
+          minimum: 0
+        tripleKills:
+          type: integer
+          format: int64
+          minimum: 0
+        quadraKills:
+          type: integer
+          format: int64
+          minimum: 0
+        pentaKills:
+          type: integer
+          format: int64
+          minimum: 0
+    RiotMatchParticipant:
+      type: object
+      additionalProperties: false
+      required:
+        - puuid
+        - gameName
+        - tagLine
+        - championName
+        - championLevel
+        - teamId
+        - win
+        - kills
+        - deaths
+        - assists
+        - creepScore
+        - goldEarned
+        - damageDealtToChampions
+        - damageTaken
+        - visionScore
+        - summonerSpellIds
+        - itemIds
+        - tripleKills
+        - quadraKills
+        - pentaKills
+        - teamPosition
+      properties:
+        puuid:
+          $ref: '#/components/schemas/RiotPuuidValue'
+        gameName:
+          oneOf:
+            - $ref: '#/components/schemas/RiotGameName'
+            - type: 'null'
+        tagLine:
+          oneOf:
+            - $ref: '#/components/schemas/RiotTagLine'
+            - type: 'null'
+        championName:
+          type: string
+          minLength: 1
+        championLevel:
+          type: integer
+          format: int32
+          minimum: 0
+        teamId:
+          type: integer
+          format: int32
+        win:
+          type: boolean
+        kills:
+          type: integer
+          format: int32
+          minimum: 0
+        deaths:
+          type: integer
+          format: int32
+          minimum: 0
+        assists:
+          type: integer
+          format: int32
+          minimum: 0
+        creepScore:
+          type: integer
+          format: int32
+          minimum: 0
+        goldEarned:
+          type: integer
+          format: int32
+          minimum: 0
+        damageDealtToChampions:
+          type: integer
+          format: int32
+          minimum: 0
+        damageTaken:
+          type: integer
+          format: int32
+          minimum: 0
+        visionScore:
+          type: integer
+          format: int32
+          minimum: 0
+        summonerSpellIds:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        itemIds:
+          type: array
+          minItems: 7
+          maxItems: 7
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        tripleKills:
+          type: integer
+          format: int32
+          minimum: 0
+        quadraKills:
+          type: integer
+          format: int32
+          minimum: 0
+        pentaKills:
+          type: integer
+          format: int32
+          minimum: 0
+        teamPosition:
+          type: string
+    RiotTeamObjectives:
+      type: object
+      additionalProperties: false
+      required:
+        - baronKills
+        - championKills
+        - dragonKills
+        - hordeKills
+        - inhibitorKills
+        - riftHeraldKills
+        - towerKills
+      properties:
+        baronKills:
+          type: integer
+          format: int32
+          minimum: 0
+        championKills:
+          type: integer
+          format: int32
+          minimum: 0
+        dragonKills:
+          type: integer
+          format: int32
+          minimum: 0
+        hordeKills:
+          type: integer
+          format: int32
+          minimum: 0
+        inhibitorKills:
+          type: integer
+          format: int32
+          minimum: 0
+        riftHeraldKills:
+          type: integer
+          format: int32
+          minimum: 0
+        towerKills:
+          type: integer
+          format: int32
+          minimum: 0
+    RiotMatchTeam:
+      type: object
+      additionalProperties: false
+      required: [teamId, win, objectives]
+      properties:
+        teamId:
+          type: integer
+          format: int32
+        win:
+          type: boolean
+        objectives:
+          $ref: '#/components/schemas/RiotTeamObjectives'
+    RiotRecentMatch:
+      type: object
+      additionalProperties: false
+      required:
+        - matchId
+        - queueId
+        - gameVersion
+        - durationSeconds
+        - startedAt
+        - targetPuuid
+        - participants
+        - teams
+      properties:
+        matchId:
+          type: string
+          minLength: 1
+          maxLength: 96
+        queueId:
+          type: integer
+          format: int32
+        gameVersion:
+          type: string
+          minLength: 1
+        durationSeconds:
+          type: integer
+          format: int64
+          minimum: 0
+        startedAt:
+          type: string
+          format: date-time
+        targetPuuid:
+          $ref: '#/components/schemas/RiotPuuidValue'
+        participants:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/RiotMatchParticipant'
+        teams:
+          type: array
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/RiotMatchTeam'
+    RiotCacheMetadata:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [fresh, stale, refreshed]
+    RiotRecentMatchSample:
+      type: object
+      additionalProperties: false
+      required: [requested, returned]
+      properties:
+        requested:
+          type: integer
+          minimum: 1
+          maximum: 20
+        returned:
+          type: integer
+          minimum: 0
+          maximum: 20
+    RiotChampionAggregateSample:
+      type: object
+      additionalProperties: false
+      required: [seasonStartUnixSeconds, discoveredMatches, analyzedMatches, truncated]
+      properties:
+        seasonStartUnixSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+        discoveredMatches:
+          type: integer
+          minimum: 0
+          maximum: 2000
+        analyzedMatches:
+          type: integer
+          minimum: 0
+          maximum: 2000
+        truncated:
+          type: boolean
+    RiotRecordsSample:
+      type: object
+      additionalProperties: false
+      required: [recentMatches, championAggregates]
+      properties:
+        recentMatches:
+          $ref: '#/components/schemas/RiotRecentMatchSample'
+        championAggregates:
+          $ref: '#/components/schemas/RiotChampionAggregateSample'
+    RiotRecordsData:
+      type: object
+      additionalProperties: false
+      required:
+        - account
+        - platform
+        - routingRegion
+        - profileIconId
+        - summonerLevel
+        - ranks
+        - championAggregates
+        - recentMatches
+        - sample
+        - refreshedAt
+        - cache
+      properties:
+        account:
+          $ref: '#/components/schemas/RiotCanonicalAccount'
+        platform:
+          $ref: '#/components/schemas/RiotPlatform'
+        routingRegion:
+          $ref: '#/components/schemas/RiotRoutingRegion'
+        profileIconId:
+          oneOf:
+            - type: integer
+              format: int32
+              minimum: 0
+            - type: 'null'
+        summonerLevel:
+          oneOf:
+            - type: integer
+              format: int64
+              minimum: 0
+            - type: 'null'
+        ranks:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiotRank'
+        championAggregates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiotChampionAggregate'
+        recentMatches:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/RiotRecentMatch'
+        sample:
+          $ref: '#/components/schemas/RiotRecordsSample'
+        refreshedAt:
+          type: string
+          format: date-time
+        cache:
+          $ref: '#/components/schemas/RiotCacheMetadata'
+    RiotRecordsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/RiotRecordsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    RiotRecentMatchesPageMetadata:
+      type: object
+      additionalProperties: false
+      required: [offset, requested, returned, hasMore, nextOffset]
+      properties:
+        offset:
+          type: integer
+          minimum: 0
+          maximum: 10000
+        requested:
+          type: integer
+          minimum: 1
+          maximum: 20
+        returned:
+          type: integer
+          minimum: 0
+          maximum: 20
+        hasMore:
+          type: boolean
+        nextOffset:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 10020
+            - type: 'null'
+    RiotRecentMatchesPageData:
+      type: object
+      additionalProperties: false
+      required: [account, platform, routingRegion, targetPuuid, matches, page]
+      properties:
+        account:
+          $ref: '#/components/schemas/RiotCanonicalAccount'
+        platform:
+          $ref: '#/components/schemas/RiotPlatform'
+        routingRegion:
+          $ref: '#/components/schemas/RiotRoutingRegion'
+        targetPuuid:
+          $ref: '#/components/schemas/RiotPuuidValue'
+        matches:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/RiotRecentMatch'
+        page:
+          $ref: '#/components/schemas/RiotRecentMatchesPageMetadata'
+    RiotRecentMatchesPageResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/RiotRecentMatchesPageData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    RiotAccountPosition:
+      type: string
+      enum: [TOP, JUNGLE, MID, BOTTOM, SUPPORT, FLEX]
+    LinkedRiotAccount:
+      type: object
+      additionalProperties: false
+      required:
+        - puuid
+        - platform
+        - routingRegion
+        - gameName
+        - tagLine
+        - profileIconId
+        - isMain
+        - mainPosition
+        - lastSyncedAt
+        - createdAt
+        - updatedAt
+      properties:
+        puuid:
+          $ref: '#/components/schemas/RiotPuuidValue'
+        platform:
+          $ref: '#/components/schemas/RiotPlatform'
+        routingRegion:
+          $ref: '#/components/schemas/RiotRoutingRegion'
+        gameName:
+          $ref: '#/components/schemas/RiotGameName'
+        tagLine:
+          $ref: '#/components/schemas/RiotTagLine'
+        profileIconId:
+          oneOf:
+            - type: integer
+              format: int32
+              minimum: 0
+            - type: 'null'
+        isMain:
+          type: boolean
+        mainPosition:
+          oneOf:
+            - $ref: '#/components/schemas/RiotAccountPosition'
+            - type: 'null'
+        lastSyncedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    RiotAccountsData:
+      type: object
+      additionalProperties: false
+      required: [riotAccounts]
+      properties:
+        riotAccounts:
+          type: array
+          description: Empty, or containing exactly one item with isMain=true.
+          items:
+            $ref: '#/components/schemas/LinkedRiotAccount'
+    RiotAccountsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/RiotAccountsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     CurrentSeason:
       type: object
       additionalProperties: false
@@ -1380,6 +3892,506 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/GuildContextData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildMemberStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    GuildMemberLaneMmr:
+      type: object
+      additionalProperties: false
+      required: [TOP, JUNGLE, MID, BOTTOM, SUPPORT]
+      properties:
+        TOP:
+          type: number
+          format: double
+        JUNGLE:
+          type: number
+          format: double
+        MID:
+          type: number
+          format: double
+        BOTTOM:
+          type: number
+          format: double
+        SUPPORT:
+          type: number
+          format: double
+    GuildAdminMember:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - discordName
+        - riotId
+        - role
+        - mainLane
+        - laneMmr
+        - registered
+        - status
+        - lastActiveAt
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        discordName:
+          type: string
+          minLength: 1
+        riotId:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        role:
+          $ref: '#/components/schemas/GuildRole'
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        laneMmr:
+          $ref: '#/components/schemas/GuildMemberLaneMmr'
+        registered:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/GuildMemberStatus'
+        lastActiveAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+    GuildAdminMembersData:
+      type: object
+      additionalProperties: false
+      required: [revision, updatedAt, updatedBy, members]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuildAdminMember'
+    GuildAdminMembersResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildAdminMembersData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildAdminSettingsValues:
+      type: object
+      additionalProperties: false
+      required:
+        - displayName
+        - operatorRoleId
+        - recruitmentChannelId
+        - entryChannelId
+        - logChannelId
+        - isExternallyPublic
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        operatorRoleId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        recruitmentChannelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        entryChannelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        logChannelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        isExternallyPublic:
+          type: boolean
+    GuildAdminSettingsRole:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    GuildAdminSettingsChannel:
+      type: object
+      additionalProperties: false
+      required: [id, name, parentName]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        parentName:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 100
+            - type: 'null'
+    GuildAdminSettingsData:
+      type: object
+      additionalProperties: false
+      required:
+        - settings
+        - revision
+        - updatedAt
+        - updatedBy
+        - catalogUpdatedAt
+        - roles
+        - channels
+      properties:
+        settings:
+          $ref: '#/components/schemas/GuildAdminSettingsValues'
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        catalogUpdatedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        roles:
+          type: array
+          maxItems: 250
+          items:
+            $ref: '#/components/schemas/GuildAdminSettingsRole'
+        channels:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/GuildAdminSettingsChannel'
+    GuildAdminSettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildAdminSettingsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    UpdateGuildAdminSettingsRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - displayName
+        - operatorRoleId
+        - recruitmentChannelId
+        - entryChannelId
+        - logChannelId
+        - isExternallyPublic
+        - expectedRevision
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Leading and trailing whitespace is removed before validation and storage.
+        operatorRoleId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        recruitmentChannelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        entryChannelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        logChannelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        isExternallyPublic:
+          type: boolean
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    GuildSeasonStatus:
+      type: string
+      enum: [ACTIVE, CLOSED]
+    GuildSeasonSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - status
+        - startedAt
+        - endedAt
+        - createdBy
+        - participantCount
+        - generalSeriesCount
+        - auctionTournamentCount
+        - confirmedGameCount
+        - auctionTenCount
+        - auctionTwentyCount
+        - lastGameAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          $ref: '#/components/schemas/GuildSeasonStatus'
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        createdBy:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        participantCount:
+          type: integer
+          format: int64
+          minimum: 0
+        generalSeriesCount:
+          type: integer
+          format: int64
+          minimum: 0
+        auctionTournamentCount:
+          type: integer
+          format: int64
+          minimum: 0
+        confirmedGameCount:
+          type: integer
+          format: int64
+          minimum: 0
+        auctionTenCount:
+          type: integer
+          format: int64
+          minimum: 0
+        auctionTwentyCount:
+          type: integer
+          format: int64
+          minimum: 0
+        lastGameAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+    GuildAdminSeasonsData:
+      type: object
+      additionalProperties: false
+      required: [current, completed]
+      properties:
+        current:
+          $ref: '#/components/schemas/GuildSeasonSummary'
+        completed:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuildSeasonSummary'
+    GuildAdminSeasonsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildAdminSeasonsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    RotateGuildSeasonRequest:
+      type: object
+      additionalProperties: false
+      required: [name, expectedCurrentSeasonId]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Leading and trailing whitespace is removed before validation and storage.
+        expectedCurrentSeasonId:
+          type: string
+          format: uuid
+    AdjustGuildMemberMmrRequest:
+      type: object
+      additionalProperties: false
+      required: [lane, delta, note, expectedRevision]
+      properties:
+        lane:
+          $ref: '#/components/schemas/Lane'
+        delta:
+          type: number
+          format: double
+          not:
+            const: 0
+        note:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Leading and trailing whitespace is removed before validation and storage.
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    UpdateGuildMemberStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, expectedRevision]
+      properties:
+        status:
+          $ref: '#/components/schemas/GuildMemberStatus'
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuditPrincipalType:
+      type: string
+      enum: [USER, BOT, SYSTEM, MIGRATION]
+    AuditResult:
+      type: string
+      enum: [APPLIED, REVERTED]
+    AuditJsonValue:
+      description: A canonical JSON value stored in an audit summary without presentation rewriting.
+      oneOf:
+        - type: 'null'
+        - type: boolean
+        - type: number
+        - type: string
+        - type: array
+          items:
+            $ref: '#/components/schemas/AuditJsonValue'
+        - type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AuditJsonValue'
+    GuildAdminAuditEntry:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - principalType
+        - principalId
+        - principalDisplayName
+        - action
+        - targetType
+        - targetId
+        - targetDisplayName
+        - checkpointId
+        - requestId
+        - beforeSummary
+        - afterSummary
+        - result
+        - note
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        principalType:
+          $ref: '#/components/schemas/AuditPrincipalType'
+        principalId:
+          type: string
+          minLength: 1
+        principalDisplayName:
+          description: >-
+            Current guild-member display name for USER principals, falling back to the current
+            global user display name. Null for non-USER principals or missing projections; it is not
+            a historical snapshot.
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        action:
+          type: string
+          minLength: 1
+          description: Canonical application action code.
+        targetType:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        targetId:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        targetDisplayName:
+          description: >-
+            Current guild-member or guild-config display name, stored season name, or stored
+            recruitment title for the corresponding supported target type. Null when no current
+            projection exists; it is not a historical snapshot.
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        checkpointId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        requestId:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        beforeSummary:
+          $ref: '#/components/schemas/AuditJsonValue'
+        afterSummary:
+          $ref: '#/components/schemas/AuditJsonValue'
+        result:
+          $ref: '#/components/schemas/AuditResult'
+        note:
+          oneOf:
+            - type: string
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+    GuildAdminAuditLogsData:
+      type: object
+      additionalProperties: false
+      required: [entries, nextCursor]
+      properties:
+        entries:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/GuildAdminAuditEntry'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/OpaquePageCursor'
+            - type: 'null'
+    GuildAdminAuditLogsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildAdminAuditLogsData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     OpaquePageCursor:

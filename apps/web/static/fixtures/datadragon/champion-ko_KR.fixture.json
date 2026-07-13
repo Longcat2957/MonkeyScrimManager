@@ -1,124 +1,1910 @@
 {
 	"type": "champion",
 	"format": "standAloneComplex",
-	"version": "14.24.1",
+	"version": "16.13.1",
 	"data": {
 		"Aatrox": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Aatrox",
 			"key": "266",
 			"name": "아트록스",
 			"title": "다르킨의 검",
-			"image": { "full": "Aatrox.png" },
-			"tags": ["Fighter", "Tank"]
+			"image": {
+				"full": "Aatrox.png"
+			},
+			"tags": ["Fighter"]
 		},
 		"Ahri": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Ahri",
 			"key": "103",
 			"name": "아리",
 			"title": "구미호",
-			"image": { "full": "Ahri.png" },
+			"image": {
+				"full": "Ahri.png"
+			},
 			"tags": ["Mage", "Assassin"]
 		},
 		"Akali": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Akali",
 			"key": "84",
 			"name": "아칼리",
 			"title": "섬기는 이 없는 암살자",
-			"image": { "full": "Akali.png" },
+			"image": {
+				"full": "Akali.png"
+			},
 			"tags": ["Assassin"]
 		},
+		"Akshan": {
+			"version": "16.13.1",
+			"id": "Akshan",
+			"key": "166",
+			"name": "아크샨",
+			"title": "떠도는 감시자",
+			"image": {
+				"full": "Akshan.png"
+			},
+			"tags": ["Marksman", "Assassin"]
+		},
+		"Alistar": {
+			"version": "16.13.1",
+			"id": "Alistar",
+			"key": "12",
+			"name": "알리스타",
+			"title": "미노타우로스",
+			"image": {
+				"full": "Alistar.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"Ambessa": {
+			"version": "16.13.1",
+			"id": "Ambessa",
+			"key": "799",
+			"name": "암베사",
+			"title": "전장의 우두머리",
+			"image": {
+				"full": "Ambessa.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Amumu": {
+			"version": "16.13.1",
+			"id": "Amumu",
+			"key": "32",
+			"name": "아무무",
+			"title": "슬픈 미라",
+			"image": {
+				"full": "Amumu.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"Anivia": {
+			"version": "16.13.1",
+			"id": "Anivia",
+			"key": "34",
+			"name": "애니비아",
+			"title": "얼음불사조",
+			"image": {
+				"full": "Anivia.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Annie": {
+			"version": "16.13.1",
+			"id": "Annie",
+			"key": "1",
+			"name": "애니",
+			"title": "어둠의 아이",
+			"image": {
+				"full": "Annie.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Aphelios": {
+			"version": "16.13.1",
+			"id": "Aphelios",
+			"key": "523",
+			"name": "아펠리오스",
+			"title": "신념의 무기",
+			"image": {
+				"full": "Aphelios.png"
+			},
+			"tags": ["Marksman"]
+		},
+		"Ashe": {
+			"version": "16.13.1",
+			"id": "Ashe",
+			"key": "22",
+			"name": "애쉬",
+			"title": "서리 궁수",
+			"image": {
+				"full": "Ashe.png"
+			},
+			"tags": ["Marksman", "Support"]
+		},
+		"AurelionSol": {
+			"version": "16.13.1",
+			"id": "AurelionSol",
+			"key": "136",
+			"name": "아우렐리온 솔",
+			"title": "별의 창조자",
+			"image": {
+				"full": "AurelionSol.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Aurora": {
+			"version": "16.13.1",
+			"id": "Aurora",
+			"key": "893",
+			"name": "오로라",
+			"title": "세계의 경계에 선 마녀",
+			"image": {
+				"full": "Aurora.png"
+			},
+			"tags": ["Mage", "Assassin"]
+		},
 		"Azir": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Azir",
 			"key": "268",
 			"name": "아지르",
 			"title": "사막의 황제",
-			"image": { "full": "Azir.png" },
+			"image": {
+				"full": "Azir.png"
+			},
 			"tags": ["Mage", "Marksman"]
 		},
+		"Bard": {
+			"version": "16.13.1",
+			"id": "Bard",
+			"key": "432",
+			"name": "바드",
+			"title": "영겁의 수호자",
+			"image": {
+				"full": "Bard.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Belveth": {
+			"version": "16.13.1",
+			"id": "Belveth",
+			"key": "200",
+			"name": "벨베스",
+			"title": "공허의 여제",
+			"image": {
+				"full": "Belveth.png"
+			},
+			"tags": ["Fighter"]
+		},
+		"Blitzcrank": {
+			"version": "16.13.1",
+			"id": "Blitzcrank",
+			"key": "53",
+			"name": "블리츠크랭크",
+			"title": "거대 증기 골렘",
+			"image": {
+				"full": "Blitzcrank.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"Brand": {
+			"version": "16.13.1",
+			"id": "Brand",
+			"key": "63",
+			"name": "브랜드",
+			"title": "타오르는 복수",
+			"image": {
+				"full": "Brand.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Braum": {
+			"version": "16.13.1",
+			"id": "Braum",
+			"key": "201",
+			"name": "브라움",
+			"title": "프렐요드의 심장",
+			"image": {
+				"full": "Braum.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"Briar": {
+			"version": "16.13.1",
+			"id": "Briar",
+			"key": "233",
+			"name": "브라이어",
+			"title": "억눌린 허기",
+			"image": {
+				"full": "Briar.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Caitlyn": {
+			"version": "16.13.1",
+			"id": "Caitlyn",
+			"key": "51",
+			"name": "케이틀린",
+			"title": "필트오버의 보안관",
+			"image": {
+				"full": "Caitlyn.png"
+			},
+			"tags": ["Marksman"]
+		},
+		"Camille": {
+			"version": "16.13.1",
+			"id": "Camille",
+			"key": "164",
+			"name": "카밀",
+			"title": "강철의 그림자",
+			"image": {
+				"full": "Camille.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Cassiopeia": {
+			"version": "16.13.1",
+			"id": "Cassiopeia",
+			"key": "69",
+			"name": "카시오페아",
+			"title": "독사의 포옹",
+			"image": {
+				"full": "Cassiopeia.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Chogath": {
+			"version": "16.13.1",
+			"id": "Chogath",
+			"key": "31",
+			"name": "초가스",
+			"title": "공허의 공포",
+			"image": {
+				"full": "Chogath.png"
+			},
+			"tags": ["Tank", "Mage"]
+		},
+		"Corki": {
+			"version": "16.13.1",
+			"id": "Corki",
+			"key": "42",
+			"name": "코르키",
+			"title": "대담한 폭격수",
+			"image": {
+				"full": "Corki.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"Darius": {
+			"version": "16.13.1",
+			"id": "Darius",
+			"key": "122",
+			"name": "다리우스",
+			"title": "녹서스의 실력자",
+			"image": {
+				"full": "Darius.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Diana": {
+			"version": "16.13.1",
+			"id": "Diana",
+			"key": "131",
+			"name": "다이애나",
+			"title": "차가운 달의 분노",
+			"image": {
+				"full": "Diana.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Draven": {
+			"version": "16.13.1",
+			"id": "Draven",
+			"key": "119",
+			"name": "드레이븐",
+			"title": "화려한 처형자",
+			"image": {
+				"full": "Draven.png"
+			},
+			"tags": ["Marksman"]
+		},
+		"DrMundo": {
+			"version": "16.13.1",
+			"id": "DrMundo",
+			"key": "36",
+			"name": "문도 박사",
+			"title": "자운의 광인",
+			"image": {
+				"full": "DrMundo.png"
+			},
+			"tags": ["Tank", "Fighter"]
+		},
+		"Ekko": {
+			"version": "16.13.1",
+			"id": "Ekko",
+			"key": "245",
+			"name": "에코",
+			"title": "시간을 달리는 소년",
+			"image": {
+				"full": "Ekko.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
+		"Elise": {
+			"version": "16.13.1",
+			"id": "Elise",
+			"key": "60",
+			"name": "엘리스",
+			"title": "거미 여왕",
+			"image": {
+				"full": "Elise.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
+		"Evelynn": {
+			"version": "16.13.1",
+			"id": "Evelynn",
+			"key": "28",
+			"name": "이블린",
+			"title": "고통스런 포옹",
+			"image": {
+				"full": "Evelynn.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
+		"Ezreal": {
+			"version": "16.13.1",
+			"id": "Ezreal",
+			"key": "81",
+			"name": "이즈리얼",
+			"title": "무모한 탐험가",
+			"image": {
+				"full": "Ezreal.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"Fiddlesticks": {
+			"version": "16.13.1",
+			"id": "Fiddlesticks",
+			"key": "9",
+			"name": "피들스틱",
+			"title": "오래된 공포",
+			"image": {
+				"full": "Fiddlesticks.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Fiora": {
+			"version": "16.13.1",
+			"id": "Fiora",
+			"key": "114",
+			"name": "피오라",
+			"title": "결투의 대가",
+			"image": {
+				"full": "Fiora.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Fizz": {
+			"version": "16.13.1",
+			"id": "Fizz",
+			"key": "105",
+			"name": "피즈",
+			"title": "대양의 말썽꾸러기",
+			"image": {
+				"full": "Fizz.png"
+			},
+			"tags": ["Assassin", "Fighter"]
+		},
+		"Galio": {
+			"version": "16.13.1",
+			"id": "Galio",
+			"key": "3",
+			"name": "갈리오",
+			"title": "위대한 석상",
+			"image": {
+				"full": "Galio.png"
+			},
+			"tags": ["Tank", "Mage"]
+		},
+		"Gangplank": {
+			"version": "16.13.1",
+			"id": "Gangplank",
+			"key": "41",
+			"name": "갱플랭크",
+			"title": "바다의 무법자",
+			"image": {
+				"full": "Gangplank.png"
+			},
+			"tags": ["Fighter"]
+		},
+		"Garen": {
+			"version": "16.13.1",
+			"id": "Garen",
+			"key": "86",
+			"name": "가렌",
+			"title": "데마시아의 힘",
+			"image": {
+				"full": "Garen.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Gnar": {
+			"version": "16.13.1",
+			"id": "Gnar",
+			"key": "150",
+			"name": "나르",
+			"title": "잃어버린 고리",
+			"image": {
+				"full": "Gnar.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Gragas": {
+			"version": "16.13.1",
+			"id": "Gragas",
+			"key": "79",
+			"name": "그라가스",
+			"title": "술취한 난동꾼",
+			"image": {
+				"full": "Gragas.png"
+			},
+			"tags": ["Fighter", "Mage"]
+		},
+		"Graves": {
+			"version": "16.13.1",
+			"id": "Graves",
+			"key": "104",
+			"name": "그레이브즈",
+			"title": "무법자",
+			"image": {
+				"full": "Graves.png"
+			},
+			"tags": ["Marksman"]
+		},
 		"Gwen": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Gwen",
 			"key": "887",
 			"name": "그웬",
 			"title": "신성한 재봉사",
-			"image": { "full": "Gwen.png" },
+			"image": {
+				"full": "Gwen.png"
+			},
+			"tags": ["Fighter"]
+		},
+		"Hecarim": {
+			"version": "16.13.1",
+			"id": "Hecarim",
+			"key": "120",
+			"name": "헤카림",
+			"title": "전쟁의 전조",
+			"image": {
+				"full": "Hecarim.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Heimerdinger": {
+			"version": "16.13.1",
+			"id": "Heimerdinger",
+			"key": "74",
+			"name": "하이머딩거",
+			"title": "위대한 발명가",
+			"image": {
+				"full": "Heimerdinger.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Hwei": {
+			"version": "16.13.1",
+			"id": "Hwei",
+			"key": "910",
+			"name": "흐웨이",
+			"title": "몽상가",
+			"image": {
+				"full": "Hwei.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Illaoi": {
+			"version": "16.13.1",
+			"id": "Illaoi",
+			"key": "420",
+			"name": "일라오이",
+			"title": "크라켄의 여사제",
+			"image": {
+				"full": "Illaoi.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Irelia": {
+			"version": "16.13.1",
+			"id": "Irelia",
+			"key": "39",
+			"name": "이렐리아",
+			"title": "칼날 무희",
+			"image": {
+				"full": "Irelia.png"
+			},
 			"tags": ["Fighter", "Assassin"]
 		},
+		"Ivern": {
+			"version": "16.13.1",
+			"id": "Ivern",
+			"key": "427",
+			"name": "아이번",
+			"title": "자연의 아버지",
+			"image": {
+				"full": "Ivern.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Janna": {
+			"version": "16.13.1",
+			"id": "Janna",
+			"key": "40",
+			"name": "잔나",
+			"title": "폭풍의 분노",
+			"image": {
+				"full": "Janna.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"JarvanIV": {
+			"version": "16.13.1",
+			"id": "JarvanIV",
+			"key": "59",
+			"name": "자르반 4세",
+			"title": "데마시아의 귀감",
+			"image": {
+				"full": "JarvanIV.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Jax": {
+			"version": "16.13.1",
+			"id": "Jax",
+			"key": "24",
+			"name": "잭스",
+			"title": "무기의 달인",
+			"image": {
+				"full": "Jax.png"
+			},
+			"tags": ["Fighter"]
+		},
+		"Jayce": {
+			"version": "16.13.1",
+			"id": "Jayce",
+			"key": "126",
+			"name": "제이스",
+			"title": "미래의 수호자",
+			"image": {
+				"full": "Jayce.png"
+			},
+			"tags": ["Fighter", "Marksman"]
+		},
+		"Jhin": {
+			"version": "16.13.1",
+			"id": "Jhin",
+			"key": "202",
+			"name": "진",
+			"title": "잔혹극의 거장",
+			"image": {
+				"full": "Jhin.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"Jinx": {
+			"version": "16.13.1",
+			"id": "Jinx",
+			"key": "222",
+			"name": "징크스",
+			"title": "난폭한 말괄량이",
+			"image": {
+				"full": "Jinx.png"
+			},
+			"tags": ["Marksman"]
+		},
 		"Kaisa": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Kaisa",
 			"key": "145",
 			"name": "카이사",
 			"title": "공허의 딸",
-			"image": { "full": "Kaisa.png" },
+			"image": {
+				"full": "Kaisa.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"Kalista": {
+			"version": "16.13.1",
+			"id": "Kalista",
+			"key": "429",
+			"name": "칼리스타",
+			"title": "복수의 화신",
+			"image": {
+				"full": "Kalista.png"
+			},
 			"tags": ["Marksman"]
 		},
+		"Karma": {
+			"version": "16.13.1",
+			"id": "Karma",
+			"key": "43",
+			"name": "카르마",
+			"title": "깨우친 자",
+			"image": {
+				"full": "Karma.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Karthus": {
+			"version": "16.13.1",
+			"id": "Karthus",
+			"key": "30",
+			"name": "카서스",
+			"title": "죽음을 노래하는 자",
+			"image": {
+				"full": "Karthus.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Kassadin": {
+			"version": "16.13.1",
+			"id": "Kassadin",
+			"key": "38",
+			"name": "카사딘",
+			"title": "공허의 방랑자",
+			"image": {
+				"full": "Kassadin.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
+		"Katarina": {
+			"version": "16.13.1",
+			"id": "Katarina",
+			"key": "55",
+			"name": "카타리나",
+			"title": "사악한 칼날",
+			"image": {
+				"full": "Katarina.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
+		"Kayle": {
+			"version": "16.13.1",
+			"id": "Kayle",
+			"key": "10",
+			"name": "케일",
+			"title": "정의로운 자",
+			"image": {
+				"full": "Kayle.png"
+			},
+			"tags": ["Mage", "Marksman"]
+		},
+		"Kayn": {
+			"version": "16.13.1",
+			"id": "Kayn",
+			"key": "141",
+			"name": "케인",
+			"title": "그림자 사신",
+			"image": {
+				"full": "Kayn.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Kennen": {
+			"version": "16.13.1",
+			"id": "Kennen",
+			"key": "85",
+			"name": "케넨",
+			"title": "폭풍의 심장",
+			"image": {
+				"full": "Kennen.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Khazix": {
+			"version": "16.13.1",
+			"id": "Khazix",
+			"key": "121",
+			"name": "카직스",
+			"title": "공허의 약탈자",
+			"image": {
+				"full": "Khazix.png"
+			},
+			"tags": ["Assassin"]
+		},
+		"Kindred": {
+			"version": "16.13.1",
+			"id": "Kindred",
+			"key": "203",
+			"name": "킨드레드",
+			"title": "영겁의 사냥꾼",
+			"image": {
+				"full": "Kindred.png"
+			},
+			"tags": ["Marksman"]
+		},
+		"Kled": {
+			"version": "16.13.1",
+			"id": "Kled",
+			"key": "240",
+			"name": "클레드",
+			"title": "망나니 기사",
+			"image": {
+				"full": "Kled.png"
+			},
+			"tags": ["Fighter"]
+		},
+		"KogMaw": {
+			"version": "16.13.1",
+			"id": "KogMaw",
+			"key": "96",
+			"name": "코그모",
+			"title": "심연의 아귀",
+			"image": {
+				"full": "KogMaw.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"KSante": {
+			"version": "16.13.1",
+			"id": "KSante",
+			"key": "897",
+			"name": "크산테",
+			"title": "나주마의 긍지",
+			"image": {
+				"full": "KSante.png"
+			},
+			"tags": ["Tank", "Fighter"]
+		},
+		"Leblanc": {
+			"version": "16.13.1",
+			"id": "Leblanc",
+			"key": "7",
+			"name": "르블랑",
+			"title": "환술사",
+			"image": {
+				"full": "Leblanc.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
 		"LeeSin": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "LeeSin",
 			"key": "64",
 			"name": "리 신",
 			"title": "눈먼 수도승",
-			"image": { "full": "LeeSin.png" },
+			"image": {
+				"full": "LeeSin.png"
+			},
 			"tags": ["Fighter", "Assassin"]
 		},
+		"Leona": {
+			"version": "16.13.1",
+			"id": "Leona",
+			"key": "89",
+			"name": "레오나",
+			"title": "여명의 빛",
+			"image": {
+				"full": "Leona.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"Lillia": {
+			"version": "16.13.1",
+			"id": "Lillia",
+			"key": "876",
+			"name": "릴리아",
+			"title": "수줍은 꽃",
+			"image": {
+				"full": "Lillia.png"
+			},
+			"tags": ["Fighter", "Mage"]
+		},
+		"Lissandra": {
+			"version": "16.13.1",
+			"id": "Lissandra",
+			"key": "127",
+			"name": "리산드라",
+			"title": "얼음 마녀",
+			"image": {
+				"full": "Lissandra.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Locke": {
+			"version": "16.13.1",
+			"id": "Locke",
+			"key": "805",
+			"name": "로크",
+			"title": "잿빛 퇴마사",
+			"image": {
+				"full": "Locke.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
+		"Lucian": {
+			"version": "16.13.1",
+			"id": "Lucian",
+			"key": "236",
+			"name": "루시안",
+			"title": "정화의 사도",
+			"image": {
+				"full": "Lucian.png"
+			},
+			"tags": ["Marksman", "Assassin"]
+		},
+		"Lulu": {
+			"version": "16.13.1",
+			"id": "Lulu",
+			"key": "117",
+			"name": "룰루",
+			"title": "요정 마법사",
+			"image": {
+				"full": "Lulu.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Lux": {
+			"version": "16.13.1",
+			"id": "Lux",
+			"key": "99",
+			"name": "럭스",
+			"title": "광명의 소녀",
+			"image": {
+				"full": "Lux.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Malphite": {
+			"version": "16.13.1",
+			"id": "Malphite",
+			"key": "54",
+			"name": "말파이트",
+			"title": "거석의 파편",
+			"image": {
+				"full": "Malphite.png"
+			},
+			"tags": ["Tank", "Mage"]
+		},
+		"Malzahar": {
+			"version": "16.13.1",
+			"id": "Malzahar",
+			"key": "90",
+			"name": "말자하",
+			"title": "공허의 예언자",
+			"image": {
+				"full": "Malzahar.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Maokai": {
+			"version": "16.13.1",
+			"id": "Maokai",
+			"key": "57",
+			"name": "마오카이",
+			"title": "뒤틀린 나무 정령",
+			"image": {
+				"full": "Maokai.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"MasterYi": {
+			"version": "16.13.1",
+			"id": "MasterYi",
+			"key": "11",
+			"name": "마스터 이",
+			"title": "우주 검사",
+			"image": {
+				"full": "MasterYi.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Mel": {
+			"version": "16.13.1",
+			"id": "Mel",
+			"key": "800",
+			"name": "멜",
+			"title": "영혼의 반향",
+			"image": {
+				"full": "Mel.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Milio": {
+			"version": "16.13.1",
+			"id": "Milio",
+			"key": "902",
+			"name": "밀리오",
+			"title": "온화한 불꽃",
+			"image": {
+				"full": "Milio.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"MissFortune": {
+			"version": "16.13.1",
+			"id": "MissFortune",
+			"key": "21",
+			"name": "미스 포츈",
+			"title": "현상금 사냥꾼",
+			"image": {
+				"full": "MissFortune.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"MonkeyKing": {
+			"version": "16.13.1",
+			"id": "MonkeyKing",
+			"key": "62",
+			"name": "오공",
+			"title": "원숭이 왕",
+			"image": {
+				"full": "MonkeyKing.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Mordekaiser": {
+			"version": "16.13.1",
+			"id": "Mordekaiser",
+			"key": "82",
+			"name": "모데카이저",
+			"title": "강철의 망령",
+			"image": {
+				"full": "Mordekaiser.png"
+			},
+			"tags": ["Fighter", "Mage"]
+		},
+		"Morgana": {
+			"version": "16.13.1",
+			"id": "Morgana",
+			"key": "25",
+			"name": "모르가나",
+			"title": "타락한 자",
+			"image": {
+				"full": "Morgana.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Naafiri": {
+			"version": "16.13.1",
+			"id": "Naafiri",
+			"key": "950",
+			"name": "나피리",
+			"title": "백 번 무는 사냥개",
+			"image": {
+				"full": "Naafiri.png"
+			},
+			"tags": ["Assassin", "Fighter"]
+		},
+		"Nami": {
+			"version": "16.13.1",
+			"id": "Nami",
+			"key": "267",
+			"name": "나미",
+			"title": "파도 소환사",
+			"image": {
+				"full": "Nami.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Nasus": {
+			"version": "16.13.1",
+			"id": "Nasus",
+			"key": "75",
+			"name": "나서스",
+			"title": "사막의 관리자",
+			"image": {
+				"full": "Nasus.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
 		"Nautilus": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Nautilus",
 			"key": "111",
 			"name": "노틸러스",
 			"title": "심해의 타이탄",
-			"image": { "full": "Nautilus.png" },
-			"tags": ["Tank", "Fighter"]
+			"image": {
+				"full": "Nautilus.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"Neeko": {
+			"version": "16.13.1",
+			"id": "Neeko",
+			"key": "518",
+			"name": "니코",
+			"title": "알쏭달쏭 카멜레온",
+			"image": {
+				"full": "Neeko.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Nidalee": {
+			"version": "16.13.1",
+			"id": "Nidalee",
+			"key": "76",
+			"name": "니달리",
+			"title": "야성의 사냥꾼",
+			"image": {
+				"full": "Nidalee.png"
+			},
+			"tags": ["Assassin", "Mage"]
+		},
+		"Nilah": {
+			"version": "16.13.1",
+			"id": "Nilah",
+			"key": "895",
+			"name": "닐라",
+			"title": "해방된 기쁨",
+			"image": {
+				"full": "Nilah.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Nocturne": {
+			"version": "16.13.1",
+			"id": "Nocturne",
+			"key": "56",
+			"name": "녹턴",
+			"title": "영원한 악몽",
+			"image": {
+				"full": "Nocturne.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Nunu": {
+			"version": "16.13.1",
+			"id": "Nunu",
+			"key": "20",
+			"name": "누누와 윌럼프",
+			"title": "소년과 설인",
+			"image": {
+				"full": "Nunu.png"
+			},
+			"tags": ["Tank", "Mage"]
+		},
+		"Olaf": {
+			"version": "16.13.1",
+			"id": "Olaf",
+			"key": "2",
+			"name": "올라프",
+			"title": "광전사",
+			"image": {
+				"full": "Olaf.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Orianna": {
+			"version": "16.13.1",
+			"id": "Orianna",
+			"key": "61",
+			"name": "오리아나",
+			"title": "시계태엽 소녀",
+			"image": {
+				"full": "Orianna.png"
+			},
+			"tags": ["Mage", "Support"]
 		},
 		"Ornn": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Ornn",
 			"key": "516",
 			"name": "오른",
 			"title": "거산의 화염",
-			"image": { "full": "Ornn.png" },
+			"image": {
+				"full": "Ornn.png"
+			},
+			"tags": ["Tank"]
+		},
+		"Pantheon": {
+			"version": "16.13.1",
+			"id": "Pantheon",
+			"key": "80",
+			"name": "판테온",
+			"title": "불굴의 창",
+			"image": {
+				"full": "Pantheon.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Poppy": {
+			"version": "16.13.1",
+			"id": "Poppy",
+			"key": "78",
+			"name": "뽀삐",
+			"title": "망치의 수호자",
+			"image": {
+				"full": "Poppy.png"
+			},
 			"tags": ["Tank", "Fighter"]
 		},
+		"Pyke": {
+			"version": "16.13.1",
+			"id": "Pyke",
+			"key": "555",
+			"name": "파이크",
+			"title": "핏빛 항구의 학살자",
+			"image": {
+				"full": "Pyke.png"
+			},
+			"tags": ["Support", "Assassin"]
+		},
+		"Qiyana": {
+			"version": "16.13.1",
+			"id": "Qiyana",
+			"key": "246",
+			"name": "키아나",
+			"title": "원소의 여왕",
+			"image": {
+				"full": "Qiyana.png"
+			},
+			"tags": ["Assassin"]
+		},
+		"Quinn": {
+			"version": "16.13.1",
+			"id": "Quinn",
+			"key": "133",
+			"name": "퀸",
+			"title": "데마시아의 날개",
+			"image": {
+				"full": "Quinn.png"
+			},
+			"tags": ["Marksman", "Assassin"]
+		},
 		"Rakan": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Rakan",
 			"key": "497",
 			"name": "라칸",
 			"title": "매혹하는 자",
-			"image": { "full": "Rakan.png" },
+			"image": {
+				"full": "Rakan.png"
+			},
 			"tags": ["Support"]
 		},
+		"Rammus": {
+			"version": "16.13.1",
+			"id": "Rammus",
+			"key": "33",
+			"name": "람머스",
+			"title": "중무장 아르마딜로",
+			"image": {
+				"full": "Rammus.png"
+			},
+			"tags": ["Tank"]
+		},
+		"RekSai": {
+			"version": "16.13.1",
+			"id": "RekSai",
+			"key": "421",
+			"name": "렉사이",
+			"title": "공허의 복병",
+			"image": {
+				"full": "RekSai.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Rell": {
+			"version": "16.13.1",
+			"id": "Rell",
+			"key": "526",
+			"name": "렐",
+			"title": "철의 여인",
+			"image": {
+				"full": "Rell.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
+		"Renata": {
+			"version": "16.13.1",
+			"id": "Renata",
+			"key": "888",
+			"name": "레나타 글라스크",
+			"title": "화공 남작",
+			"image": {
+				"full": "Renata.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Renekton": {
+			"version": "16.13.1",
+			"id": "Renekton",
+			"key": "58",
+			"name": "레넥톤",
+			"title": "사막의 도살자",
+			"image": {
+				"full": "Renekton.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Rengar": {
+			"version": "16.13.1",
+			"id": "Rengar",
+			"key": "107",
+			"name": "렝가",
+			"title": "추적하는 사자",
+			"image": {
+				"full": "Rengar.png"
+			},
+			"tags": ["Assassin", "Fighter"]
+		},
+		"Riven": {
+			"version": "16.13.1",
+			"id": "Riven",
+			"key": "92",
+			"name": "리븐",
+			"title": "추방자",
+			"image": {
+				"full": "Riven.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Rumble": {
+			"version": "16.13.1",
+			"id": "Rumble",
+			"key": "68",
+			"name": "럼블",
+			"title": "기계 악동",
+			"image": {
+				"full": "Rumble.png"
+			},
+			"tags": ["Fighter", "Mage"]
+		},
+		"Ryze": {
+			"version": "16.13.1",
+			"id": "Ryze",
+			"key": "13",
+			"name": "라이즈",
+			"title": "룬 마법사",
+			"image": {
+				"full": "Ryze.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Samira": {
+			"version": "16.13.1",
+			"id": "Samira",
+			"key": "360",
+			"name": "사미라",
+			"title": "사막의 장미",
+			"image": {
+				"full": "Samira.png"
+			},
+			"tags": ["Marksman", "Assassin"]
+		},
+		"Sejuani": {
+			"version": "16.13.1",
+			"id": "Sejuani",
+			"key": "113",
+			"name": "세주아니",
+			"title": "혹한의 분노",
+			"image": {
+				"full": "Sejuani.png"
+			},
+			"tags": ["Tank"]
+		},
+		"Senna": {
+			"version": "16.13.1",
+			"id": "Senna",
+			"key": "235",
+			"name": "세나",
+			"title": "구원자",
+			"image": {
+				"full": "Senna.png"
+			},
+			"tags": ["Support", "Marksman"]
+		},
+		"Seraphine": {
+			"version": "16.13.1",
+			"id": "Seraphine",
+			"key": "147",
+			"name": "세라핀",
+			"title": "노래하는 별",
+			"image": {
+				"full": "Seraphine.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Sett": {
+			"version": "16.13.1",
+			"id": "Sett",
+			"key": "875",
+			"name": "세트",
+			"title": "우두머리",
+			"image": {
+				"full": "Sett.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Shaco": {
+			"version": "16.13.1",
+			"id": "Shaco",
+			"key": "35",
+			"name": "샤코",
+			"title": "악마 어릿광대",
+			"image": {
+				"full": "Shaco.png"
+			},
+			"tags": ["Assassin"]
+		},
+		"Shen": {
+			"version": "16.13.1",
+			"id": "Shen",
+			"key": "98",
+			"name": "쉔",
+			"title": "황혼의 눈",
+			"image": {
+				"full": "Shen.png"
+			},
+			"tags": ["Tank"]
+		},
+		"Shyvana": {
+			"version": "16.13.1",
+			"id": "Shyvana",
+			"key": "102",
+			"name": "쉬바나",
+			"title": "하프 드래곤",
+			"image": {
+				"full": "Shyvana.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Singed": {
+			"version": "16.13.1",
+			"id": "Singed",
+			"key": "27",
+			"name": "신지드",
+			"title": "미친 화학자",
+			"image": {
+				"full": "Singed.png"
+			},
+			"tags": ["Tank", "Mage"]
+		},
+		"Sion": {
+			"version": "16.13.1",
+			"id": "Sion",
+			"key": "14",
+			"name": "사이온",
+			"title": "언데드 학살병기",
+			"image": {
+				"full": "Sion.png"
+			},
+			"tags": ["Tank", "Fighter"]
+		},
+		"Sivir": {
+			"version": "16.13.1",
+			"id": "Sivir",
+			"key": "15",
+			"name": "시비르",
+			"title": "전장의 여제",
+			"image": {
+				"full": "Sivir.png"
+			},
+			"tags": ["Marksman"]
+		},
+		"Skarner": {
+			"version": "16.13.1",
+			"id": "Skarner",
+			"key": "72",
+			"name": "스카너",
+			"title": "태고의 군주",
+			"image": {
+				"full": "Skarner.png"
+			},
+			"tags": ["Tank", "Fighter"]
+		},
+		"Smolder": {
+			"version": "16.13.1",
+			"id": "Smolder",
+			"key": "901",
+			"name": "스몰더",
+			"title": "꼬마 불꽃용",
+			"image": {
+				"full": "Smolder.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"Sona": {
+			"version": "16.13.1",
+			"id": "Sona",
+			"key": "37",
+			"name": "소나",
+			"title": "현의 명인",
+			"image": {
+				"full": "Sona.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Soraka": {
+			"version": "16.13.1",
+			"id": "Soraka",
+			"key": "16",
+			"name": "소라카",
+			"title": "별의 아이",
+			"image": {
+				"full": "Soraka.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Swain": {
+			"version": "16.13.1",
+			"id": "Swain",
+			"key": "50",
+			"name": "스웨인",
+			"title": "녹서스 대장군",
+			"image": {
+				"full": "Swain.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Sylas": {
+			"version": "16.13.1",
+			"id": "Sylas",
+			"key": "517",
+			"name": "사일러스",
+			"title": "해방된 자",
+			"image": {
+				"full": "Sylas.png"
+			},
+			"tags": ["Mage", "Assassin"]
+		},
+		"Syndra": {
+			"version": "16.13.1",
+			"id": "Syndra",
+			"key": "134",
+			"name": "신드라",
+			"title": "어둠의 여제",
+			"image": {
+				"full": "Syndra.png"
+			},
+			"tags": ["Mage"]
+		},
+		"TahmKench": {
+			"version": "16.13.1",
+			"id": "TahmKench",
+			"key": "223",
+			"name": "탐 켄치",
+			"title": "강의 폭군",
+			"image": {
+				"full": "TahmKench.png"
+			},
+			"tags": ["Tank", "Support"]
+		},
 		"Taliyah": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Taliyah",
 			"key": "163",
 			"name": "탈리야",
 			"title": "바위술사",
-			"image": { "full": "Taliyah.png" },
+			"image": {
+				"full": "Taliyah.png"
+			},
 			"tags": ["Mage", "Support"]
 		},
+		"Talon": {
+			"version": "16.13.1",
+			"id": "Talon",
+			"key": "91",
+			"name": "탈론",
+			"title": "검의 그림자",
+			"image": {
+				"full": "Talon.png"
+			},
+			"tags": ["Assassin"]
+		},
+		"Taric": {
+			"version": "16.13.1",
+			"id": "Taric",
+			"key": "44",
+			"name": "타릭",
+			"title": "발로란의 방패",
+			"image": {
+				"full": "Taric.png"
+			},
+			"tags": ["Support", "Tank"]
+		},
+		"Teemo": {
+			"version": "16.13.1",
+			"id": "Teemo",
+			"key": "17",
+			"name": "티모",
+			"title": "날쌘 정찰병",
+			"image": {
+				"full": "Teemo.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"Thresh": {
+			"version": "16.13.1",
+			"id": "Thresh",
+			"key": "412",
+			"name": "쓰레쉬",
+			"title": "지옥의 간수",
+			"image": {
+				"full": "Thresh.png"
+			},
+			"tags": ["Support", "Tank"]
+		},
+		"Tristana": {
+			"version": "16.13.1",
+			"id": "Tristana",
+			"key": "18",
+			"name": "트리스타나",
+			"title": "요들 사수",
+			"image": {
+				"full": "Tristana.png"
+			},
+			"tags": ["Marksman", "Assassin"]
+		},
+		"Trundle": {
+			"version": "16.13.1",
+			"id": "Trundle",
+			"key": "48",
+			"name": "트런들",
+			"title": "트롤 왕",
+			"image": {
+				"full": "Trundle.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Tryndamere": {
+			"version": "16.13.1",
+			"id": "Tryndamere",
+			"key": "23",
+			"name": "트린다미어",
+			"title": "야만전사 왕",
+			"image": {
+				"full": "Tryndamere.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"TwistedFate": {
+			"version": "16.13.1",
+			"id": "TwistedFate",
+			"key": "4",
+			"name": "트위스티드 페이트",
+			"title": "카드의 달인",
+			"image": {
+				"full": "TwistedFate.png"
+			},
+			"tags": ["Mage", "Marksman"]
+		},
+		"Twitch": {
+			"version": "16.13.1",
+			"id": "Twitch",
+			"key": "29",
+			"name": "트위치",
+			"title": "역병 쥐",
+			"image": {
+				"full": "Twitch.png"
+			},
+			"tags": ["Marksman", "Assassin"]
+		},
+		"Udyr": {
+			"version": "16.13.1",
+			"id": "Udyr",
+			"key": "77",
+			"name": "우디르",
+			"title": "정령 주술사",
+			"image": {
+				"full": "Udyr.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Urgot": {
+			"version": "16.13.1",
+			"id": "Urgot",
+			"key": "6",
+			"name": "우르곳",
+			"title": "살상 병기",
+			"image": {
+				"full": "Urgot.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Varus": {
+			"version": "16.13.1",
+			"id": "Varus",
+			"key": "110",
+			"name": "바루스",
+			"title": "응징의 화살",
+			"image": {
+				"full": "Varus.png"
+			},
+			"tags": ["Marksman", "Mage"]
+		},
+		"Vayne": {
+			"version": "16.13.1",
+			"id": "Vayne",
+			"key": "67",
+			"name": "베인",
+			"title": "어둠 사냥꾼",
+			"image": {
+				"full": "Vayne.png"
+			},
+			"tags": ["Marksman", "Assassin"]
+		},
+		"Veigar": {
+			"version": "16.13.1",
+			"id": "Veigar",
+			"key": "45",
+			"name": "베이가",
+			"title": "악의 작은 지배자",
+			"image": {
+				"full": "Veigar.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Velkoz": {
+			"version": "16.13.1",
+			"id": "Velkoz",
+			"key": "161",
+			"name": "벨코즈",
+			"title": "공허의 눈",
+			"image": {
+				"full": "Velkoz.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"Vex": {
+			"version": "16.13.1",
+			"id": "Vex",
+			"key": "711",
+			"name": "벡스",
+			"title": "우울주의자",
+			"image": {
+				"full": "Vex.png"
+			},
+			"tags": ["Mage"]
+		},
 		"Vi": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Vi",
 			"key": "254",
 			"name": "바이",
 			"title": "필트오버의 집행자",
-			"image": { "full": "Vi.png" },
+			"image": {
+				"full": "Vi.png"
+			},
 			"tags": ["Fighter", "Assassin"]
 		},
+		"Viego": {
+			"version": "16.13.1",
+			"id": "Viego",
+			"key": "234",
+			"name": "비에고",
+			"title": "몰락한 왕",
+			"image": {
+				"full": "Viego.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Viktor": {
+			"version": "16.13.1",
+			"id": "Viktor",
+			"key": "112",
+			"name": "빅토르",
+			"title": "아케인의 전령관",
+			"image": {
+				"full": "Viktor.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Vladimir": {
+			"version": "16.13.1",
+			"id": "Vladimir",
+			"key": "8",
+			"name": "블라디미르",
+			"title": "진홍빛 사신",
+			"image": {
+				"full": "Vladimir.png"
+			},
+			"tags": ["Mage", "Fighter"]
+		},
+		"Volibear": {
+			"version": "16.13.1",
+			"id": "Volibear",
+			"key": "106",
+			"name": "볼리베어",
+			"title": "무자비한 폭풍",
+			"image": {
+				"full": "Volibear.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Warwick": {
+			"version": "16.13.1",
+			"id": "Warwick",
+			"key": "19",
+			"name": "워윅",
+			"title": "자운의 고삐 풀린 분노",
+			"image": {
+				"full": "Warwick.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Xayah": {
+			"version": "16.13.1",
+			"id": "Xayah",
+			"key": "498",
+			"name": "자야",
+			"title": "저항하는 자",
+			"image": {
+				"full": "Xayah.png"
+			},
+			"tags": ["Marksman"]
+		},
+		"Xerath": {
+			"version": "16.13.1",
+			"id": "Xerath",
+			"key": "101",
+			"name": "제라스",
+			"title": "초월한 마법사",
+			"image": {
+				"full": "Xerath.png"
+			},
+			"tags": ["Mage", "Support"]
+		},
+		"XinZhao": {
+			"version": "16.13.1",
+			"id": "XinZhao",
+			"key": "5",
+			"name": "신 짜오",
+			"title": "데마시아의 호위무사",
+			"image": {
+				"full": "XinZhao.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Yasuo": {
+			"version": "16.13.1",
+			"id": "Yasuo",
+			"key": "157",
+			"name": "야스오",
+			"title": "용서받지 못한 자",
+			"image": {
+				"full": "Yasuo.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Yone": {
+			"version": "16.13.1",
+			"id": "Yone",
+			"key": "777",
+			"name": "요네",
+			"title": "잊히지 못한 자",
+			"image": {
+				"full": "Yone.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Yorick": {
+			"version": "16.13.1",
+			"id": "Yorick",
+			"key": "83",
+			"name": "요릭",
+			"title": "영혼의 길잡이",
+			"image": {
+				"full": "Yorick.png"
+			},
+			"tags": ["Fighter", "Tank"]
+		},
+		"Yunara": {
+			"version": "16.13.1",
+			"id": "Yunara",
+			"key": "804",
+			"name": "유나라",
+			"title": "꺾이지 않는 신념",
+			"image": {
+				"full": "Yunara.png"
+			},
+			"tags": ["Marksman"]
+		},
+		"Yuumi": {
+			"version": "16.13.1",
+			"id": "Yuumi",
+			"key": "350",
+			"name": "유미",
+			"title": "마법 고양이",
+			"image": {
+				"full": "Yuumi.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Zaahen": {
+			"version": "16.13.1",
+			"id": "Zaahen",
+			"key": "904",
+			"name": "자헨",
+			"title": "저물지 않는 자",
+			"image": {
+				"full": "Zaahen.png"
+			},
+			"tags": ["Fighter", "Assassin"]
+		},
+		"Zac": {
+			"version": "16.13.1",
+			"id": "Zac",
+			"key": "154",
+			"name": "자크",
+			"title": "비밀 병기",
+			"image": {
+				"full": "Zac.png"
+			},
+			"tags": ["Tank", "Fighter"]
+		},
+		"Zed": {
+			"version": "16.13.1",
+			"id": "Zed",
+			"key": "238",
+			"name": "제드",
+			"title": "그림자의 주인",
+			"image": {
+				"full": "Zed.png"
+			},
+			"tags": ["Assassin"]
+		},
 		"Zeri": {
-			"version": "14.24.1",
+			"version": "16.13.1",
 			"id": "Zeri",
 			"key": "221",
 			"name": "제리",
 			"title": "자운의 불꽃",
-			"image": { "full": "Zeri.png" },
+			"image": {
+				"full": "Zeri.png"
+			},
 			"tags": ["Marksman"]
+		},
+		"Ziggs": {
+			"version": "16.13.1",
+			"id": "Ziggs",
+			"key": "115",
+			"name": "직스",
+			"title": "마법공학 폭파병",
+			"image": {
+				"full": "Ziggs.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Zilean": {
+			"version": "16.13.1",
+			"id": "Zilean",
+			"key": "26",
+			"name": "질리언",
+			"title": "시간의 수호자",
+			"image": {
+				"full": "Zilean.png"
+			},
+			"tags": ["Support", "Mage"]
+		},
+		"Zoe": {
+			"version": "16.13.1",
+			"id": "Zoe",
+			"key": "142",
+			"name": "조이",
+			"title": "여명의 성위",
+			"image": {
+				"full": "Zoe.png"
+			},
+			"tags": ["Mage"]
+		},
+		"Zyra": {
+			"version": "16.13.1",
+			"id": "Zyra",
+			"key": "143",
+			"name": "자이라",
+			"title": "가시 덩굴의 복수",
+			"image": {
+				"full": "Zyra.png"
+			},
+			"tags": ["Mage", "Support"]
 		}
 	}
 }

@@ -126,6 +126,14 @@ cargo run --locked -p monkeybot-api --bin monkeybot-migrate
 cargo run --locked -p monkeybot-api --bin monkeybot-api
 ```
 
+이미 실행 중인 로컬 Axum systemd user service에 라우트 변경을 반영할 때는 빌드, 재시작, readiness,
+직접 API와 `5173` same-origin proxy 확인을 한 번에 수행한다. 인자는 이번에 변경한 실제 API 경로로
+지정하며, 인증이 필요한 경로의 `401`은 route가 등록된 것으로 판단한다.
+
+```bash
+scripts/local-api-reload.sh '/api/guilds/1525851181157580861/records/search?q=Longcat'
+```
+
 현재 API는 health/readiness 외에 Discord OAuth/session, `/api/me`, 접근 가능 guild 목록,
 대표 guild 설정, guild layout context endpoint를 제공한다. `/readyz`는 PostgreSQL 연결과 embedded
 migration의 version/success/checksum 일치를 확인한다.

@@ -29,7 +29,8 @@ transaction, delete, legacy import 정책을 정의한다.
 - 영속 DB는 VPS 내부 PostgreSQL 하나다.
 - PostgreSQL에는 Axum backend와 별도 migration job만 접근한다.
 - SvelteKit은 frontend-only이며 DB에 직접 접근하지 않는다.
-- Valkey는 Pub/Sub, presence, rate limit, Riot cache만 담당한다.
+- Valkey는 Pub/Sub, presence, rate limit만 담당한다. Riot 전적 snapshot과 recent page cache는
+  PostgreSQL에 영속화한다.
 - Discord guild가 tenant 경계다. 모든 운영 데이터는 `guild_id`로 격리한다.
 - Discord snowflake는 `text`, 신규 domain ID는 application이 생성한 UUIDv7 `uuid`다.
 - timestamp는 전부 UTC `timestamptz`다.
@@ -40,7 +41,8 @@ transaction, delete, legacy import 정책을 정의한다.
 - 경매 point와 count는 `integer`, revision과 순번은 `bigint`다.
 - 상태값은 초기에는 PostgreSQL enum 대신 `text + CHECK`를 사용한다.
 - 핵심 aggregate를 JSONB 한 덩어리로 저장하지 않는다.
-- JSONB는 versioned checkpoint, audit 요약, idempotency response, outbox payload에만 쓴다.
+- JSONB는 versioned checkpoint, audit 요약, idempotency response, outbox payload와 검증된 외부 Riot
+  records DTO snapshot에만 쓴다.
 - 일반 내전과 경매 내전의 확정 game은 같은 game/MMR 원장을 사용한다.
 - 신규 경매 game도 guild MMR에 반영한다.
 - 기존 v3 경매 game에는 MMR을 소급 계산하지 않는다.
@@ -199,10 +201,66 @@ Constraints:
 - account가 하나 이상이면 정확히 하나가 main이라는 최소 1개 규칙은 계정 추가/삭제/메인 변경
   transaction에서 검증한다.
 - `game_name`, `tag_line`의 원문은 표시용이고 normalized 값은 lookup용이다.
+- account link command input은 `gameName`, `tagLine`, `platform`뿐이다. `puuid`, `routing_region`,
+  canonical name/tag, `profile_icon_id`는 Account-v1/profile 응답을 검증한 backend만 기록한다. Client가
+  보낸 provider-derived field를 신뢰하거나 upsert에 그대로 전달하지 않는다.
+- Riot resolve는 DB transaction 전에 수행한다. 그 뒤 짧은 account-link transaction에서 resolved PUUID와
+  normalized Riot ID의 충돌, user ownership, exact-one-main을 함께 검증한다. 이미 다른 user에 연결된
+  PUUID는 자동 이전하지 않고 conflict로 거절한다.
+- create/list/main/refresh/delete command 응답은 commit 후 같은 transaction 결과로 만든 최신 user account
+  snapshot이다. Client가 main account를 추론하거나 mutation 직후 재조회할 필요가 없다.
 - `normalize_riot_id_v1`은 Unicode NFKC, 앞뒤 Unicode whitespace trim, locale-independent Unicode
   case fold 순으로 적용하며 내부 whitespace는 보존한다. PostgreSQL collation/`lower()`에 맡기지
   않고 Rust의 같은 pure function을 create/update/search/import에 사용하고 golden vector를 둔다.
   알고리즘 변경은 기존 row 전체를 재작성하는 명시적 migration 없이는 허용하지 않는다.
+
+### `riot_records_snapshots`, lookup alias와 refresh gate
+
+```text
+riot_records_snapshots
+  platform, puuid                         PK
+  routing_region, game_name, tag_line    NOT NULL
+  normalized_game_name/tag_line          NOT NULL
+  schema_version                         integer NOT NULL CHECK > 0
+  snapshot                               jsonb NOT NULL CHECK object
+  refreshed_at, created_at, updated_at   timestamptz NOT NULL
+
+riot_records_lookup_aliases
+  platform, normalized_game_name/tag_line  PK
+  snapshot_platform, snapshot_puuid        FK -> riot_records_snapshots CASCADE
+  resolved_at                              timestamptz NOT NULL
+
+riot_records_refresh_gates
+  platform, normalized_game_name/tag_line  PK
+  lease_token/acquired_at/until             nullable all-or-none
+  created_at, updated_at                     timestamptz NOT NULL
+```
+
+- 외부 전적 cache의 canonical key는 `(platform, puuid)`다. Browser에는 Riot ID만 받고 alias table에서
+  canonical snapshot을 찾는다.
+- `snapshot`은 private Riot integration의 원본 provider payload가 아니라 Axum이 역직렬화하고 검증한
+  provider-neutral records DTO 전체다. Schema version을 올릴 때 read adapter 또는 명시적 invalidation을
+  함께 배포한다.
+- GET cache hit는 만료시키지 않는다. 명시 갱신 또는 필요한 recent page cache miss만 Riot provider를
+  호출한다.
+- refresh gate는 PostgreSQL clock과 row lock으로 동시 provider 호출을 합치며, 마지막 성공
+  `refreshed_at`부터 30초 cooldown을 강제한다. Provider 호출 lease는 시즌 전체 집계 시간을 고려해 5분이고,
+  실패 시 snapshot은 보존하고 lease만 해제한다.
+
+### `riot_records_recent_pages`
+
+```text
+platform, puuid, page_offset, requested_count  PK
+schema_version                                 integer NOT NULL CHECK > 0
+page                                           jsonb NOT NULL CHECK object
+fetched_at, created_at, updated_at             timestamptz NOT NULL
+
+FK (platform, puuid) -> riot_records_snapshots (platform, puuid) CASCADE
+```
+
+더보기 응답은 정확한 `(offset, requested_count)`별 provider-neutral page DTO를 저장한다. 상단 records
+snapshot 갱신 성공 시 match ordering이 달라질 수 있으므로 같은 transaction에서 해당 PUUID의 page row를
+전부 삭제한다.
 
 ### `user_privacy_settings`
 
@@ -216,6 +274,14 @@ updated_at                    timestamptz NOT NULL
 
 세 boolean은 `/me?tab=privacy`의 현재 UI 계약과 일치한다. 같은 guild 내부의 game/MMR
 조회 권한은 이 설정으로 숨기지 않는다.
+
+- `show_riot_ids`는 Discord 사용자와 `riot_accounts`의 연결 관계를 사용자/길드 projection에서 공개할지
+  결정한다. Riot ID 자체의 public Riot records 조회와 자동완성에는 적용하지 않는다.
+- `allow_external_record_search`는 대상 사용자가 속한 guild 밖의 사용자가 해당 guild의 custom match
+  전적에 접근하는 경우에만 적용한다. 같은 guild 구성원의 원장 조회와 public Riot records 조회에는
+  적용하지 않는다.
+- privacy를 적용한 read model은 false와 설정 row 부재를 같은 비공개 상태로 취급한다. Browser에 privacy
+  flag나 PUUID를 보내 판단시키지 않고 공개 가능한 계정 projection 또는 빈 배열만 반환한다.
 
 ### `user_guild_preferences`
 
@@ -246,8 +312,12 @@ UQ (user_id, lane, champion_id)
 
 - `/me`에서 guild 선택 없이 편집하므로 전역 사용자 설정이다.
 - position은 사용자 지정 순서다.
+- public lane allowlist는 `TOP|JUNGLE|MID|BOTTOM|SUPPORT`이며 `FLEX`나 임의 문자열을 저장하지 않는다.
+- 한 lane replace input은 ordered unique `championIds`, 최대 10개다. 빈 배열은 해당 lane row 전체 삭제다.
 - 한 lane의 position이 1부터 빈틈없이 이어지는 규칙은 lane 전체 replace transaction에서
   검증한다.
+- replace transaction은 기존 lane row를 교체하고 position을 1부터 다시 부여한 뒤 commit 결과에서 다섯
+  lane의 full snapshot을 만든다. Row가 없는 lane도 response에서 빈 배열로 반환한다.
 
 ## Guild root와 시즌
 
@@ -290,7 +360,13 @@ PK (guild_id, user_id)
   동기화된 Discord role membership으로 판정한다.
 - `registered`는 `registered_at IS NOT NULL`로 계산한다. ACTIVE/INACTIVE와 Riot 계정 연결 여부는
   별도 개념이며 합치지 않는다.
-- 상대 시간 label은 timestamp에서 projection한다.
+- admin member DTO의 `mainLane`과 `lastActiveAt`은 각각 nullable 원본을 그대로 사용한다. 값이 없는
+  member에 임의 lane이나 timestamp를 합성하지 않는다.
+- 상대 시간 label과 한국어 role/status label은 frontend에서 timestamp/canonical enum으로 계산한다.
+- OPERATOR 전용 admin projection의 `riotId`는 연결 상태 확인을 위한 main account
+  `game_name + '#' + tag_line`이며 `show_riot_ids`를 적용하지 않는다. null은 실제 미연결을 뜻한다.
+  Public/guild records projection은 별도로 `show_riot_ids`를 적용하고 PUUID는 어느 projection에도
+  포함하지 않는다.
 
 ### `guild_member_discord_roles`
 
@@ -304,8 +380,10 @@ PK (guild_id, user_id, role_id)
 FK (guild_id, user_id) -> guild_members (guild_id, user_id) CASCADE
 ```
 
-Discord role freshness cache다. mutation 권한의 유일한 근거로 오래된 row를 신뢰하지 않고
-backend의 freshness policy를 함께 적용한다.
+Discord role sync cache다. 현재 MVP browser admin 권한은 ACTIVE `guild_members`와 이 table에서
+`guild_config.operator_role_id`가 일치하는지로 판정한다. 별도 TTL이나 요청 시 Discord REST 재검증은 아직
+구현하지 않았으므로 더 강한 freshness 보장을 전제로 하지 않는다. Bot이 member/role sync를 수행할 때
+`last_synced_at`을 갱신한다.
 
 ### `guild_config`
 
@@ -314,6 +392,7 @@ guild_id               text        PK FK -> guilds.guild_id RESTRICT
 display_name           text        NOT NULL
 operator_role_id       text        NOT NULL
 recruitment_channel_id text        NULL
+entry_channel_id       text        NULL
 log_channel_id         text        NULL
 is_externally_public   boolean     NOT NULL
 revision               bigint      NOT NULL CHECK >= 0
@@ -326,6 +405,60 @@ FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 - 현재 UI는 운영자 role 하나만 지원하므로 `guild_operator_roles` table을 만들지 않는다.
 - `current_season_id`를 두지 않는다. 현재 시즌의 source of truth는 `seasons.status=ACTIVE`다.
 - admin settings의 `settingsRevision`은 이 row의 `revision`이다.
+- `recruitment_channel_id`는 모집 메시지, `entry_channel_id`는 밸런스 결과와 확정 엔트리,
+  `log_channel_id`는 운영 알림의 목적지다. 세 channel은 모두 미설정을 허용한다.
+- Browser settings PUT은 이 row를 lock하고 현재 `operator_role_id`로 요청자를 먼저 권한 검사한 뒤
+  `expectedRevision`을 비교한다. 성공하면 설정, revision, `updated_by`, `updated_at`과
+  `GUILD_SETTINGS_UPDATED` audit를 한 transaction에서 갱신한다.
+
+### `guild_discord_roles`
+
+```text
+guild_id  text        NOT NULL FK -> guilds.guild_id CASCADE
+role_id   text        NOT NULL
+name      text        NOT NULL CHECK trimmed length 1..100
+position  integer     NOT NULL CHECK >= 0
+managed   boolean     NOT NULL
+updated_at timestamptz NOT NULL
+
+PK (guild_id, role_id)
+CHECK (role_id <> guild_id)
+```
+
+길드 설정의 운영자 역할 선택 catalog다. `guild_member_discord_roles`가 사용자별 role membership을
+저장하는 것과 달리 이 table은 Discord 길드에 존재하는 role 목록을 저장한다. managed role도 동기화해
+원본 snapshot은 보존하지만 settings GET과 새 운영자 role 검증에서는 `managed=false`만 사용한다.
+
+### `guild_discord_channels`
+
+```text
+guild_id   text        NOT NULL FK -> guilds.guild_id CASCADE
+channel_id text        NOT NULL
+name       text        NOT NULL CHECK trimmed length 1..100
+parent_name text       NULL CHECK trimmed length 1..100
+position   integer     NOT NULL CHECK >= 0
+kind       text        NOT NULL CHECK TEXT|ANNOUNCEMENT
+updated_at timestamptz NOT NULL
+
+PK (guild_id, channel_id)
+```
+
+Bot이 볼 수 있고 메시지를 보낼 수 있는 Discord text/announcement channel catalog다. 설정 GET은
+`position`, 이름, ID 순으로 정렬해 반환한다. 설정 PUT에서 기존 값과 달라진 non-null channel ID는 이
+table에 있어야 하며 null은 `설정 안 함`을 뜻한다.
+
+### `guild_discord_catalog_state`
+
+```text
+guild_id  text        PK FK -> guilds.guild_id CASCADE
+synced_at timestamptz NOT NULL
+```
+
+Bot service-principal의 catalog PUT은 `guild_config`를 lock하고 role/channel row를 전체 교체한 뒤 이
+시각을 갱신한다. 아직 한 번도 동기화되지 않은 길드는 settings snapshot의 `catalogUpdatedAt=null`과 빈
+목록을 반환한다. Discord에서 삭제되어 catalog에서 사라진 기존 설정값은 즉시 임의 변경하지 않는다.
+그 값을 그대로 저장하는 것은 허용하지만 다른 누락 ID로 변경하는 요청은 거부해 운영자가 명시적으로
+유효한 catalog 항목이나 null을 선택하게 한다.
 
 ### `guild_admin_state`
 
@@ -341,10 +474,17 @@ FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 ```
 
 - `/admin?tab=members`는 `scope=MEMBERS` row를 사용한다.
-- `/admin?tab=operations`는 `scope=OPERATIONS` row를 사용한다.
+- `scope=OPERATIONS`는 후속 롤백 기능용 예약 값이다. MVP 관리 화면과 route에서는 노출하지 않는다.
 - settings는 `guild_config.revision`을 사용한다.
 - 세 revision을 하나로 합치지 않으며 MEMBERS/OPERATIONS가 서로 row lock을 공유하지 않는다.
 - 각 snapshot의 409 metadata는 해당 scope row의 `updated_at`, `updated_by`에서 반환한다.
+- Admin member GET과 mutation 응답은 이 metadata와 전체 member projection을 함께 반환한다. Mutation
+  성공 시 client가 revision이나 단일 member를 추론하지 않고 full snapshot으로 교체한다.
+- 기존 guild에 MEMBERS row를 backfill하는 migration은 요구하지 않는다. Row가 없으면 GET은
+  `revision=0`, `COALESCE(guild_config.updated_at, guilds.updated_at)`과 `guild_config.updated_by`
+  metadata를 projection하고 DB를 변경하지 않는다. 첫 member mutation이 actor/현재 시각으로 revision 0 row를
+  `INSERT ... ON CONFLICT DO NOTHING`한 뒤 lock한다. 따라서 기존 guild와 concurrent 첫 mutation이 같은
+  경로로 합류한다.
 
 ### `seasons`
 
@@ -365,12 +505,18 @@ CHECK ((status='ACTIVE' AND ended_at IS NULL)
     OR (status='CLOSED' AND ended_at IS NOT NULL))
 ```
 
-시즌 전환은 Bot command가 수행한다. web settings payload의 `seasonId`는 read-only projection이며
-mutation에 포함하지 않는다.
+시즌은 Web settings payload에 포함하지 않으며 `GET/POST /api/guilds/{guildId}/seasons`의 별도
+query/command로 조회하고 전환한다. GET projection은 현재 ACTIVE 시즌과 최신 종료순 CLOSED 시즌에 대해
+확정 game에 참여한 distinct 사용자 수, 삭제되지 않은 COMPLETED 일반 시리즈/경매 내전 수, CONFIRMED game
+수, 경매 10인/20인 수와 최근 `confirmed_at`을 집계한다. `created_by`가 없으면 API의 `createdBy`는
+null이다.
 
-`ROTATE_SEASON`은 현재 ACTIVE season row를 lock해 CLOSED/ended_at으로 바꾸고 새 ACTIVE season을
-생성하는 단일 transaction이다. 과거 `user_lane_mmr`와 ledger는 유지하며 새 시즌 MMR row는 첫
-조회/참가 시 기본 1500으로 생성한다. 기존 시즌을 비우는 reset command는 만들지 않는다.
+`ROTATE_SEASON`은 현재 ACTIVE season row를 lock하고 `expectedCurrentSeasonId`를 비교한 뒤
+CLOSED/ended_at으로 바꾸고 새 ACTIVE season을 생성한다. Audit와 idempotency response까지 같은
+transaction에 저장한다. 과거 game, auction, `user_lane_mmr`와 ledger는 유지하며 새 시즌 MMR row는 첫
+조회/참가 시 기본 1500으로 생성한다. 기존 시즌을 비우는 reset command는 만들지 않는다. 향후 Bot
+`/새시즌`은 같은 application command를 호출하되 Browser session/CSRF가 아닌 Bot service principal과
+Discord interaction ID를 사용한다.
 
 ### `guild_counters`
 
@@ -1315,6 +1461,9 @@ CHECK wins <= games_played
 
 `mmr`은 조회와 row lock을 위한 현재 summary다. source of change history는 ledger이며 두 table은
 항상 같은 transaction에서 갱신한다. NaN과 positive/negative infinity는 CHECK로 거부한다.
+Records와 admin read projection은 아직 row가 없는 canonical lane도 `mmr=1500`, `games_played=0`,
+`wins=0`으로 반환하되 조회만으로 row를 생성하지 않는다. Records DTO에는 의미가 동결되지 않은 별도
+`change` field를 두지 않는다.
 
 존재하지 않는 row는 `SELECT FOR UPDATE`로 잠글 수 없으므로 모든 MMR mutation은 공통
 `ensure_and_lock_mmr_rows` 절차를 사용한다.
@@ -1678,8 +1827,9 @@ Frontend 협업 계약과 DB revision owner는 다음과 같다.
 조회는 confirmed/non-voided games와 append-only ledger를 기준으로 계산한다. 실제 query가
 비싸다는 측정 결과가 나온 뒤에만 별도 read model을 추가한다.
 
-Riot 외부 match 상세는 내부 `games`에 넣지 않는다. Riot API response는 Valkey의 짧은 cache며
-guild MMR source of truth가 아니다.
+Riot 외부 match 상세는 내부 `games`에 넣지 않는다. 검증한 records page DTO와 recent page만 위 전용
+PostgreSQL cache table에 저장한다. Private Riot integration service는 provider 호출/변환만 담당하고 같은
+payload의 별도 장기 cache를 소유하지 않는다. 이 cache는 guild MMR source of truth가 아니다.
 
 ## 핵심 transaction
 
@@ -1730,16 +1880,43 @@ client token을 추가로 요구하지 않고 lock한 현재 status/bracket/matc
 ### Admin MMR 수동 조정
 
 ```text
-idempotency key 확보
--> guild_admin_state(scope=MEMBERS) lock
+ACTIVE OPERATOR 권한 확인
+browser idempotency key 확보/replay
+-> guild_admin_state(scope=MEMBERS) lazy init + lock
 -> expected MEMBERS revision 확인
+-> target member와 ACTIVE season 확인
 -> ensure_and_lock_mmr_rows
 -> MANUAL_ADJUSTMENT ledger append
 -> summary update
 -> MEMBERS revision + 1
--> audit/idempotency
+-> MEMBER_MMR_ADJUSTED audit + full member snapshot
+-> idempotency response 완료
 -> commit
 ```
+
+Browser `Idempotency-Key`는 중복 없는 visible ASCII 1..128 bytes를 허용하고 공식 frontend는 UUID를
+생성한다. Request hash에는 guild/member와 역직렬화한 request body 전체가 포함되며 24시간 동안 replay한다.
+Note는 저장 전에 trim하고 trim 결과가 1..500자인지 검증한다. Replay는 저장된 full snapshot을 반환하며
+revision을 다시 비교하거나 ledger를 추가하지 않는다. `user_lane_mmr`의 MMR/revision/updated_at만
+갱신하고 games/wins는 바꾸지 않는다. Audit target type은 `GUILD_MEMBER_MMR`이고 before/after에는 lane
+MMR과 lane revision을 기록한다.
+
+### Admin member 상태 변경
+
+```text
+ACTIVE OPERATOR 권한 확인
+-> guild_admin_state(scope=MEMBERS) lazy init + lock
+-> expected MEMBERS revision 확인
+-> target guild_members row lock
+-> status와 inactivated_at 갱신
+-> MEMBERS revision + 1
+-> MEMBER_STATUS_CHANGED audit + full member snapshot
+-> commit
+```
+
+INACTIVE에서는 `inactivated_at=now()`, ACTIVE 복구에서는 null로 갱신한다. `registered_at`, 기존
+`user_lane_mmr`, game/MMR ledger는 보존한다. Status set은 revision으로 충분하므로 idempotency key를
+요구하지 않는다. Audit target type은 `GUILD_MEMBER`다.
 
 Admin members 화면은 WebSocket topic이 없으므로 이 mutation만을 위한 invalidate outbox를 만들지
 않는다. Admin에서 active series/tournament 자체를 revert한 경우에는 변경된 domain aggregate의
@@ -1952,6 +2129,12 @@ FK dependency가 성립하는 순서로 migration을 고정한다.
 
 0009_read_indexes.sql
   non-constraint read indexes and measured search indexes
+
+0010_riot_records_snapshots.sql
+  canonical records snapshots, Riot ID aliases, recent pages, refresh gates
+
+0011_guild_settings_discord_catalog.sql
+  guild_config entry channel, Discord role/channel catalogs and sync state
 ```
 
 `games.auction_match_id`가 참조할 table보다 먼저 games를 생성하지 않는다. migration file은
@@ -1993,7 +2176,7 @@ Import 때만 다음 보조 구조를 사용한다.
 migrations/legacy/0001_import_support.sql
 ```
 
-이 migration은 core `0001..0009`와 분리한다. Phase 11 rehearsal/cutover import job만 대상 DB에
+이 migration은 core `0001..0011`과 분리한다. Phase 11 rehearsal/cutover import job만 대상 DB에
 적용하며 API startup, 일반 deploy migration에는 포함하지 않는다. Mapping과 quarantine은 cutover
 감사를 위해 보존하되 runtime role에는 권한을 주지 않는다.
 
@@ -2081,7 +2264,7 @@ log_channel_id           optional
 source_checksum          SHA-256 of canonical manifest excluding this field + artifact checksums
 ```
 
-Core migration 0001..0009가 적용된 빈 target DB를 기본으로 한다. target guild가 이미 있으면
+Core migration 0001..0011이 적용된 빈 target DB를 기본으로 한다. target guild가 이미 있으면
 `guild_config` 설정이 manifest와 정확히 일치하고 domain row가 하나도 없는 경우만 허용하며, 기존
 설정이나 데이터를 import job이 덮어쓰지 않는다. application이 run UUID와 started_at을 먼저
 고정하고, 한 transaction에서 guild root를 먼저 만든 뒤 `legacy_import_runs`를 insert한다.
@@ -2298,9 +2481,11 @@ Additional rules:
   non-null이면 INACTIVE로 두고 registration timestamp를 보존한다. INACTIVE user를 진행 중
   aggregate가 참조하면 그 unit은 operator resolution 전 ERROR다. resolved main Riot account의
   main_position이 canonical lane이면 member main_lane으로 쓰고 FLEX/NULL이면 NULL이다.
-- v3에 없는 privacy는 현재 `/me` 기본값인 public profile=true, Riot ID=true, external record
-  search=false로 `user_privacy_settings`를 seed한다. ACTIVE member의 `user_guild_preferences`는 단일
-  target guild를 default로 두고 INACTIVE member는 default를 만들지 않는다.
+- v3에 없는 privacy는 현재 `/me` 기본값인 `public_profile_enabled=true`, `show_riot_ids=true`,
+  `allow_external_record_search=false`로 seed한다. 마지막 값은 길드 밖 custom match 전적 접근을
+  허용하지 않는다는 뜻이며 public Riot records 검색과 무관하다. ACTIVE member의
+  `user_guild_preferences`는 단일 target guild를 default로 두고 INACTIVE member는 default를 만들지
+  않는다.
 - v3에는 Discord role membership snapshot이 없으므로 `guild_member_discord_roles`를 합성하지
   않는다. cutover 전 Bot이 Discord에서 full member/role sync를 수행하고 manifest의 operator role을
   가진 ACTIVE member가 최소 한 명인지 검증한다.
@@ -2443,19 +2628,17 @@ guild_counters.next_value = counter별
 다음 frontend 값은 source data는 충분하지만 계산 의미가 아직 확정되지 않았다. 임의 column이나
 summary table을 추가하지 않고 API contract freeze 단계에서 결정한다.
 
-- records lane별 `change`가 시즌 누적인지 선택 기간 변화인지
 - leaderboard `compositeMmr` 계산식
-- `전체 시즌` filter에서 표시할 current MMR 기준
 
-이 항목들은 현재 schema의 lane ledger, season, confirmed games로 계산할 수 있으므로 physical
-schema migration을 막지 않는다.
+Records는 별도 `change`를 반환하지 않고 명시 season 또는 ACTIVE season만 조회한다. `전체 시즌` current
+MMR을 합성하지 않는다. 따라서 두 값은 미정 계산식이 아니라 현재 API의 비지원 범위다.
 
 일반 game 입력은 `/series/{id}/pick-ban`, 완료 원장 조회는 `/series/{id}/result`가 담당한다.
 MVP에는 별도 최종 확인 command를 만들지 않으며 operations의 `RESULT` 작업은 입력 route로 연결한다.
 
 ## Schema 완료 조건
 
-- 빈 DB에 `0001..0009` migration이 한 번에 성공한다.
+- 빈 DB에 `0001..0011` migration이 한 번에 성공한다.
 - migration 순서에 존재하지 않는 parent FK가 없다.
 - 모든 guild-owned FK가 tenant를 포함한다.
 - 모든 frontend command가 명확한 aggregate, revision, transaction을 가진다.
@@ -2464,6 +2647,8 @@ MVP에는 별도 최종 확인 command를 만들지 않으며 operations의 `RES
 - 수동 MMR과 game/manual reversal을 append-only ledger로 설명할 수 있다.
 - 두 concurrent 낙찰 또는 game submit 중 하나만 성공한다.
 - Valkey가 없어도 committed domain state가 손실되지 않는다.
+- Riot records cache hit와 recent page 재조회는 provider를 호출하지 않고, 30초 refresh cooldown이
+  process restart와 concurrent request 사이에도 유지된다.
 - runtime role로 audit/MMR/point/action ledger를 UPDATE/DELETE할 수 없다.
 - v3 import rehearsal이 source/target reconciliation report를 생성한다.
 - 대표 records/leaderboard/admin query의 tenant isolation과 index plan을 integration test로 검증한다.

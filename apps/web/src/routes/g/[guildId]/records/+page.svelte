@@ -1,91 +1,31 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { page } from '$app/state';
-	import { Search } from 'lucide-svelte';
+	import { navigating } from '$app/state';
+	import { ChevronDown, Search, TriangleAlert, UserRound } from 'lucide-svelte';
+	import { fetchGuildRecords, GuildRecordsApiError } from '$lib/api/guildRecords';
+	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
+	import type {
+		GuildRecordsGame,
+		GuildRecordsLineupPlayer,
+		GuildRecordsRecord,
+		GuildRecordsSearchSnapshot,
+		GuildRecordsSeriesRecord,
+		GuildRecordsTournamentRecord,
+		GuildRecordsTournamentSeries
+	} from '$lib/contracts/workflow';
+	import { findChampion, riotProfileIconUrl } from '$lib/datadragon';
 	import type { Lane } from '$lib/fixtures/workflow';
+	import { formatRelativeTime } from '$lib/workflow/presentation';
+	import { untrack } from 'svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
-	let recordSearch = $state('');
 
-	type MatchType = '일반 내전' | '경매 내전';
-	type MatchResult = '승리' | '패배';
+	type MatchTypeFilter = 'ALL' | 'REGULAR' | 'AUCTION';
+	type LaneFilter = 'ALL' | Lane;
 
-	interface LaneMmr {
-		lane: Lane;
-		mmr: number;
-		games: number;
-		change: number;
-	}
-
-	interface LineupPlayer {
-		name: string;
-		lane: Lane;
-		championId: string;
-		championName: string;
-		mmrChange: number;
-		isTarget?: boolean;
-	}
-
-	interface CustomSet {
-		label: string;
-		result: MatchResult;
-		lane: Lane;
-		championId: string;
-		championName: string;
-		mmrBefore: number;
-		mmrAfter: number;
-		blueTeam: LineupPlayer[];
-		redTeam: LineupPlayer[];
-		blueBans: string[];
-		redBans: string[];
-	}
-
-	interface CustomMatch {
-		id: string;
-		result: MatchResult;
-		type: MatchType;
-		participantCount: 10 | 20;
-		seriesName: string;
-		score: string;
-		wins: number;
-		losses: number;
-		mmrBefore: number;
-		mmrAfter: number;
-		playedAt: string;
-		sets: CustomSet[];
-	}
-
-	interface AuctionTournamentRecord {
-		id: string;
-		name: string;
-		teamName: string;
-		spentPoints: number;
-		placement: string;
-		playedAt: string;
-		roster: LineupPlayer[];
-		series: CustomMatch[];
-		opponents: Record<string, string>;
-		stages: Record<string, string>;
-	}
-
-	interface ChampionRecord {
-		id: string;
-		name: string;
-		wins: number;
-		losses: number;
-		mainLane: Lane;
-	}
-
-	const dataDragonVersion = '16.13.1';
-	const guild = $derived(data.guild);
-	const searchedRiotId = $derived(page.url.searchParams.get('q')?.trim() || '탐솔#KR1');
-	const searchedUserName = $derived(searchedRiotId.split('#')[0] || '탐솔');
-	const searchedUserTag = $derived(
-		searchedRiotId.includes('#') ? searchedRiotId : `${searchedUserName}#KR1`
-	);
 	const laneOrder: Lane[] = ['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT'];
 	const laneLabel: Record<Lane, string> = {
 		TOP: '탑',
@@ -95,776 +35,795 @@
 		SUPPORT: '서폿'
 	};
 
-	let typeFilter = $state<'전체' | MatchType>('전체');
-	let laneFilter = $state<'전체' | Lane>('전체');
-	let expandedMatchId = $state<string | null>('custom-1');
-	let selectedSetIndex = $state(2);
-	let expandedTournamentId = $state<string | null>(null);
-	let selectedAuctionSeriesId = $state('custom-2');
-	let season = $state('시즌 3');
+	function incomingSnapshotKey(): string {
+		const snapshot = data.snapshot;
+		return [
+			data.guildId,
+			data.query,
+			snapshot?.selectedSeasonId ?? '',
+			snapshot?.records[0]?.id ?? '',
+			snapshot?.nextCursor ?? '',
+			snapshot?.summary.games ?? ''
+		].join('|');
+	}
 
-	const laneMmr: LaneMmr[] = [
-		{ lane: 'TOP', mmr: 1518, games: 4, change: 8 },
-		{ lane: 'JUNGLE', mmr: 1540, games: 3, change: -6 },
-		{ lane: 'MID', mmr: 1642, games: 31, change: 42 },
-		{ lane: 'BOTTOM', mmr: 1588, games: 10, change: 18 },
-		{ lane: 'SUPPORT', mmr: 1510, games: 6, change: 3 }
-	];
+	const initialSnapshot = untrack(() => data.snapshot);
+	let recordSnapshot = $state<GuildRecordsSearchSnapshot | null>(initialSnapshot);
+	let renderedSnapshotKey = $state(untrack(incomingSnapshotKey));
+	let typeFilter = $state<MatchTypeFilter>('ALL');
+	let laneFilter = $state<LaneFilter>('ALL');
+	let expandedRecordId = $state<string | null>(null);
+	let selectedGameIndex = $state(0);
+	let selectedTournamentSeriesId = $state('');
+	let nextCursor = $state<string | null>(initialSnapshot?.nextCursor ?? null);
+	let consumedCursors = $state<string[]>([]);
+	let loadingMore = $state(false);
+	let loadMoreError = $state('');
 
-	const blueTeam: LineupPlayer[] = [
-		{ name: '마루', lane: 'TOP', championId: 'Ornn', championName: '오른', mmrChange: 17 },
-		{ name: '서초', lane: 'JUNGLE', championId: 'LeeSin', championName: '리 신', mmrChange: 18 },
-		{
-			name: '탐솔',
-			lane: 'MID',
-			championId: 'Ahri',
-			championName: '아리',
-			mmrChange: 19,
-			isTarget: true
-		},
-		{ name: '모카', lane: 'BOTTOM', championId: 'Ezreal', championName: '이즈리얼', mmrChange: 16 },
-		{
-			name: '파도',
-			lane: 'SUPPORT',
-			championId: 'Nautilus',
-			championName: '노틸러스',
-			mmrChange: 15
+	$effect(() => {
+		const nextKey = incomingSnapshotKey();
+		if (nextKey === renderedSnapshotKey) return;
+		renderedSnapshotKey = nextKey;
+		recordSnapshot = data.snapshot;
+		nextCursor = data.snapshot?.nextCursor ?? null;
+		consumedCursors = [];
+		typeFilter = 'ALL';
+		laneFilter = 'ALL';
+		expandedRecordId = null;
+		selectedGameIndex = 0;
+		selectedTournamentSeriesId = '';
+		loadMoreError = '';
+		loadingMore = false;
+	});
+
+	const guild = $derived(data.guild);
+	const profile = $derived(recordSnapshot);
+	const isNavigating = $derived(navigating.to !== null);
+	const hasActiveSeason = $derived(
+		profile?.seasons.some((season) => season.status === 'ACTIVE') ?? false
+	);
+	const dataDragonVersion = $derived(data.championCatalog.version);
+	const searchedUserName = $derived(profile?.member.displayName ?? data.query);
+	const visibleRiotAccounts = $derived(
+		profile
+			? [...profile.riotAccounts].sort((left, right) => Number(right.isMain) - Number(left.isMain))
+			: []
+	);
+	const selectedSeasonName = $derived(
+		profile?.seasons.find((season) => season.id === profile.selectedSeasonId)?.name ?? '시즌 없음'
+	);
+	const searchedMainLaneLabel = $derived(
+		profile?.member.mainLane ? laneLabel[profile.member.mainLane] : '미정'
+	);
+	const filteredRecords = $derived(
+		(recordSnapshot?.records ?? []).filter(
+			(record) => recordMatchesType(record) && recordMatchesLane(record)
+		)
+	);
+
+	function recordMatchesType(record: GuildRecordsRecord): boolean {
+		if (typeFilter === 'ALL') return true;
+		if (typeFilter === 'REGULAR') return record.kind === 'SERIES' && record.source === 'REGULAR';
+		return record.kind === 'TOURNAMENT' || record.source === 'AUCTION';
+	}
+
+	function recordMatchesLane(record: GuildRecordsRecord): boolean {
+		if (laneFilter === 'ALL') return true;
+		if (record.kind === 'SERIES') {
+			return record.games.some((game) => game.target.lane === laneFilter);
 		}
-	];
-
-	const redTeam: LineupPlayer[] = [
-		{ name: '로웰', lane: 'TOP', championId: 'Renekton', championName: '레넥톤', mmrChange: -16 },
-		{ name: '모노', lane: 'JUNGLE', championId: 'Viego', championName: '비에고', mmrChange: -18 },
-		{ name: '유자', lane: 'MID', championId: 'Orianna', championName: '오리아나', mmrChange: -17 },
-		{ name: '설탕', lane: 'BOTTOM', championId: 'Kaisa', championName: '카이사', mmrChange: -18 },
-		{ name: '누리', lane: 'SUPPORT', championId: 'Rakan', championName: '라칸', mmrChange: -16 }
-	];
-
-	function teamWithTarget(
-		players: LineupPlayer[],
-		championId: string,
-		championName: string,
-		lane: Lane,
-		mmrChange: number
-	): LineupPlayer[] {
-		return players.map((player) =>
-			player.isTarget
-				? { ...player, championId, championName, lane, mmrChange }
-				: {
-						...player,
-						mmrChange: mmrChange > 0 ? Math.max(12, mmrChange - 2) : Math.min(-12, mmrChange + 2)
-					}
+		return record.series.some((series) =>
+			series.games.some((game) => game.target.lane === laneFilter)
 		);
 	}
 
-	const matches: CustomMatch[] = [
-		{
-			id: 'custom-1',
-			result: '승리',
-			type: '일반 내전',
-			participantCount: 10,
-			seriesName: '금요 정기 내전',
-			score: '2 : 1',
-			wins: 2,
-			losses: 1,
-			mmrBefore: 1607,
-			mmrAfter: 1642,
-			playedAt: '3일 전',
-			sets: [
-				{
-					label: '1세트',
-					result: '패배',
-					lane: 'MID',
-					championId: 'Orianna',
-					championName: '오리아나',
-					mmrBefore: 1607,
-					mmrAfter: 1591,
-					blueTeam: teamWithTarget(blueTeam, 'Orianna', '오리아나', 'MID', -16),
-					redTeam,
-					blueBans: ['Jax', 'Vi', 'Syndra'],
-					redBans: ['KSante', 'Nocturne', 'Ziggs']
-				},
-				{
-					label: '2세트',
-					result: '승리',
-					lane: 'MID',
-					championId: 'Sylas',
-					championName: '사일러스',
-					mmrBefore: 1591,
-					mmrAfter: 1623,
-					blueTeam: teamWithTarget(blueTeam, 'Sylas', '사일러스', 'MID', 32),
-					redTeam,
-					blueBans: ['Renekton', 'Viego', 'Kaisa'],
-					redBans: ['Ornn', 'Ahri', 'Ezreal']
-				},
-				{
-					label: '3세트',
-					result: '승리',
-					lane: 'MID',
-					championId: 'Ahri',
-					championName: '아리',
-					mmrBefore: 1623,
-					mmrAfter: 1642,
-					blueTeam,
-					redTeam,
-					blueBans: ['Jax', 'Vi', 'Syndra'],
-					redBans: ['KSante', 'Nocturne', 'Ziggs']
-				}
-			]
-		},
-		{
-			id: 'custom-2',
-			result: '패배',
-			type: '경매 내전',
-			participantCount: 20,
-			seriesName: '여름 경매 내전',
-			score: '1 : 2',
-			wins: 1,
-			losses: 2,
-			mmrBefore: 1605,
-			mmrAfter: 1588,
-			playedAt: '5일 전',
-			sets: [
-				{
-					label: '1세트',
-					result: '승리',
-					lane: 'BOTTOM',
-					championId: 'Ezreal',
-					championName: '이즈리얼',
-					mmrBefore: 1605,
-					mmrAfter: 1621,
-					blueTeam: teamWithTarget(blueTeam, 'Ezreal', '이즈리얼', 'BOTTOM', 16),
-					redTeam,
-					blueBans: ['Ahri', 'LeeSin', 'Rakan'],
-					redBans: ['Ornn', 'Kaisa', 'Viego']
-				},
-				{
-					label: '2세트',
-					result: '패배',
-					lane: 'BOTTOM',
-					championId: 'Kaisa',
-					championName: '카이사',
-					mmrBefore: 1621,
-					mmrAfter: 1604,
-					blueTeam: teamWithTarget(blueTeam, 'Kaisa', '카이사', 'BOTTOM', -17),
-					redTeam,
-					blueBans: ['Jax', 'Vi', 'Syndra'],
-					redBans: ['KSante', 'Nocturne', 'Ziggs']
-				},
-				{
-					label: '3세트',
-					result: '패배',
-					lane: 'BOTTOM',
-					championId: 'Jinx',
-					championName: '징크스',
-					mmrBefore: 1604,
-					mmrAfter: 1588,
-					blueTeam: teamWithTarget(blueTeam, 'Jinx', '징크스', 'BOTTOM', -16),
-					redTeam,
-					blueBans: ['Renekton', 'Viego', 'Ahri'],
-					redBans: ['Ornn', 'Ezreal', 'LeeSin']
-				}
-			]
-		},
-		{
-			id: 'custom-3',
-			result: '승리',
-			type: '일반 내전',
-			participantCount: 10,
-			seriesName: '주말 자유 내전',
-			score: '2 : 0',
-			wins: 2,
-			losses: 0,
-			mmrBefore: 1592,
-			mmrAfter: 1623,
-			playedAt: '4일 전',
-			sets: [
-				{
-					label: '1세트',
-					result: '승리',
-					lane: 'MID',
-					championId: 'Orianna',
-					championName: '오리아나',
-					mmrBefore: 1592,
-					mmrAfter: 1607,
-					blueTeam: teamWithTarget(blueTeam, 'Orianna', '오리아나', 'MID', 15),
-					redTeam,
-					blueBans: ['Renekton', 'Vi', 'Syndra'],
-					redBans: ['Ahri', 'Nocturne', 'Ziggs']
-				},
-				{
-					label: '2세트',
-					result: '승리',
-					lane: 'MID',
-					championId: 'Ahri',
-					championName: '아리',
-					mmrBefore: 1607,
-					mmrAfter: 1623,
-					blueTeam: teamWithTarget(blueTeam, 'Ahri', '아리', 'MID', 16),
-					redTeam,
-					blueBans: ['Jax', 'Kaisa', 'Viego'],
-					redBans: ['Ornn', 'LeeSin', 'Ezreal']
-				}
-			]
-		},
-		{
-			id: 'custom-4',
-			result: '승리',
-			type: '경매 내전',
-			participantCount: 20,
-			seriesName: '여름 경매 내전',
-			score: '2 : 1',
-			wins: 2,
-			losses: 1,
-			mmrBefore: 1478,
-			mmrAfter: 1510,
-			playedAt: '12일 전',
-			sets: [
-				{
-					label: '1세트',
-					result: '승리',
-					lane: 'SUPPORT',
-					championId: 'Nautilus',
-					championName: '노틸러스',
-					mmrBefore: 1478,
-					mmrAfter: 1495,
-					blueTeam: teamWithTarget(blueTeam, 'Nautilus', '노틸러스', 'SUPPORT', 17),
-					redTeam,
-					blueBans: ['Jax', 'Viego', 'Kaisa'],
-					redBans: ['Ornn', 'Ahri', 'Ezreal']
-				},
-				{
-					label: '2세트',
-					result: '패배',
-					lane: 'SUPPORT',
-					championId: 'Rakan',
-					championName: '라칸',
-					mmrBefore: 1495,
-					mmrAfter: 1481,
-					blueTeam: teamWithTarget(blueTeam, 'Rakan', '라칸', 'SUPPORT', -14),
-					redTeam,
-					blueBans: ['Renekton', 'Vi', 'Syndra'],
-					redBans: ['KSante', 'Nocturne', 'Ziggs']
-				},
-				{
-					label: '3세트',
-					result: '승리',
-					lane: 'SUPPORT',
-					championId: 'Thresh',
-					championName: '쓰레쉬',
-					mmrBefore: 1481,
-					mmrAfter: 1510,
-					blueTeam: teamWithTarget(blueTeam, 'Thresh', '쓰레쉬', 'SUPPORT', 29),
-					redTeam,
-					blueBans: ['Ahri', 'LeeSin', 'Rakan'],
-					redBans: ['Ornn', 'Kaisa', 'Viego']
-				}
-			]
-		},
-		{
-			id: 'custom-5',
-			result: '승리',
-			type: '경매 내전',
-			participantCount: 10,
-			seriesName: '수요 경매 내전',
-			score: '2 : 0',
-			wins: 2,
-			losses: 0,
-			mmrBefore: 1556,
-			mmrAfter: 1584,
-			playedAt: '5일 전',
-			sets: [
-				{
-					label: '1세트',
-					result: '승리',
-					lane: 'MID',
-					championId: 'Syndra',
-					championName: '신드라',
-					mmrBefore: 1556,
-					mmrAfter: 1570,
-					blueTeam: teamWithTarget(blueTeam, 'Syndra', '신드라', 'MID', 14),
-					redTeam,
-					blueBans: ['Renekton', 'Vi', 'Kaisa'],
-					redBans: ['Ornn', 'LeeSin', 'Ezreal']
-				},
-				{
-					label: '2세트',
-					result: '승리',
-					lane: 'MID',
-					championId: 'Azir',
-					championName: '아지르',
-					mmrBefore: 1570,
-					mmrAfter: 1584,
-					blueTeam: teamWithTarget(blueTeam, 'Azir', '아지르', 'MID', 14),
-					redTeam,
-					blueBans: ['Jax', 'Nocturne', 'Syndra'],
-					redBans: ['KSante', 'Ahri', 'Rakan']
-				}
-			]
-		}
-	];
+	function championIconUrl(id: string | null): string | null {
+		if (!id) return null;
+		const champion = findChampion(data.championCatalog, id);
+		return champion
+			? '/dd/cdn/' + dataDragonVersion + '/img/champion/' + champion.id + '.png'
+			: null;
+	}
 
-	const championRecords: ChampionRecord[] = [
-		{ id: 'Ahri', name: '아리', wins: 8, losses: 4, mainLane: 'MID' },
-		{ id: 'Orianna', name: '오리아나', wins: 5, losses: 3, mainLane: 'MID' },
-		{ id: 'Ezreal', name: '이즈리얼', wins: 3, losses: 3, mainLane: 'BOTTOM' },
-		{ id: 'Sylas', name: '사일러스', wins: 3, losses: 2, mainLane: 'MID' },
-		{ id: 'Nautilus', name: '노틸러스', wins: 3, losses: 1, mainLane: 'SUPPORT' }
-	];
+	function championName(id: string | null): string {
+		if (!id) return '챔피언 미입력';
+		return findChampion(data.championCatalog, id)?.name ?? id;
+	}
 
-	const auctionTournaments: AuctionTournamentRecord[] = [
-		{
-			id: 'auction-summer',
-			name: '여름 경매 내전',
-			teamName: '탐솔팀',
-			spentPoints: 780,
-			placement: '2위',
-			playedAt: '6일 전',
-			roster: blueTeam,
-			series: matches.filter((match) => match.participantCount === 20).reverse(),
-			opponents: { 'custom-4': '모카팀', 'custom-2': '서초팀' },
-			stages: { 'custom-4': '4강', 'custom-2': '결승' }
-		}
-	];
-
-	const filteredMatches = $derived(
-		matches.filter(
-			(match) =>
-				match.participantCount === 10 &&
-				(typeFilter === '전체' || typeFilter === match.type) &&
-				(laneFilter === '전체' || match.sets.some((set) => set.lane === laneFilter))
-		)
-	);
-
-	const filteredAuctionTournaments = $derived(
-		auctionTournaments.filter(
-			(tournament) =>
-				(typeFilter === '전체' || typeFilter === '경매 내전') &&
-				(laneFilter === '전체' ||
-					tournament.series.some((series) => series.sets.some((set) => set.lane === laneFilter)))
-		)
-	);
-
-	function championIconUrl(id: string): string {
-		return `/dd/cdn/${dataDragonVersion}/img/champion/${id}.png`;
+	function preferredChampion(id: string) {
+		return findChampion(data.championCatalog, id);
 	}
 
 	function signed(value: number): string {
-		return `${value > 0 ? '+' : ''}${value}`;
+		const rounded = Math.round(value);
+		return (rounded > 0 ? '+' : '') + rounded;
 	}
 
-	function toggleSeries(match: CustomMatch) {
-		if (expandedMatchId === match.id) {
-			expandedMatchId = null;
+	function mmrDeltaLabel(value: number | null): string {
+		return value === null ? 'MMR 기록 없음' : 'MMR ' + signed(value);
+	}
+
+	function gameMmrDelta(game: GuildRecordsGame): number | null {
+		if (game.target.mmrBefore === null || game.target.mmrAfter === null) return null;
+		return game.target.mmrAfter - game.target.mmrBefore;
+	}
+
+	function resultLabel(result: 'WIN' | 'LOSS' | 'DRAW'): string {
+		if (result === 'WIN') return '승리';
+		if (result === 'LOSS') return '패배';
+		return '무승부';
+	}
+
+	function stageLabel(stage: 'SEMIFINAL_A' | 'SEMIFINAL_B' | 'FINAL' | null): string {
+		if (stage === 'SEMIFINAL_A') return '준결승 A';
+		if (stage === 'SEMIFINAL_B') return '준결승 B';
+		if (stage === 'FINAL') return '결승';
+		return '';
+	}
+
+	function gameResult(game: GuildRecordsGame): 'WIN' | 'LOSS' {
+		return game.winningSide === game.target.side ? 'WIN' : 'LOSS';
+	}
+
+	function toggleSeries(series: GuildRecordsSeriesRecord) {
+		if (expandedRecordId === series.id) {
+			expandedRecordId = null;
 			return;
 		}
-
-		expandedMatchId = match.id;
-		expandedTournamentId = null;
-		selectedSetIndex = match.sets.length - 1;
+		expandedRecordId = series.id;
+		selectedTournamentSeriesId = '';
+		selectedGameIndex = Math.max(0, series.games.length - 1);
 	}
 
-	function toggleTournament(tournament: AuctionTournamentRecord) {
-		if (expandedTournamentId === tournament.id) {
-			expandedTournamentId = null;
+	function toggleTournament(tournament: GuildRecordsTournamentRecord) {
+		if (expandedRecordId === tournament.id) {
+			expandedRecordId = null;
 			return;
 		}
-
-		const selectedSeries =
-			tournament.series.find((series) => series.id === selectedAuctionSeriesId) ??
-			tournament.series.at(-1);
-
-		expandedTournamentId = tournament.id;
-		expandedMatchId = null;
-		selectedAuctionSeriesId = selectedSeries?.id ?? '';
-		selectedSetIndex = Math.max(0, (selectedSeries?.sets.length ?? 1) - 1);
+		const selected = tournament.series.at(-1);
+		expandedRecordId = tournament.id;
+		selectedTournamentSeriesId = selected?.id ?? '';
+		selectedGameIndex = Math.max(0, (selected?.games.length ?? 1) - 1);
 	}
 
-	function selectAuctionSeries(series: CustomMatch) {
-		selectedAuctionSeriesId = series.id;
-		selectedSetIndex = series.sets.length - 1;
+	function selectTournamentSeries(series: GuildRecordsTournamentSeries) {
+		selectedTournamentSeriesId = series.id;
+		selectedGameIndex = Math.max(0, series.games.length - 1);
 	}
 
-	function tournamentMmrChange(tournament: AuctionTournamentRecord): number {
-		return tournament.series.reduce(
-			(total, series) => total + (series.mmrAfter - series.mmrBefore),
-			0
-		);
-	}
-
-	function tournamentSetRecord(tournament: AuctionTournamentRecord): {
-		wins: number;
-		losses: number;
-	} {
-		return tournament.series.reduce(
-			(total, series) => ({ wins: total.wins + series.wins, losses: total.losses + series.losses }),
-			{ wins: 0, losses: 0 }
-		);
-	}
-
-	function tournamentSeriesRecord(tournament: AuctionTournamentRecord): {
-		wins: number;
-		losses: number;
-	} {
-		return tournament.series.reduce(
-			(total, series) => ({
-				wins: total.wins + (series.result === '승리' ? 1 : 0),
-				losses: total.losses + (series.result === '패배' ? 1 : 0)
-			}),
-			{ wins: 0, losses: 0 }
-		);
-	}
-
-	function activeAuctionSeries(tournament: AuctionTournamentRecord): CustomMatch {
+	function activeTournamentSeries(
+		tournament: GuildRecordsTournamentRecord
+	): GuildRecordsTournamentSeries | undefined {
 		return (
-			tournament.series.find((series) => series.id === selectedAuctionSeriesId) ??
-			tournament.series[0]
+			tournament.series.find((series) => series.id === selectedTournamentSeriesId) ??
+			tournament.series.at(-1)
 		);
 	}
 
-	function submitRecordSearch(event: globalThis.SubmitEvent) {
-		event.preventDefault();
-		const query = recordSearch.trim();
-		const target = resolve('/g/[guildId]/records', { guildId: data.guildId });
-		goto(query ? `${target}?q=${globalThis.encodeURIComponent(query)}` : target);
+	function seasonChanged(event: globalThis.Event) {
+		const seasonId = (event.currentTarget as globalThis.HTMLSelectElement).value;
+		const path = resolve('/g/[guildId]/records', { guildId: data.guildId });
+		const query = 'q=' + globalThis.encodeURIComponent(data.query);
+		const season = seasonId ? '&seasonId=' + globalThis.encodeURIComponent(seasonId) : '';
+		void goto(path + '?' + query + season, { keepFocus: true, noScroll: true });
+	}
+
+	async function loadMoreRecords() {
+		if (!recordSnapshot || !nextCursor || loadingMore) return;
+
+		const cursor = nextCursor;
+		if (consumedCursors.includes(cursor)) {
+			nextCursor = null;
+			loadMoreError = '전적 페이지 순환이 감지되었습니다. 페이지를 새로고침해 주세요.';
+			return;
+		}
+		const sourceKey = renderedSnapshotKey;
+		const sourceGuildId = data.guildId;
+		const sourceQuery = data.query;
+		const sourceSeasonId = recordSnapshot.selectedSeasonId;
+		const sourceDisplayName = recordSnapshot.member.displayName;
+		loadingMore = true;
+		loadMoreError = '';
+		try {
+			const page = await fetchGuildRecords(globalThis.fetch, sourceGuildId, {
+				query: sourceQuery,
+				seasonId: sourceSeasonId ?? undefined,
+				cursor,
+				limit: 20
+			});
+			if (
+				renderedSnapshotKey !== sourceKey ||
+				data.guildId !== sourceGuildId ||
+				data.query !== sourceQuery
+			) {
+				return;
+			}
+			if (
+				!recordSnapshot ||
+				page.selectedSeasonId !== sourceSeasonId ||
+				page.member.displayName !== sourceDisplayName
+			) {
+				throw new GuildRecordsApiError(
+					'조회 대상 또는 시즌이 변경되었습니다. 페이지를 새로고침해 주세요.',
+					409,
+					'record_source_changed'
+				);
+			}
+
+			consumedCursors = [...consumedCursors, cursor];
+			const knownIds = new Set(
+				recordSnapshot.records.map((record) => record.kind + ':' + record.id)
+			);
+			const additions = page.records.filter(
+				(record) => !knownIds.has(record.kind + ':' + record.id)
+			);
+			recordSnapshot = {
+				...page,
+				records: [...recordSnapshot.records, ...additions]
+			};
+			if (
+				page.nextCursor === cursor ||
+				(page.nextCursor && consumedCursors.includes(page.nextCursor))
+			) {
+				nextCursor = null;
+				loadMoreError = '전적 페이지가 갱신되지 않았습니다. 페이지를 새로고침해 주세요.';
+			} else {
+				nextCursor = page.nextCursor;
+			}
+		} catch (cause) {
+			if (
+				renderedSnapshotKey !== sourceKey ||
+				data.guildId !== sourceGuildId ||
+				data.query !== sourceQuery
+			) {
+				return;
+			}
+			loadMoreError = cause instanceof Error ? cause.message : '전적을 더 불러오지 못했습니다.';
+		} finally {
+			loadingMore = false;
+		}
 	}
 </script>
 
 <svelte:head>
-	<title>{searchedUserName} 내전 전적 | MonkeyBot</title>
+	<title>{searchedUserName ? searchedUserName + ' 내전 전적' : '내전 전적'} | MonkeyBot</title>
 </svelte:head>
 
 <div class="custom-records-page">
-	<main class="custom-records-shell">
-		<form class="records-search" onsubmit={submitRecordSearch}>
-			<div>
-				<span>{guild.displayName}</span>
-				<strong>내전 전적</strong>
-			</div>
-			<label>
-				<Search size={15} aria-hidden="true" />
-				<input
-					bind:value={recordSearch}
-					placeholder="Discord 사용자 또는 Riot ID"
-					aria-label="길드 내전 전적 검색"
-				/>
-			</label>
-			<button type="submit">조회</button>
-		</form>
-
-		<section class="profile-section">
-			<img
-				src={`/dd/cdn/${dataDragonVersion}/img/profileicon/588.png`}
-				alt={`${searchedUserName} 프로필`}
-			/>
-			<div class="profile-copy">
-				<p>{guild.displayName} · 내전 참가자</p>
-				<h1>{searchedUserName}</h1>
-				<span>{searchedUserTag}</span>
-			</div>
-			<label class="season-control">
-				<span>시즌</span>
-				<select bind:value={season} aria-label="내전 시즌">
-					<option>시즌 3</option>
-					<option>시즌 2</option>
-					<option>전체 시즌</option>
-				</select>
-			</label>
-		</section>
-
-		<section class="lane-mmr-grid" aria-label="라인별 MMR">
-			{#each laneMmr as lane (lane.lane)}
-				<div class="lane-mmr-cell">
-					<PositionIcon role={lane.lane} size="md" />
-					<div>
-						<span>{laneLabel[lane.lane]}</span>
-						<strong>{lane.mmr}</strong>
+	<main
+		class:route-loading={isNavigating}
+		class="custom-records-shell"
+		aria-busy={isNavigating || loadingMore}
+	>
+		{#if profile}
+			<section class="profile-section">
+				{#if profile.member.avatarUrl}
+					<img
+						class="profile-avatar"
+						src={profile.member.avatarUrl}
+						alt={searchedUserName + ' Discord 프로필'}
+					/>
+				{:else}
+					<div class="profile-avatar profile-avatar-fallback" aria-hidden="true">
+						<UserRound size={38} strokeWidth={1.6} />
 					</div>
-					<p>{lane.games}게임 <b class:negative={lane.change < 0}>{signed(lane.change)}</b></p>
+				{/if}
+				<div class="profile-copy">
+					<p>{guild.displayName} · 내전 참가자</p>
+					<h1>{searchedUserName}</h1>
+					{#if visibleRiotAccounts.length > 0}
+						<ul class="linked-riot-accounts" aria-label="연결된 Riot ID">
+							{#each visibleRiotAccounts as account (account.platform + ':' + account.gameName + '#' + account.tagLine)}
+								<li class:main-account={account.isMain}>
+									{#if account.profileIconId !== null}
+										<img
+											src={riotProfileIconUrl(account.profileIconId, dataDragonVersion)}
+											alt=""
+										/>
+									{/if}
+									<span>{account.gameName}#{account.tagLine}</span>
+									{#if account.isMain}<strong>대표</strong>{/if}
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				</div>
-			{/each}
-		</section>
-
-		<section class="record-summary">
-			<div><span>승패</span><strong>33승 21패</strong></div>
-			<div><span>주 포지션</span><strong>미드</strong></div>
-		</section>
-
-		<section class="matches-section">
-			<div class="filter-toolbar">
-				<div class="filter-group">
-					{#each ['전체', '일반 내전', '경매 내전'] as filter (filter)}
-						<button
-							type="button"
-							class:active={typeFilter === filter}
-							onclick={() => (typeFilter = filter as '전체' | MatchType)}>{filter}</button
-						>
-					{/each}
-				</div>
-				<div class="filter-group lane-filter">
-					<button
-						type="button"
-						class:active={laneFilter === '전체'}
-						onclick={() => (laneFilter = '전체')}>전체 라인</button
+				<label class="season-control">
+					<span>시즌</span>
+					<select
+						value={profile.selectedSeasonId ?? ''}
+						onchange={seasonChanged}
+						aria-label="내전 시즌"
+						disabled={profile.seasons.length === 0 || isNavigating}
 					>
-					{#each laneOrder as lane (lane)}
-						<button
-							type="button"
-							class:active={laneFilter === lane}
-							onclick={() => (laneFilter = lane)}>{laneLabel[lane]}</button
-						>
-					{/each}
-				</div>
-			</div>
-
-			<div class="match-list-scroll">
-				<div class="match-list">
-					{#each filteredMatches as match (match.id)}
-						<div class="match-entry">
-							<div
-								class:loss={match.result === '패배'}
-								class:auction={match.type === '경매 내전'}
-								class="match-row"
-							>
-								<div class="result-cell">
-									<strong>{match.type === '일반 내전' ? '일반' : '경매'}</strong>
-									<span>{match.participantCount}인</span>
-								</div>
-								<div class="series-cell">
-									<strong>{match.seriesName}</strong>
-								</div>
-								<div class="score-cell">
-									<strong>{match.score}</strong>
-								</div>
-								<div class="mmr-cell series-mmr-cell">
-									<strong class:negative={match.mmrAfter < match.mmrBefore}
-										>MMR {signed(match.mmrAfter - match.mmrBefore)}</strong
-									>
-								</div>
-								<div class="date-cell">{match.playedAt}</div>
-								<button
-									type="button"
-									class="expand-button"
-									aria-label={`${match.seriesName} 상세`}
-									aria-expanded={expandedMatchId === match.id}
-									onclick={() => toggleSeries(match)}
-									>{expandedMatchId === match.id ? '⌃' : '⌄'}</button
-								>
-							</div>
-
-							{#if expandedMatchId === match.id}
-								{@const selectedSet = match.sets[selectedSetIndex] ?? match.sets[0]}
-								<div class="expanded-match">
-									<div class="set-selector">
-										{#each match.sets as set, index (set.label)}
-											<button
-												type="button"
-												class:active={selectedSetIndex === index}
-												onclick={() => (selectedSetIndex = index)}
-											>
-												<span class:set-loss={set.result === '패배'}>{set.result}</span>
-												<strong>{set.label}</strong>
-												<img src={championIconUrl(set.championId)} alt="" />
-												<PositionIcon role={set.lane} size="sm" />
-												<small>MMR {signed(set.mmrAfter - set.mmrBefore)}</small>
-											</button>
-										{/each}
-									</div>
-									<div class="lineup-grid">
-										{@render TeamLineup(
-											'블루팀',
-											selectedSet.blueTeam,
-											selectedSet.result === '승리'
-										)}
-										{@render TeamLineup(
-											'레드팀',
-											selectedSet.redTeam,
-											selectedSet.result === '패배'
-										)}
-									</div>
-									<div class="pick-ban-row">
-										<span>블루 밴</span>
-										<div>
-											{#each selectedSet.blueBans as champion (champion)}<img
-													src={championIconUrl(champion)}
-													alt=""
-												/>{/each}
-										</div>
-										<span>레드 밴</span>
-										<div>
-											{#each selectedSet.redBans as champion (champion)}<img
-													src={championIconUrl(champion)}
-													alt=""
-												/>{/each}
-										</div>
-									</div>
-								</div>
+						{#if profile.seasons.length === 0}
+							<option value="">시즌 없음</option>
+						{:else}
+							{#if !hasActiveSeason}
+								<option value="">활성 시즌 없음</option>
 							{/if}
+							{#each profile.seasons as season (season.id)}
+								<option value={season.id}>{season.name}</option>
+							{/each}
+						{/if}
+					</select>
+				</label>
+			</section>
+
+			<section class="preferred-champions" aria-labelledby="preferred-champions-title">
+				<header>
+					<h2 id="preferred-champions-title">선호 챔피언</h2>
+				</header>
+				<div class="preferred-lane-grid">
+					{#each laneOrder as lane (lane)}
+						<div class="preferred-lane-cell">
+							<div class="preferred-lane-heading">
+								<PositionIcon role={lane} size="sm" />
+								<strong>{laneLabel[lane]}</strong>
+							</div>
+							<div class="preferred-champion-list">
+								{#each profile.championPreferences[lane] as championId, index (championId)}
+									{@const champion = preferredChampion(championId)}
+									{#if champion}
+										<span
+											class="preferred-champion"
+											title={index + 1 + '. ' + champion.name}
+											aria-label={index + 1 + '순위 ' + champion.name}
+										>
+											<ChampionFace {champion} version={dataDragonVersion} size="md" />
+										</span>
+									{:else}
+										<span
+											class="preferred-champion-missing"
+											title={index + 1 + '. ' + championId}
+											aria-label={index + 1 + '순위 ' + championId + ' (이미지 없음)'}
+											>{championId}</span
+										>
+									{/if}
+								{:else}
+									<span class="preferred-champion-empty">등록 없음</span>
+								{/each}
+							</div>
 						</div>
 					{/each}
+				</div>
+			</section>
 
-					{#each filteredAuctionTournaments as tournament (tournament.id)}
-						{@const seriesRecord = tournamentSeriesRecord(tournament)}
-						{@const setRecord = tournamentSetRecord(tournament)}
-						{@const mmrChange = tournamentMmrChange(tournament)}
-						<div class="auction-entry">
+			<section class="lane-mmr-grid" aria-label="라인별 MMR">
+				{#each profile.laneMmr as lane (lane.lane)}
+					<div class="lane-mmr-cell">
+						<PositionIcon role={lane.lane} size="md" />
+						<div>
+							<span>{laneLabel[lane.lane]}</span>
+							<strong>{Math.round(lane.mmr)}</strong>
+						</div>
+						<p>{lane.games}게임 <b>{lane.wins}승</b></p>
+					</div>
+				{/each}
+			</section>
+
+			<section class="record-summary">
+				<div>
+					<span>승패</span>
+					<strong>{profile.summary.wins}승 {profile.summary.losses}패</strong>
+				</div>
+				<div><span>주 포지션</span><strong>{searchedMainLaneLabel}</strong></div>
+			</section>
+
+			<section class="matches-section">
+				<div class="filter-toolbar">
+					<div class="filter-group">
+						<button
+							type="button"
+							class:active={typeFilter === 'ALL'}
+							onclick={() => (typeFilter = 'ALL')}>전체</button
+						>
+						<button
+							type="button"
+							class:active={typeFilter === 'REGULAR'}
+							onclick={() => (typeFilter = 'REGULAR')}>일반 내전</button
+						>
+						<button
+							type="button"
+							class:active={typeFilter === 'AUCTION'}
+							onclick={() => (typeFilter = 'AUCTION')}>경매 내전</button
+						>
+					</div>
+					<div class="filter-group lane-filter">
+						<button
+							type="button"
+							class:active={laneFilter === 'ALL'}
+							onclick={() => (laneFilter = 'ALL')}>전체 라인</button
+						>
+						{#each laneOrder as lane (lane)}
 							<button
 								type="button"
-								class="auction-row"
-								aria-label={`${tournament.name} 상세`}
-								aria-expanded={expandedTournamentId === tournament.id}
-								onclick={() => toggleTournament(tournament)}
+								class:active={laneFilter === lane}
+								onclick={() => (laneFilter = lane)}>{laneLabel[lane]}</button
 							>
-								<div class="auction-type-cell"><strong>경매</strong><span>20인</span></div>
-								<div class="auction-event-cell">
-									<strong>{tournament.name}</strong>
-									<span>{tournament.teamName} · {tournament.spentPoints}P</span>
-								</div>
-								<div class="auction-score-cell">
-									<strong>{tournament.placement}</strong>
-									<span>시리즈 {seriesRecord.wins}승 {seriesRecord.losses}패</span>
-								</div>
-								<div class="auction-summary-cell">
-									<span>세트 {setRecord.wins}승 {setRecord.losses}패</span>
-									<strong class:negative={mmrChange < 0}>MMR {signed(mmrChange)}</strong>
-								</div>
-								<div class="date-cell">{tournament.playedAt}</div>
-								<span class="expand-button" aria-hidden="true"
-									>{expandedTournamentId === tournament.id ? '⌃' : '⌄'}</span
-								>
-							</button>
+						{/each}
+					</div>
+				</div>
 
-							{#if expandedTournamentId === tournament.id}
-								{@const selectedSeries = activeAuctionSeries(tournament)}
-								{@const selectedSet =
-									selectedSeries.sets[selectedSetIndex] ?? selectedSeries.sets[0]}
-								<div class="expanded-tournament">
-									<div class="auction-team-summary">
-										<div class="auction-roster">
-											{#each tournament.roster as player (player.name)}
-												<div class:target-player={player.isTarget}>
-													<PositionIcon role={player.lane} size="sm" />
-													<img src={championIconUrl(player.championId)} alt="" />
-													<span>
-														<strong>{player.name}</strong><small>{laneLabel[player.lane]}</small>
-													</span>
-												</div>
-											{/each}
+				<div class="match-list-scroll">
+					<div class="match-list">
+						{#each filteredRecords as record (record.kind + ':' + record.id)}
+							{#if record.kind === 'SERIES'}
+								<div class="match-entry record-entry">
+									<div
+										class:loss={record.result === 'LOSS'}
+										class:auction={record.source === 'AUCTION'}
+										class="match-row"
+									>
+										<div class="result-cell">
+											<strong>{record.source === 'REGULAR' ? '일반' : '경매'}</strong>
+											<span>{record.participantCount}인 · {resultLabel(record.result)}</span>
 										</div>
-									</div>
-
-									<div class="auction-series-selector">
-										{#each tournament.series as series (series.id)}
-											<button
-												type="button"
-												class:active={selectedSeries.id === series.id}
-												class:loss={series.result === '패배'}
-												onclick={() => selectAuctionSeries(series)}
-											>
-												<span>{tournament.stages[series.id]}</span>
-												<strong>vs {tournament.opponents[series.id]}</strong>
-												<b>{series.score}</b>
-												<small>MMR {signed(series.mmrAfter - series.mmrBefore)}</small>
-											</button>
-										{/each}
-									</div>
-
-									<div class="auction-set-detail">
-										<div class="set-selector">
-											{#each selectedSeries.sets as set, index (set.label)}
-												<button
-													type="button"
-													class:active={selectedSetIndex === index}
-													onclick={() => (selectedSetIndex = index)}
+										<div class="series-cell">
+											<strong>{record.title}</strong>
+											{#if record.opponentName || record.stage}
+												<small
+													>{stageLabel(record.stage)}{record.stage && record.opponentName
+														? ' · '
+														: ''}{record.opponentName ? 'vs ' + record.opponentName : ''}</small
 												>
-													<span class:set-loss={set.result === '패배'}>{set.result}</span>
-													<strong>{set.label}</strong>
-													<img src={championIconUrl(set.championId)} alt="" />
-													<PositionIcon role={set.lane} size="sm" />
-													<small>MMR {signed(set.mmrAfter - set.mmrBefore)}</small>
-												</button>
-											{/each}
+											{/if}
 										</div>
-										<div class="lineup-grid">
-											{@render TeamLineup(
-												'블루팀',
-												selectedSet.blueTeam,
-												selectedSet.result === '승리'
-											)}
-											{@render TeamLineup(
-												'레드팀',
-												selectedSet.redTeam,
-												selectedSet.result === '패배'
-											)}
+										<div class="score-cell">
+											<strong>{record.wins} : {record.losses}</strong>
 										</div>
-										<div class="pick-ban-row">
-											<span>블루 밴</span>
-											<div>
-												{#each selectedSet.blueBans as champion (champion)}<img
-														src={championIconUrl(champion)}
-														alt=""
-													/>{/each}
-											</div>
-											<span>레드 밴</span>
-											<div>
-												{#each selectedSet.redBans as champion (champion)}<img
-														src={championIconUrl(champion)}
-														alt=""
-													/>{/each}
-											</div>
+										<div class="mmr-cell series-mmr-cell">
+											<strong class:negative={(record.mmrDelta ?? 0) < 0}
+												>{mmrDeltaLabel(record.mmrDelta)}</strong
+											>
 										</div>
+										<div class="date-cell">{formatRelativeTime(record.playedAt)}</div>
+										<button
+											type="button"
+											class="expand-button"
+											aria-label={record.title + ' 상세'}
+											aria-expanded={expandedRecordId === record.id}
+											onclick={() => toggleSeries(record)}
+										>
+											<ChevronDown
+												size={16}
+												class={expandedRecordId === record.id ? 'expanded' : ''}
+												aria-hidden="true"
+											/>
+										</button>
 									</div>
+
+									{#if expandedRecordId === record.id}
+										<div class="expanded-match">
+											{#if record.games.length > 0}
+												<div class="set-selector">
+													{#each record.games as game, index (game.id)}
+														{@const targetResult = gameResult(game)}
+														{@const targetMmrDelta = gameMmrDelta(game)}
+														{@const targetChampionIconUrl = championIconUrl(game.target.championId)}
+														<button
+															type="button"
+															class:active={selectedGameIndex === index}
+															onclick={() => (selectedGameIndex = index)}
+														>
+															<span class:set-loss={targetResult === 'LOSS'}
+																>{resultLabel(targetResult)}</span
+															>
+															<strong>{game.gameNumber}세트</strong>
+															{#if targetChampionIconUrl}
+																<img
+																	src={targetChampionIconUrl}
+																	alt={championName(game.target.championId)}
+																/>
+															{:else}
+																<span class="champion-slot-empty" aria-label="챔피언 미입력">-</span
+																>
+															{/if}
+															<PositionIcon role={game.target.lane} size="sm" />
+															<small>{mmrDeltaLabel(targetMmrDelta)}</small>
+														</button>
+													{/each}
+												</div>
+												{@const selectedGame = record.games[selectedGameIndex] ?? record.games[0]}
+												{#if selectedGame}
+													<div class="lineup-grid">
+														{@render TeamLineup(
+															'블루팀',
+															selectedGame.blueTeam,
+															selectedGame.winningSide === 'BLUE'
+														)}
+														{@render TeamLineup(
+															'레드팀',
+															selectedGame.redTeam,
+															selectedGame.winningSide === 'RED'
+														)}
+													</div>
+													{@render PickBans(selectedGame)}
+												{/if}
+											{:else}
+												<div class="record-detail-empty">확정된 세트 기록이 없습니다.</div>
+											{/if}
+										</div>
+									{/if}
+								</div>
+							{:else}
+								<div class="auction-entry record-entry">
+									<button
+										type="button"
+										class="auction-row"
+										aria-label={record.title + ' 상세'}
+										aria-expanded={expandedRecordId === record.id}
+										onclick={() => toggleTournament(record)}
+									>
+										<div class="auction-type-cell"><strong>경매</strong><span>20인</span></div>
+										<div class="auction-event-cell">
+											<strong>{record.title}</strong>
+											{#if record.teamName || record.spentPoints !== null}
+												<span
+													>{record.teamName ?? '팀 정보 없음'}{record.spentPoints !== null
+														? ' · ' + record.spentPoints + 'P'
+														: ''}</span
+												>
+											{/if}
+										</div>
+										<div class="auction-score-cell">
+											<strong>{record.placement === null ? '-' : record.placement + '위'}</strong>
+											<span>세트 {record.wins}승 {record.losses}패</span>
+										</div>
+										<div class="auction-summary-cell">
+											<span>시리즈 {record.series.length}개</span>
+											<strong class:negative={(record.mmrDelta ?? 0) < 0}
+												>{mmrDeltaLabel(record.mmrDelta)}</strong
+											>
+										</div>
+										<div class="date-cell">{formatRelativeTime(record.playedAt)}</div>
+										<span class="expand-button" aria-hidden="true">
+											<ChevronDown
+												size={16}
+												class={expandedRecordId === record.id ? 'expanded' : ''}
+											/>
+										</span>
+									</button>
+
+									{#if expandedRecordId === record.id}
+										<div class="expanded-tournament">
+											{#if record.roster.length > 0}
+												<div class="auction-team-summary">
+													<div class="auction-roster">
+														{#each record.roster as player (player.displayName + ':' + player.lane)}
+															{@const playerChampionIconUrl = championIconUrl(player.championId)}
+															<div class:target-player={player.isTarget}>
+																<PositionIcon role={player.lane} size="sm" />
+																{#if playerChampionIconUrl}
+																	<img
+																		src={playerChampionIconUrl}
+																		alt={championName(player.championId)}
+																	/>
+																{:else}
+																	<span
+																		class="champion-placeholder"
+																		aria-label={championName(player.championId)}>-</span
+																	>
+																{/if}
+																<span>
+																	<strong>{player.displayName}</strong><small
+																		>{laneLabel[player.lane]}</small
+																	>
+																</span>
+															</div>
+														{/each}
+													</div>
+												</div>
+											{/if}
+
+											{#if record.series.length > 0}
+												{@const selectedSeries = activeTournamentSeries(record)}
+												{#if selectedSeries}
+													<div class="auction-series-selector">
+														{#each record.series as series (series.id)}
+															<button
+																type="button"
+																class:active={selectedSeries.id === series.id}
+																class:loss={series.result === 'LOSS'}
+																onclick={() => selectTournamentSeries(series)}
+															>
+																<span>{stageLabel(series.stage)}</span>
+																<strong
+																	>{series.opponentName
+																		? 'vs ' + series.opponentName
+																		: series.title}</strong
+																>
+																<b>{series.wins} : {series.losses}</b>
+																<small>{mmrDeltaLabel(series.mmrDelta)}</small>
+															</button>
+														{/each}
+													</div>
+
+													<div class="auction-set-detail">
+														{#if selectedSeries.games.length > 0}
+															<div class="set-selector">
+																{#each selectedSeries.games as game, index (game.id)}
+																	{@const targetResult = gameResult(game)}
+																	{@const targetMmrDelta = gameMmrDelta(game)}
+																	{@const targetChampionIconUrl = championIconUrl(
+																		game.target.championId
+																	)}
+																	<button
+																		type="button"
+																		class:active={selectedGameIndex === index}
+																		onclick={() => (selectedGameIndex = index)}
+																	>
+																		<span class:set-loss={targetResult === 'LOSS'}
+																			>{resultLabel(targetResult)}</span
+																		>
+																		<strong>{game.gameNumber}세트</strong>
+																		{#if targetChampionIconUrl}
+																			<img
+																				src={targetChampionIconUrl}
+																				alt={championName(game.target.championId)}
+																			/>
+																		{:else}
+																			<span class="champion-slot-empty" aria-label="챔피언 미입력"
+																				>-</span
+																			>
+																		{/if}
+																		<PositionIcon role={game.target.lane} size="sm" />
+																		<small>{mmrDeltaLabel(targetMmrDelta)}</small>
+																	</button>
+																{/each}
+															</div>
+															{@const selectedGame =
+																selectedSeries.games[selectedGameIndex] ?? selectedSeries.games[0]}
+															{#if selectedGame}
+																<div class="lineup-grid">
+																	{@render TeamLineup(
+																		'블루팀',
+																		selectedGame.blueTeam,
+																		selectedGame.winningSide === 'BLUE'
+																	)}
+																	{@render TeamLineup(
+																		'레드팀',
+																		selectedGame.redTeam,
+																		selectedGame.winningSide === 'RED'
+																	)}
+																</div>
+																{@render PickBans(selectedGame)}
+															{/if}
+														{:else}
+															<div class="record-detail-empty">확정된 세트 기록이 없습니다.</div>
+														{/if}
+													</div>
+												{/if}
+											{:else}
+												<div class="record-detail-empty">완료된 시리즈 기록이 없습니다.</div>
+											{/if}
+										</div>
+									{/if}
 								</div>
 							{/if}
-						</div>
-					{/each}
-				</div>
-			</div>
-		</section>
-
-		<section class="champion-records">
-			<header>
-				<h2>챔피언 사용 기록</h2>
-				<span>{season}</span>
-			</header>
-			<div class="champion-table-scroll">
-				<div class="champion-table">
-					<div class="champion-table-row champion-table-head">
-						<span>챔피언</span><span>전적</span><span>주 포지션</span>
+						{:else}
+							<div class="record-history-empty">
+								<strong>
+									{profile.records.length === 0
+										? selectedSeasonName + '에 확정된 내전 전적이 없습니다.'
+										: '선택한 조건에 맞는 내전 전적이 없습니다.'}
+								</strong>
+								<span>확정된 경기 결과만 표시됩니다.</span>
+							</div>
+						{/each}
 					</div>
-					{#each championRecords as champion (champion.id)}
-						<div class="champion-table-row">
-							<span><img src={championIconUrl(champion.id)} alt="" />{champion.name}</span>
-							<span>{champion.wins}승 {champion.losses}패</span>
-							<span
-								><PositionIcon role={champion.mainLane} size="sm" />{laneLabel[
-									champion.mainLane
-								]}</span
-							>
-						</div>
-					{/each}
 				</div>
-			</div>
-		</section>
+
+				{#if loadMoreError}
+					<p class="records-inline-error" role="alert">{loadMoreError}</p>
+				{/if}
+				{#if nextCursor}
+					<div class="records-load-more">
+						<button type="button" disabled={loadingMore} onclick={loadMoreRecords}>
+							{loadingMore ? '불러오는 중' : '더 보기'}
+						</button>
+					</div>
+				{/if}
+			</section>
+
+			<section class="champion-records">
+				<header>
+					<h2>챔피언 사용 기록</h2>
+					<span>{selectedSeasonName}</span>
+				</header>
+				<div class="champion-table-scroll">
+					<div class="champion-table">
+						<div class="champion-table-row champion-table-head">
+							<span>챔피언</span><span>전적</span><span>주 포지션</span>
+						</div>
+						{#each profile.championRecords as champion (champion.championId + ':' + champion.lane)}
+							{@const championRecordIconUrl = championIconUrl(champion.championId)}
+							<div class="champion-table-row">
+								<span>
+									{#if championRecordIconUrl}<img src={championRecordIconUrl} alt="" />{/if}
+									{championName(champion.championId)}
+								</span>
+								<span>{champion.wins}승 {champion.losses}패</span>
+								<span
+									><PositionIcon role={champion.lane} size="sm" />{laneLabel[champion.lane]}</span
+								>
+							</div>
+						{:else}
+							<div class="champion-table-empty">이 시즌의 챔피언 사용 기록이 없습니다.</div>
+						{/each}
+					</div>
+				</div>
+			</section>
+		{:else if data.loadError}
+			<section class="records-empty-state records-error-state" role="alert">
+				<TriangleAlert size={28} aria-hidden="true" />
+				<h1>내전 전적을 불러오지 못했습니다</h1>
+				<p>{data.loadError}</p>
+			</section>
+		{:else}
+			<section class="records-empty-state">
+				<Search size={28} aria-hidden="true" />
+				<h1>내전 전적을 확인할 사용자를 검색해 주세요</h1>
+				<p>현재 길드의 Discord 이름 또는 공개된 Riot ID로 참가자를 찾을 수 있습니다.</p>
+			</section>
+		{/if}
 	</main>
 </div>
 
-{#snippet TeamLineup(label: string, players: LineupPlayer[], winner: boolean)}
+{#snippet TeamLineup(label: string, players: GuildRecordsLineupPlayer[], winner: boolean)}
 	<section class:winner class="team-lineup">
 		<header>
 			<h3>{label}</h3>
 			{#if winner}<span>승리</span>{/if}
 		</header>
 		<div>
-			{#each players as player (player.name)}
+			{#each players as player (player.displayName + ':' + player.lane)}
+				{@const playerChampionIconUrl = championIconUrl(player.championId)}
 				<div class:target-player={player.isTarget} class="lineup-player">
 					<PositionIcon role={player.lane} size="sm" />
-					<img src={championIconUrl(player.championId)} alt={player.championName} />
-					<div><strong>{player.name}</strong><span>{player.championName}</span></div>
+					{#if playerChampionIconUrl}
+						<img src={playerChampionIconUrl} alt={championName(player.championId)} />
+					{:else}
+						<span class="champion-placeholder" aria-hidden="true">-</span>
+					{/if}
+					<div>
+						<strong>{player.displayName}</strong><span>{championName(player.championId)}</span>
+					</div>
 				</div>
+			{:else}
+				<div class="lineup-empty">라인업 기록 없음</div>
 			{/each}
 		</div>
 	</section>
+{/snippet}
+
+{#snippet PickBans(game: GuildRecordsGame)}
+	{#if game.blueBans.length > 0 || game.redBans.length > 0}
+		<div class="pick-ban-row">
+			<span>블루 밴</span>
+			<div>
+				{#each game.blueBans as champion (champion)}
+					{@const banIconUrl = championIconUrl(champion)}
+					{#if banIconUrl}
+						<img src={banIconUrl} alt={championName(champion)} />
+					{:else}
+						<span class="ban-placeholder">{champion}</span>
+					{/if}
+				{/each}
+			</div>
+			<span>레드 밴</span>
+			<div>
+				{#each game.redBans as champion (champion)}
+					{@const banIconUrl = championIconUrl(champion)}
+					{#if banIconUrl}
+						<img src={banIconUrl} alt={championName(champion)} />
+					{:else}
+						<span class="ban-placeholder">{champion}</span>
+					{/if}
+				{/each}
+			</div>
+		</div>
+	{/if}
 {/snippet}
 
 <style>
@@ -879,56 +838,11 @@
 		margin: 0 auto;
 		padding: 0 12px 12px;
 		background: var(--color-app-bg-soft);
+		transition: opacity 140ms ease;
 	}
-	.records-search {
-		display: grid;
-		grid-template-columns: minmax(150px, 0.35fr) minmax(260px, 1fr) 72px;
-		align-items: center;
-		gap: 8px;
-		margin-bottom: 8px;
-		padding: 10px 12px;
-		border: 1px solid var(--color-app-border);
-		background: var(--color-app-surface);
-	}
-	.records-search > div {
-		display: grid;
-		gap: 2px;
-	}
-	.records-search span {
-		color: #64748b;
-		font-size: 10px;
-		font-weight: 700;
-	}
-	.records-search strong {
-		color: #f8fafc;
-		font-size: 14px;
-	}
-	.records-search label {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		height: 38px;
-		border: 1px solid var(--color-app-border);
-		background: var(--color-app-control);
-		padding: 0 11px;
-		color: #64748b;
-	}
-	.records-search input {
-		min-width: 0;
-		width: 100%;
-		border: 0;
-		background: transparent;
-		color: #f8fafc;
-		font-size: 13px;
-		outline: 0;
-	}
-	.records-search button {
-		height: 38px;
-		border: 1px solid rgb(34 211 238 / 0.35);
-		background: rgb(34 211 238 / 0.08);
-		color: #cffafe;
-		font-size: 12px;
-		font-weight: 700;
+	.custom-records-shell.route-loading {
+		opacity: 0.65;
+		pointer-events: none;
 	}
 	.profile-section {
 		display: grid;
@@ -938,16 +852,21 @@
 		padding: 14px;
 		background: var(--color-app-surface);
 	}
-	.profile-section > img {
+	.profile-avatar {
 		width: 96px;
 		height: 96px;
 		object-fit: cover;
 	}
+	.profile-avatar-fallback {
+		display: grid;
+		place-items: center;
+		background: var(--color-app-control);
+		color: #64748b;
+	}
 	.profile-copy {
 		min-width: 0;
 	}
-	.profile-copy p,
-	.profile-copy span {
+	.profile-copy > p {
 		margin: 0;
 		color: #94a3b8;
 		font-size: 12px;
@@ -958,6 +877,47 @@
 		color: #f8fafc;
 		font-size: 27px;
 		line-height: 1.1;
+	}
+	.linked-riot-accounts {
+		display: flex;
+		min-width: 0;
+		flex-wrap: wrap;
+		gap: 5px;
+		margin: 8px 0 0;
+		padding: 0;
+		list-style: none;
+	}
+	.linked-riot-accounts li {
+		display: inline-flex;
+		min-width: 0;
+		height: 28px;
+		align-items: center;
+		gap: 6px;
+		background: var(--color-app-control);
+		padding: 3px 8px 3px 4px;
+		color: #94a3b8;
+		font-size: 11px;
+		font-weight: 700;
+	}
+	.linked-riot-accounts li.main-account {
+		background: rgb(34 211 238 / 0.08);
+		color: #cffafe;
+	}
+	.linked-riot-accounts img {
+		width: 22px;
+		height: 22px;
+		flex: none;
+		object-fit: cover;
+	}
+	.linked-riot-accounts li > span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.linked-riot-accounts strong {
+		flex: none;
+		color: #67e8f9;
+		font-size: 9px;
 	}
 	.season-control {
 		display: grid;
@@ -975,6 +935,71 @@
 		padding: 0 10px;
 		color: #e2e8f0;
 		outline: none;
+	}
+	.preferred-champions {
+		margin-top: 12px;
+		border: 1px solid var(--color-app-border);
+		background: var(--color-app-surface);
+	}
+	.preferred-champions > header {
+		display: flex;
+		min-height: 42px;
+		align-items: center;
+		padding: 0 12px;
+		border-bottom: 1px solid var(--color-app-border-muted);
+	}
+	.preferred-champions h2 {
+		margin: 0;
+		color: #e2e8f0;
+		font-size: 13px;
+	}
+	.preferred-lane-grid {
+		display: grid;
+		grid-template-columns: repeat(5, minmax(0, 1fr));
+		gap: 1px;
+		background: var(--color-app-border-muted);
+	}
+	.preferred-lane-cell {
+		min-width: 0;
+		min-height: 94px;
+		background: var(--color-app-surface);
+		padding: 10px;
+	}
+	.preferred-lane-heading {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		color: #cbd5e1;
+		font-size: 11px;
+	}
+	.preferred-champion-list {
+		display: flex;
+		min-width: 0;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 5px;
+		margin-top: 9px;
+	}
+	.preferred-champion {
+		display: inline-flex;
+	}
+	.preferred-champion-missing {
+		display: inline-flex;
+		max-width: 100%;
+		height: 40px;
+		align-items: center;
+		overflow: hidden;
+		background: var(--color-app-control);
+		padding: 0 8px;
+		color: #94a3b8;
+		font-size: 10px;
+		font-weight: 700;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.preferred-champion-empty {
+		color: #64748b;
+		font-size: 10px;
 	}
 	.lane-mmr-grid {
 		display: grid;
@@ -1143,6 +1168,13 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	.series-cell small {
+		overflow: hidden;
+		color: #94a3b8;
+		font-size: 10px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 	.score-cell {
 		justify-items: center;
 		text-align: center;
@@ -1177,6 +1209,15 @@
 		border: 0;
 		background: transparent;
 		cursor: pointer;
+	}
+	.expand-button :global(svg) {
+		transition: transform 140ms ease;
+	}
+	.expand-button :global(svg.expanded) {
+		transform: rotate(180deg);
+	}
+	.record-entry + .record-entry {
+		margin-top: 3px;
 	}
 	.auction-row {
 		display: grid;
@@ -1400,6 +1441,15 @@
 		height: 34px;
 		object-fit: cover;
 	}
+	.set-selector button > .champion-slot-empty {
+		display: grid;
+		width: 34px;
+		height: 34px;
+		place-items: center;
+		background: rgb(15 23 42 / 0.75);
+		color: #64748b;
+		font-size: 11px;
+	}
 	.set-selector button > small {
 		overflow: hidden;
 		font-size: 10px;
@@ -1457,6 +1507,28 @@
 		height: 38px;
 		object-fit: cover;
 	}
+	.lineup-player > .champion-placeholder,
+	.auction-roster > div > .champion-placeholder {
+		display: grid;
+		width: 38px;
+		height: 38px;
+		place-items: center;
+		background: rgb(15 23 42 / 0.75);
+		color: #64748b;
+		font-size: 11px;
+	}
+	.auction-roster > div > .champion-placeholder {
+		width: 36px;
+		height: 36px;
+	}
+	.lineup-empty,
+	.record-detail-empty {
+		display: grid;
+		min-height: 72px;
+		place-items: center;
+		color: #64748b;
+		font-size: 11px;
+	}
 	.lineup-player div {
 		display: grid;
 		min-width: 0;
@@ -1495,6 +1567,18 @@
 		height: 30px;
 		object-fit: cover;
 		filter: grayscale(0.75);
+	}
+	.pick-ban-row .ban-placeholder {
+		display: grid;
+		width: 30px;
+		height: 30px;
+		place-items: center;
+		overflow: hidden;
+		background: rgb(15 23 42 / 0.75);
+		color: #64748b;
+		font-size: 8px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.champion-records {
 		margin-top: 20px;
@@ -1553,6 +1637,84 @@
 		height: 28px;
 		object-fit: cover;
 	}
+	.champion-table-empty {
+		display: grid;
+		min-height: 72px;
+		place-items: center;
+		border-right: 1px solid var(--color-app-border-muted);
+		border-bottom: 1px solid var(--color-app-border-muted);
+		background: var(--color-app-surface);
+		color: var(--color-app-muted);
+		font-size: 11px;
+	}
+	.record-history-empty {
+		display: grid;
+		min-height: 150px;
+		place-content: center;
+		justify-items: center;
+		gap: 5px;
+		border: 1px solid var(--color-app-border);
+		background: var(--color-app-surface);
+		color: var(--color-app-muted);
+		font-size: 11px;
+	}
+	.record-history-empty strong {
+		color: #cbd5e1;
+		font-size: 12px;
+	}
+	.records-load-more {
+		display: flex;
+		justify-content: center;
+		padding: 14px 0 0;
+	}
+	.records-load-more button {
+		min-width: 116px;
+		height: 34px;
+		border: 1px solid var(--color-app-border);
+		background: var(--color-app-control);
+		color: #cbd5e1;
+		font-size: 11px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+	.records-load-more button:hover:not(:disabled) {
+		border-color: rgb(34 211 238 / 0.45);
+		color: #cffafe;
+	}
+	.records-load-more button:disabled {
+		cursor: wait;
+		opacity: 0.55;
+	}
+	.records-inline-error {
+		margin: 10px 0 0;
+		color: #fda4af;
+		font-size: 11px;
+		text-align: center;
+	}
+	.records-empty-state {
+		display: grid;
+		min-height: 420px;
+		place-content: center;
+		justify-items: center;
+		gap: 8px;
+		padding: 32px 16px;
+		border: 1px solid var(--color-app-border);
+		background: var(--color-app-surface);
+		color: var(--color-app-muted);
+		text-align: center;
+	}
+	.records-empty-state h1 {
+		margin: 4px 0 0;
+		color: #e2e8f0;
+		font-size: 16px;
+	}
+	.records-empty-state p {
+		margin: 0;
+		font-size: 12px;
+	}
+	.records-error-state {
+		color: #fb7185;
+	}
 	@media (max-width: 820px) {
 		.custom-records-page {
 			padding: 0 0 40px;
@@ -1560,21 +1722,18 @@
 		.custom-records-shell {
 			padding: 0 8px 8px;
 		}
-		.records-search {
-			grid-template-columns: 1fr 72px;
-		}
-		.records-search > div {
-			grid-column: 1 / -1;
-		}
 		.profile-section {
 			grid-template-columns: 72px minmax(0, 1fr);
 		}
-		.profile-section > img {
+		.profile-avatar {
 			width: 72px;
 			height: 72px;
 		}
 		.season-control {
 			grid-column: 1 / -1;
+		}
+		.preferred-lane-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 		.lane-mmr-grid {
 			overflow-x: auto;

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { navigating, page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import {
@@ -7,7 +7,7 @@
 		Check,
 		ChevronDown,
 		ChevronsUpDown,
-		History,
+		LoaderCircle,
 		LogOut,
 		Search,
 		Server,
@@ -22,6 +22,7 @@
 	import type { Snippet } from 'svelte';
 	import QuickActionFab from '$lib/components/fab/QuickActionFab.svelte';
 	import AppFooter from '$lib/components/layout/AppFooter.svelte';
+	import { fetchSearchSuggestions, type SearchSuggestion } from '$lib/api/searchSuggestions';
 
 	interface NavItem {
 		href: string;
@@ -48,10 +49,27 @@
 		user?: ShellUser;
 	}
 
+	interface SearchKeyEvent {
+		key: string;
+		preventDefault: () => void;
+	}
+
 	let { children }: { children: Snippet } = $props();
 	let searchOpen = $state(false);
 	let searchMode = $state<'riot' | 'custom'>('riot');
 	let searchQuery = $state('');
+	let searchInputFocused = $state(false);
+	let searchSuggestions = $state<SearchSuggestion[]>([]);
+	let searchSuggestionsLoading = $state(false);
+	let highlightedSuggestion = $state(-1);
+	const searchSuggestionsId = $props.id();
+
+	afterNavigate(() => {
+		searchOpen = false;
+		searchInputFocused = false;
+		searchSuggestions = [];
+		highlightedSuggestion = -1;
+	});
 
 	const skeletonRows = [0, 1, 2, 3];
 	const shellData = $derived(page.data as ShellPageData);
@@ -87,12 +105,6 @@
 						icon: Trophy
 					},
 					{
-						href: resolve('/g/[guildId]/records', { guildId: activeGuildId }),
-						match: `${activeGuildBase}/records`,
-						label: '전적',
-						icon: History
-					},
-					{
 						href: resolve('/g/[guildId]/leaderboard', { guildId: activeGuildId }),
 						match: `${activeGuildBase}/leaderboard`,
 						label: '랭킹',
@@ -111,6 +123,48 @@
 				]
 			: []
 	);
+	const showSearchSuggestions = $derived(
+		searchInputFocused &&
+			searchQuery.trim().length >= 2 &&
+			(searchSuggestionsLoading || searchSuggestions.length > 0)
+	);
+
+	$effect(() => {
+		const query = searchQuery.trim();
+		const mode = searchMode;
+		const guildId = activeGuildId;
+		searchSuggestions = [];
+		highlightedSuggestion = -1;
+
+		if (!searchOpen || query.length < 2 || (mode === 'custom' && !guildId)) {
+			searchSuggestionsLoading = false;
+			return;
+		}
+
+		const controller = new globalThis.AbortController();
+		searchSuggestionsLoading = true;
+		const timer = globalThis.setTimeout(async () => {
+			try {
+				searchSuggestions = await fetchSearchSuggestions(globalThis.fetch, {
+					mode,
+					query,
+					guildId,
+					signal: controller.signal
+				});
+			} catch (error) {
+				if (!(error instanceof globalThis.DOMException && error.name === 'AbortError')) {
+					searchSuggestions = [];
+				}
+			} finally {
+				if (!controller.signal.aborted) searchSuggestionsLoading = false;
+			}
+		}, 200);
+
+		return () => {
+			globalThis.clearTimeout(timer);
+			controller.abort();
+		};
+	});
 
 	function switchGuild(guildId: string) {
 		goto(resolve('/g/[guildId]', { guildId }));
@@ -124,6 +178,40 @@
 		const query = searchQuery.trim();
 		goto(query ? `${target}?q=${globalThis.encodeURIComponent(query)}` : target);
 		searchOpen = false;
+		searchInputFocused = false;
+	}
+
+	function selectSearchSuggestion(suggestion: SearchSuggestion) {
+		searchQuery = suggestion.value;
+		submitSearch();
+	}
+
+	function handleSearchKeydown(event: SearchKeyEvent) {
+		if (event.key === 'ArrowDown' && searchSuggestions.length > 0) {
+			event.preventDefault();
+			highlightedSuggestion =
+				(highlightedSuggestion + 1 + searchSuggestions.length) % searchSuggestions.length;
+			return;
+		}
+		if (event.key === 'ArrowUp' && searchSuggestions.length > 0) {
+			event.preventDefault();
+			highlightedSuggestion =
+				(highlightedSuggestion - 1 + searchSuggestions.length) % searchSuggestions.length;
+			return;
+		}
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			searchInputFocused = false;
+			return;
+		}
+		if (event.key !== 'Enter') return;
+		event.preventDefault();
+		const suggestion = searchSuggestions[highlightedSuggestion];
+		if (showSearchSuggestions && suggestion) {
+			selectSearchSuggestion(suggestion);
+			return;
+		}
+		submitSearch();
 	}
 
 	function readCookie(name: string): string | null {
@@ -156,9 +244,9 @@
 	}
 </script>
 
-<div class="min-h-screen bg-[var(--color-app-bg)] text-slate-100">
+<div class="flex min-h-screen flex-col bg-[var(--color-app-bg)] text-slate-100">
 	<header
-		class="sticky top-0 z-20 border-b border-[var(--color-app-border)] bg-[var(--color-app-header)] backdrop-blur"
+		class="sticky top-0 z-20 shrink-0 border-b border-[var(--color-app-border)] bg-[var(--color-app-header)] backdrop-blur"
 	>
 		<div class="flex min-h-14 items-center gap-3 px-4 lg:px-5">
 			<a
@@ -303,62 +391,144 @@
 		{#if searchOpen}
 			<div
 				transition:slide={{ duration: 180, easing: cubicOut }}
-				class="overflow-hidden border-t border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)]"
+				class="pointer-events-none absolute inset-x-0 top-full"
 			>
 				<Tabs.Root
 					value={searchMode}
 					onValueChange={(value) => {
 						searchMode = value === 'custom' ? 'custom' : 'riot';
 					}}
-					class="mx-auto grid max-w-[1680px] gap-3 px-4 py-3 md:grid-cols-[180px_minmax(0,720px)] md:items-center lg:px-5"
+					class="pointer-events-auto relative z-10 mx-auto mt-3 h-12 w-[calc(100%-2rem)] max-w-[860px] lg:w-[calc(100%-2.5rem)]"
 				>
-					<Tabs.List
-						aria-label="검색 종류"
-						class="grid grid-cols-2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-1"
-					>
-						<Tabs.Trigger
-							value="riot"
-							class="h-9 rounded-sm text-xs font-semibold text-slate-400 outline-none hover:text-slate-100 data-[state=active]:rounded-md data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-100"
-						>
-							Riot
-						</Tabs.Trigger>
-						<Tabs.Trigger
-							value="custom"
-							class="h-9 rounded-sm text-xs font-semibold text-slate-400 outline-none hover:text-slate-100 data-[state=active]:rounded-md data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-100"
-						>
-							Custom
-						</Tabs.Trigger>
-					</Tabs.List>
-
 					<div
-						class="flex min-w-0 items-center gap-2 rounded-sm border border-cyan-400/25 bg-[#08131d] px-3 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.04)]"
+						class="flex h-full w-full items-stretch overflow-hidden rounded-md border border-cyan-300/20 bg-[var(--color-app-surface)] shadow-[0_14px_36px_rgb(0_0_0_/_0.42)] transition-colors focus-within:border-cyan-300/45"
 					>
-						<input
-							aria-label={searchMode === 'riot' ? 'Riot 검색' : '내전 기록 검색'}
-							placeholder={searchMode === 'riot'
-								? 'Riot ID 또는 소환사명을 검색하세요'
-								: '참가자, 팀, 내전 ID를 검색하세요'}
-							bind:value={searchQuery}
-							onkeydown={(event) => {
-								if (event.key === 'Enter') submitSearch();
-							}}
-							class="min-w-0 flex-1 bg-transparent py-3 text-sm font-medium text-slate-50 outline-none placeholder:text-slate-500"
-						/>
-						<button
-							type="button"
-							aria-label="검색"
-							onclick={submitSearch}
-							class="grid size-9 shrink-0 place-items-center rounded-sm text-cyan-100 hover:bg-cyan-400/10 hover:text-cyan-50"
+						<Tabs.List
+							aria-label="검색 종류"
+							class="flex shrink-0 items-center gap-0.5 border-r border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-1"
 						>
-							<Search size={17} />
-						</button>
+							<Tabs.Trigger
+								value="riot"
+								class="h-full min-w-12 rounded-sm px-2 text-[11px] font-semibold text-slate-500 outline-none hover:text-slate-200 data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-100 sm:min-w-16"
+							>
+								Riot
+							</Tabs.Trigger>
+							<Tabs.Trigger
+								value="custom"
+								class="h-full min-w-12 rounded-sm px-2 text-[11px] font-semibold text-slate-500 outline-none hover:text-slate-200 data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-100 sm:min-w-16"
+							>
+								내전
+							</Tabs.Trigger>
+						</Tabs.List>
+
+						<div class="flex min-w-0 flex-1 items-center gap-1 px-2 pl-3 sm:pl-4">
+							<input
+								aria-label={searchMode === 'riot' ? 'Riot 검색' : '내전 기록 검색'}
+								role="combobox"
+								autocomplete="off"
+								aria-autocomplete="list"
+								aria-expanded={showSearchSuggestions}
+								aria-controls={searchSuggestionsId}
+								aria-activedescendant={highlightedSuggestion >= 0
+									? `${searchSuggestionsId}-${highlightedSuggestion}`
+									: undefined}
+								placeholder={searchMode === 'riot'
+									? 'GameName#TagLine'
+									: '참가자, 팀, 내전 ID를 검색하세요'}
+								bind:value={searchQuery}
+								onfocus={() => {
+									searchInputFocused = true;
+								}}
+								oninput={() => {
+									searchInputFocused = true;
+									highlightedSuggestion = -1;
+								}}
+								onkeydown={handleSearchKeydown}
+								onblur={() => {
+									searchInputFocused = false;
+								}}
+								class="h-full min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-100 outline-none placeholder:font-normal placeholder:text-slate-600"
+							/>
+							<button
+								type="button"
+								aria-label="검색"
+								onclick={submitSearch}
+								class="grid size-9 shrink-0 place-items-center rounded-sm bg-cyan-400/10 text-cyan-100 hover:bg-cyan-400/15 hover:text-cyan-50"
+							>
+								<Search size={17} />
+							</button>
+						</div>
 					</div>
+
+					{#if showSearchSuggestions}
+						<div
+							id={searchSuggestionsId}
+							role="listbox"
+							aria-label="검색어 자동완성"
+							class="absolute top-[calc(100%+0.625rem)] right-0 left-0 z-30 overflow-hidden rounded-md border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-1 shadow-[0_18px_42px_rgb(0_0_0_/_0.48)]"
+						>
+							{#if searchSuggestionsLoading}
+								<div class="flex h-11 items-center gap-2 px-3 text-xs text-slate-500">
+									<LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
+									검색 중
+								</div>
+							{:else}
+								{#each searchSuggestions as suggestion, index (`${suggestion.kind}-${suggestion.value}`)}
+									<button
+										type="button"
+										id={`${searchSuggestionsId}-${index}`}
+										role="option"
+										aria-selected={index === highlightedSuggestion}
+										class={`grid h-11 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-sm px-3 text-left ${
+											index === highlightedSuggestion
+												? 'bg-cyan-400/10 text-cyan-50'
+												: 'text-slate-200 hover:bg-[var(--color-app-hover)]'
+										}`}
+										onmouseenter={() => {
+											highlightedSuggestion = index;
+										}}
+										onmousedown={(event) => {
+											event.preventDefault();
+										}}
+										onclick={() => selectSearchSuggestion(suggestion)}
+									>
+										<span class="min-w-0">
+											<strong class="block truncate text-xs font-semibold"
+												>{suggestion.label}</strong
+											>
+											{#if suggestion.description}
+												<small class="mt-0.5 block truncate text-[10px] font-medium text-slate-500"
+													>{suggestion.description}</small
+												>
+											{/if}
+										</span>
+										<span class="text-[10px] font-semibold text-slate-600">
+											{suggestion.kind === 'riotAccount' ? 'Riot' : '길드 멤버'}
+										</span>
+									</button>
+								{/each}
+							{/if}
+						</div>
+					{/if}
 				</Tabs.Root>
 			</div>
 		{/if}
 	</header>
 
-	<div class="flex min-h-[calc(100vh-57px)] flex-col">
+	{#if searchOpen}
+		<button
+			type="button"
+			aria-label="검색 닫기"
+			transition:fade={{ duration: 140 }}
+			onclick={() => {
+				searchOpen = false;
+				searchInputFocused = false;
+			}}
+			class="fixed inset-x-0 top-14 bottom-0 z-10 cursor-default border-0 bg-black/30 p-0"
+		></button>
+	{/if}
+
+	<div class="flex min-h-0 flex-1 flex-col">
 		{#if navigating.to}
 			<div
 				transition:fade={{ duration: 120, easing: cubicOut }}
@@ -379,9 +549,10 @@
 		{/if}
 
 		<main
-			class={`mx-auto w-full min-w-0 max-w-[1680px] flex-1 px-4 pt-5 lg:px-6 ${
+			inert={searchOpen}
+			class={`mx-auto w-full min-w-0 max-w-[1680px] flex-1 px-4 pt-5 transition-[filter,opacity] duration-150 lg:px-6 ${
 				showQuickActionFab ? 'pb-40 lg:pb-36' : 'pb-5'
-			}`}
+			} ${searchOpen ? 'blur-[2px] opacity-55' : ''}`}
 		>
 			{#if navigating.to}
 				<section
@@ -451,7 +622,7 @@
 		<AppFooter reserveFabSpace={showQuickActionFab} />
 	</div>
 
-	{#if showQuickActionFab}
+	{#if showQuickActionFab && !searchOpen}
 		<QuickActionFab />
 	{/if}
 </div>

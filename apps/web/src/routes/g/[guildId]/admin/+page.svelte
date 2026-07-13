@@ -1,141 +1,188 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { FileClock, History, Settings, UsersRound } from 'lucide-svelte';
-	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import GuildAuditLogPanel from '$lib/components/workflow/GuildAuditLogPanel.svelte';
 	import GuildMemberManagementPanel from '$lib/components/workflow/GuildMemberManagementPanel.svelte';
-	import GuildOperationsAdminPanel from '$lib/components/workflow/GuildOperationsAdminPanel.svelte';
 	import GuildSettingsAdminPanel from '$lib/components/workflow/GuildSettingsAdminPanel.svelte';
 	import {
-		mockGuildAdminMembers,
-		mockGuildAdminSettings,
-		mockGuildRevertCheckpoints
-	} from '$lib/fixtures/guildAdmin';
+		adjustGuildMemberMmr,
+		fetchGuildAdminMembers,
+		GuildAdminMembersApiError,
+		updateGuildMemberStatus
+	} from '$lib/api/guildAdminMembers';
+	import {
+		fetchGuildAdminSettings,
+		GuildAdminSettingsApiError,
+		updateGuildAdminSettings
+	} from '$lib/api/guildAdminSettings';
+	import { fetchGuildAuditLogs, GuildAuditLogsApiError } from '$lib/api/guildAuditLogs';
+	import type {
+		GuildAdminSettingsSnapshot,
+		GuildAuditEntry,
+		GuildAuditLogsSnapshot
+	} from '$lib/contracts/workflow';
 	import type {
 		GuildMemberStatusCommand,
 		GuildMmrAdjustmentCommand,
-		GuildRevertCommand,
 		GuildSettingsUpdateCommand
 	} from '$lib/realtime/admin';
 	import type { PageProps } from './$types';
 
-	type AdminTab = 'members' | 'operations' | 'settings' | 'logs';
+	type AdminTab = 'members' | 'settings' | 'logs';
+	interface AuditPaginationState {
+		source: GuildAuditLogsSnapshot;
+		entries: GuildAuditEntry[];
+		nextCursor: string | null;
+		loading: boolean;
+		error: string | null;
+	}
 
 	let { data }: PageProps = $props();
 
-	const guild = $derived(data.guild);
-	const adminPath = $derived(resolve('/g/[guildId]/admin', { guildId: data.guildId }));
 	const activeTab = $derived(parseTab(page.url.searchParams.get('tab')));
-	const tabs = [
-		{ value: 'members' as const, label: '멤버', icon: UsersRound },
-		{ value: 'operations' as const, label: '운영', icon: History },
-		{ value: 'settings' as const, label: '길드 설정', icon: Settings },
-		{ value: 'logs' as const, label: '감사 로그', icon: FileClock }
-	];
-	let members = $state(
-		mockGuildAdminMembers.map((member) => ({ ...member, laneMmr: { ...member.laneMmr } }))
+	let memberSnapshot = $derived(data.memberSnapshot);
+	let settingsSnapshot = $derived(data.settingsSnapshot);
+	let auditPagination = $state<AuditPaginationState | null>(null);
+	const currentAuditPagination = $derived(
+		auditPagination?.source === data.auditSnapshot ? auditPagination : null
 	);
-	let memberRevision = $state(3);
-	let checkpoints = $state(mockGuildRevertCheckpoints.map((checkpoint) => ({ ...checkpoint })));
-	let operationsRevision = $state(5);
-	let settings = $state({ ...mockGuildAdminSettings });
-	let settingsRevision = $state(2);
+	const auditEntries = $derived(
+		currentAuditPagination?.entries ?? data.auditSnapshot?.entries ?? []
+	);
+	const auditNextCursor = $derived(
+		currentAuditPagination?.nextCursor ?? data.auditSnapshot?.nextCursor ?? null
+	);
+	const auditLoadingMore = $derived(currentAuditPagination?.loading ?? false);
+	const auditLoadMoreError = $derived(currentAuditPagination?.error ?? null);
+	const consumedAuditCursors = new SvelteSet<string>();
+	let consumedAuditSource: GuildAuditLogsSnapshot | null = null;
 
 	function parseTab(value: string | null): AdminTab {
-		return value === 'operations' || value === 'settings' || value === 'logs' ? value : 'members';
+		return value === 'settings' || value === 'logs' ? value : 'members';
 	}
 
-	function handleMmrAdjustment(command: GuildMmrAdjustmentCommand) {
-		if (command.expectedRevision !== memberRevision) return;
-		members = members.map((member) =>
-			member.id === command.memberId
-				? {
-						...member,
-						laneMmr: {
-							...member.laneMmr,
-							[command.lane]: member.laneMmr[command.lane] + command.delta
-						}
-					}
-				: member
-		);
-		memberRevision += 1;
+	async function handleMmrAdjustment(command: GuildMmrAdjustmentCommand) {
+		try {
+			memberSnapshot = await adjustGuildMemberMmr(data.guildId, command);
+		} catch (cause) {
+			await refreshAfterConflict(cause);
+			throw cause;
+		}
 	}
 
-	function handleMemberStatus(command: GuildMemberStatusCommand) {
-		if (command.expectedRevision !== memberRevision) return;
-		members = members.map((member) =>
-			member.id === command.memberId ? { ...member, status: command.status } : member
-		);
-		memberRevision += 1;
+	async function handleMemberStatus(command: GuildMemberStatusCommand) {
+		try {
+			memberSnapshot = await updateGuildMemberStatus(data.guildId, command);
+		} catch (cause) {
+			await refreshAfterConflict(cause);
+			throw cause;
+		}
 	}
 
-	function handleRevert(command: GuildRevertCommand) {
-		if (command.expectedRevision !== operationsRevision) return;
-		checkpoints = checkpoints.map((checkpoint) =>
-			checkpoint.id === command.checkpointId
-				? { ...checkpoint, status: 'REVERTED' as const }
-				: checkpoint
-		);
-		operationsRevision += 1;
+	async function refreshAfterConflict(cause: unknown) {
+		if (
+			cause instanceof GuildAdminMembersApiError &&
+			cause.status === 409 &&
+			cause.code === 'revision_conflict'
+		) {
+			memberSnapshot = await fetchGuildAdminMembers(data.guildId);
+		}
 	}
 
-	function handleSettingsSave(command: GuildSettingsUpdateCommand) {
-		if (command.expectedRevision !== settingsRevision) return;
-		settings = { ...command.settings };
-		settingsRevision += 1;
+	async function handleSettingsSave(
+		command: GuildSettingsUpdateCommand
+	): Promise<GuildAdminSettingsSnapshot> {
+		try {
+			const snapshot = await updateGuildAdminSettings(data.guildId, command);
+			settingsSnapshot = snapshot;
+			return snapshot;
+		} catch (cause) {
+			if (
+				cause instanceof GuildAdminSettingsApiError &&
+				cause.status === 409 &&
+				cause.code === 'revision_conflict'
+			) {
+				settingsSnapshot = await fetchGuildAdminSettings(data.guildId);
+			}
+			throw cause;
+		}
+	}
+
+	async function handleAuditLoadMore() {
+		const source = data.auditSnapshot;
+		if (!source) return;
+		if (consumedAuditSource !== source) {
+			consumedAuditCursors.clear();
+			consumedAuditSource = source;
+		}
+		const cursor = auditNextCursor;
+		if (!cursor || auditLoadingMore || consumedAuditCursors.has(cursor)) return;
+
+		const existingEntries = auditEntries;
+		auditPagination = {
+			source,
+			entries: existingEntries,
+			nextCursor: cursor,
+			loading: true,
+			error: null
+		};
+		consumedAuditCursors.add(cursor);
+		try {
+			const snapshot = await fetchGuildAuditLogs(data.guildId, { limit: 50, cursor });
+			if (data.auditSnapshot !== source) return;
+			const knownIds = new Set(existingEntries.map((entry) => entry.id));
+			const mergedEntries = [
+				...existingEntries,
+				...snapshot.entries.filter((entry) => !knownIds.has(entry.id))
+			];
+
+			const repeatedCursor =
+				snapshot.nextCursor === cursor || consumedAuditCursors.has(snapshot.nextCursor ?? '');
+			auditPagination = {
+				source,
+				entries: mergedEntries,
+				nextCursor: repeatedCursor ? null : snapshot.nextCursor,
+				loading: false,
+				error: repeatedCursor ? '중복된 페이지 정보가 반환되어 추가 조회를 중단했습니다.' : null
+			};
+		} catch (cause) {
+			consumedAuditCursors.delete(cursor);
+			if (data.auditSnapshot !== source) return;
+			auditPagination = {
+				source,
+				entries: existingEntries,
+				nextCursor: cursor,
+				loading: false,
+				error:
+					cause instanceof GuildAuditLogsApiError
+						? cause.message
+						: '감사 로그를 더 불러오지 못했습니다.'
+			};
+		}
 	}
 </script>
 
-<svelte:head>
-	<title>{guild.displayName} 관리 | MonkeyBot</title>
-</svelte:head>
-
-<div class="space-y-4">
-	<WorkspaceHeader
-		kicker="길드 관리"
-		title={guild.displayName}
-		description={`${guild.memberCount}명 · ${guild.currentUserRole === 'OPERATOR' ? '운영자' : '참가자'}`}
-	>
-		{#snippet actions()}
-			<nav
-				class="grid w-full max-w-full grid-cols-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] p-1 sm:flex sm:w-auto"
-				aria-label="길드 관리 메뉴"
-			>
-				{#each tabs as tab (tab.value)}
-					<a
-						href={`${adminPath}?tab=${tab.value}`}
-						aria-current={activeTab === tab.value ? 'page' : undefined}
-						class={`inline-flex h-8 min-w-0 items-center justify-center gap-1.5 px-3 text-xs font-semibold sm:shrink-0 ${
-							activeTab === tab.value
-								? 'rounded-sm bg-cyan-400/12 text-cyan-100'
-								: 'text-slate-500 hover:text-slate-200'
-						}`}
-					>
-						<tab.icon size={14} aria-hidden="true" />
-						{tab.label}
-					</a>
-				{/each}
-			</nav>
-		{/snippet}
-	</WorkspaceHeader>
-
-	{#if activeTab === 'members'}
+{#if activeTab === 'members'}
+	{#if memberSnapshot}
 		<GuildMemberManagementPanel
-			{members}
-			revision={memberRevision}
+			members={memberSnapshot.members}
+			revision={memberSnapshot.revision}
+			currentUserId={data.user.discordId}
 			onAdjustMmr={handleMmrAdjustment}
 			onSetStatus={handleMemberStatus}
 		/>
-	{:else if activeTab === 'operations'}
-		<GuildOperationsAdminPanel
-			{checkpoints}
-			revision={operationsRevision}
-			onRevert={handleRevert}
-		/>
-	{:else if activeTab === 'settings'}
-		<GuildSettingsAdminPanel {settings} revision={settingsRevision} onSave={handleSettingsSave} />
-	{:else}
-		<GuildAuditLogPanel />
 	{/if}
-</div>
+{:else if activeTab === 'settings'}
+	{#if settingsSnapshot}
+		<GuildSettingsAdminPanel snapshot={settingsSnapshot} onSave={handleSettingsSave} />
+	{/if}
+{:else}
+	<GuildAuditLogPanel
+		entries={auditEntries}
+		nextCursor={auditNextCursor}
+		loadingMore={auditLoadingMore}
+		loadMoreError={auditLoadMoreError}
+		currentUserId={data.user.discordId}
+		onLoadMore={handleAuditLoadMore}
+	/>
+{/if}

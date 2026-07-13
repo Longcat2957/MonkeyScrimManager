@@ -2,29 +2,35 @@
 	import { Dialog } from 'bits-ui';
 	import { Check, Gauge, Search, UserCheck, UserRound, UsersRound, UserX, X } from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
-	import { type GuildAdminMember, type GuildMemberStatus } from '$lib/fixtures/guildAdmin';
+	import type { GuildAdminMember, GuildMemberStatus } from '$lib/contracts/workflow';
 	import { LANES, laneLabel, type Lane } from '$lib/fixtures/workflow';
 	import type { GuildMemberStatusCommand, GuildMmrAdjustmentCommand } from '$lib/realtime/admin';
+	import { formatRelativeTime } from '$lib/workflow/presentation';
 
 	type StatusFilter = 'ALL' | GuildMemberStatus;
 
 	interface Props {
 		members: GuildAdminMember[];
 		revision: number;
+		currentUserId: string;
 		onAdjustMmr: (command: GuildMmrAdjustmentCommand) => void | Promise<void>;
 		onSetStatus: (command: GuildMemberStatusCommand) => void | Promise<void>;
 	}
 
-	let { members, revision, onAdjustMmr, onSetStatus }: Props = $props();
+	let { members, revision, currentUserId, onAdjustMmr, onSetStatus }: Props = $props();
 	let query = $state('');
 	let statusFilter = $state<StatusFilter>('ALL');
 	let adjustmentOpen = $state(false);
 	let selectedMemberId = $state<string | null>(null);
-	let selectedLane = $state<Lane>('MID');
+	let selectedLane = $state<Lane | ''>('');
 	let adjustmentDelta = $state(0);
 	let adjustmentNote = $state('');
+	let adjustmentIntent = $state('');
+	let adjustmentIdempotencyKey = $state('');
 	let notice = $state('');
+	let errorMessage = $state('');
 	let submitting = $state(false);
+	let statusSubmittingMemberId = $state<string | null>(null);
 
 	const selectedMember = $derived(members.find((member) => member.id === selectedMemberId) ?? null);
 	const filteredMembers = $derived(
@@ -38,48 +44,104 @@
 			return matchesQuery && matchesStatus;
 		})
 	);
-	const canAdjust = $derived(adjustmentDelta !== 0 && adjustmentNote.trim().length > 0);
+	const canAdjust = $derived(
+		selectedLane !== '' &&
+			Number.isFinite(adjustmentDelta) &&
+			adjustmentDelta !== 0 &&
+			adjustmentNote.trim().length > 0 &&
+			[...adjustmentNote.trim()].length <= 500
+	);
+	const mutationPending = $derived(submitting || statusSubmittingMemberId !== null);
 
 	function openAdjustment(member: GuildAdminMember) {
 		selectedMemberId = member.id;
-		selectedLane = member.mainLane;
+		selectedLane = member.mainLane ?? '';
 		adjustmentDelta = 0;
 		adjustmentNote = '';
+		adjustmentIntent = '';
+		adjustmentIdempotencyKey = '';
+		errorMessage = '';
 		adjustmentOpen = true;
 	}
 
 	async function applyAdjustment() {
-		if (!selectedMember || !canAdjust || submitting) return;
+		if (!selectedMember || !selectedLane || !canAdjust || submitting) return;
+		const memberName = selectedMember.discordName;
+		const lane = selectedLane;
+		const delta = adjustmentDelta;
+		const expectedRevision = revision;
+		const note = adjustmentNote.trim();
+		const intent = JSON.stringify([selectedMember.id, lane, delta, note, expectedRevision]);
+		if (intent !== adjustmentIntent) {
+			adjustmentIntent = intent;
+			adjustmentIdempotencyKey = globalThis.crypto.randomUUID();
+		}
 		submitting = true;
+		notice = '';
+		errorMessage = '';
 		try {
 			await onAdjustMmr({
 				kind: 'ADJUST_MMR',
+				idempotencyKey: adjustmentIdempotencyKey,
 				memberId: selectedMember.id,
-				lane: selectedLane,
-				delta: adjustmentDelta,
-				note: adjustmentNote.trim(),
-				expectedRevision: revision
+				lane,
+				delta,
+				note,
+				expectedRevision
 			});
-			notice = `${selectedMember.discordName} ${laneLabel[selectedLane]} MMR ${signed(adjustmentDelta)} 반영`;
+			notice = `${memberName} ${laneLabel[lane]} MMR ${signed(delta)} 반영`;
 			adjustmentOpen = false;
+		} catch (cause) {
+			errorMessage = errorText(cause);
 		} finally {
 			submitting = false;
 		}
 	}
 
 	async function toggleMember(member: GuildAdminMember) {
+		if (statusSubmittingMemberId) return;
 		const nextStatus: GuildMemberStatus = member.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-		await onSetStatus({
-			kind: 'SET_MEMBER_STATUS',
-			memberId: member.id,
-			status: nextStatus,
-			expectedRevision: revision
-		});
-		notice = `${member.discordName} ${nextStatus === 'ACTIVE' ? '복구' : '비활성화'} 완료`;
+		statusSubmittingMemberId = member.id;
+		notice = '';
+		errorMessage = '';
+		try {
+			await onSetStatus({
+				kind: 'SET_MEMBER_STATUS',
+				memberId: member.id,
+				status: nextStatus,
+				expectedRevision: revision
+			});
+			notice = `${member.discordName} ${nextStatus === 'ACTIVE' ? '복구' : '비활성화'} 완료`;
+		} catch (cause) {
+			errorMessage = errorText(cause);
+		} finally {
+			statusSubmittingMemberId = null;
+		}
 	}
 
 	function signed(value: number): string {
 		return `${value > 0 ? '+' : ''}${value}`;
+	}
+
+	function roleLabel(role: GuildAdminMember['role']): string {
+		return role === 'OPERATOR' ? '운영자' : '참가자';
+	}
+
+	function cannotDeactivateSelf(member: GuildAdminMember): boolean {
+		return member.id === currentUserId && member.status === 'ACTIVE';
+	}
+
+	function statusActionLabel(member: GuildAdminMember): string {
+		if (cannotDeactivateSelf(member)) return '자기 자신은 비활성화할 수 없습니다';
+		return member.status === 'ACTIVE' ? '멤버 비활성화' : '멤버 복구';
+	}
+
+	function lastActiveLabel(value: string | null): string {
+		return value ? formatRelativeTime(value) : '-';
+	}
+
+	function errorText(cause: unknown): string {
+		return cause instanceof Error ? cause.message : '요청을 처리하지 못했습니다.';
 	}
 </script>
 
@@ -103,6 +165,14 @@
 			</span>
 		{/if}
 	</header>
+	{#if errorMessage && !adjustmentOpen}
+		<div
+			class="border-b border-rose-300/15 bg-rose-400/5 px-4 py-2 text-xs text-rose-200"
+			role="alert"
+		>
+			{errorMessage}
+		</div>
+	{/if}
 
 	<div
 		class="grid gap-2 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-3 sm:grid-cols-[minmax(0,1fr)_150px]"
@@ -146,7 +216,10 @@
 							</small>
 						</span>
 					</div>
-					<StatusPill label={member.role} tone={member.role === '운영자' ? 'info' : 'neutral'} />
+					<StatusPill
+						label={roleLabel(member.role)}
+						tone={member.role === 'OPERATOR' ? 'info' : 'neutral'}
+					/>
 				</div>
 
 				<div class="grid grid-cols-3 gap-px bg-[var(--color-app-border-muted)]">
@@ -161,13 +234,17 @@
 					<div class="min-w-0 bg-[var(--color-app-surface)] px-2 py-2">
 						<span class="block text-[9px] font-semibold text-slate-600">주 포지션</span>
 						<strong class="mt-0.5 block truncate text-[11px] text-slate-200">
-							{laneLabel[member.mainLane]} · {member.laneMmr[member.mainLane]}
+							{#if member.mainLane}
+								{laneLabel[member.mainLane]} · {member.laneMmr[member.mainLane]}
+							{:else}
+								미설정
+							{/if}
 						</strong>
 					</div>
 					<div class="min-w-0 bg-[var(--color-app-surface)] px-2 py-2">
 						<span class="block text-[9px] font-semibold text-slate-600">최근 활동</span>
 						<strong class="mt-0.5 block truncate text-[11px] text-slate-400">
-							{member.lastActiveAt}
+							{lastActiveLabel(member.lastActiveAt)}
 						</strong>
 					</div>
 				</div>
@@ -175,21 +252,23 @@
 				<div class="flex gap-2 pr-14 lg:pr-0">
 					<button
 						type="button"
+						disabled={mutationPending}
 						onclick={() => openAdjustment(member)}
-						class="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 border border-[var(--color-app-border)] px-2 text-xs font-semibold text-slate-300 hover:border-cyan-400/35 hover:text-cyan-100"
+						class="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 border border-[var(--color-app-border)] px-2 text-xs font-semibold text-slate-300 hover:border-cyan-400/35 hover:text-cyan-100 disabled:opacity-35"
 					>
 						<Gauge size={13} aria-hidden="true" /> MMR 조정
 					</button>
 					<button
 						type="button"
+						disabled={mutationPending || cannotDeactivateSelf(member)}
 						onclick={() => toggleMember(member)}
-						aria-label={member.status === 'ACTIVE' ? '멤버 비활성화' : '멤버 복구'}
-						title={member.status === 'ACTIVE' ? '비활성화' : '복구'}
+						aria-label={statusActionLabel(member)}
+						title={statusActionLabel(member)}
 						class={`grid size-9 shrink-0 place-items-center border ${
 							member.status === 'ACTIVE'
 								? 'border-rose-300/25 text-rose-200 hover:bg-rose-400/10'
 								: 'border-emerald-300/25 text-emerald-200 hover:bg-emerald-400/10'
-						}`}
+						} disabled:opacity-35`}
 					>
 						{#if member.status === 'ACTIVE'}
 							<UserX size={14} aria-hidden="true" />
@@ -235,8 +314,8 @@
 						</div>
 						<div class="justify-self-start">
 							<StatusPill
-								label={member.role}
-								tone={member.role === '운영자' ? 'info' : 'neutral'}
+								label={roleLabel(member.role)}
+								tone={member.role === 'OPERATOR' ? 'info' : 'neutral'}
 							/>
 						</div>
 						<div class="justify-self-start">
@@ -246,32 +325,38 @@
 							/>
 						</div>
 						<div>
-							<strong class="font-mono text-sm tabular-nums text-slate-100">
-								{member.laneMmr[member.mainLane]}
-							</strong>
-							<span class="ml-2 text-[10px] font-semibold text-slate-500">
-								{laneLabel[member.mainLane]}
-							</span>
+							{#if member.mainLane}
+								<strong class="font-mono text-sm tabular-nums text-slate-100">
+									{member.laneMmr[member.mainLane]}
+								</strong>
+								<span class="ml-2 text-[10px] font-semibold text-slate-500">
+									{laneLabel[member.mainLane]}
+								</span>
+							{:else}
+								<span class="text-xs text-slate-500">미설정</span>
+							{/if}
 						</div>
-						<span class="text-xs text-slate-500">{member.lastActiveAt}</span>
+						<span class="text-xs text-slate-500">{lastActiveLabel(member.lastActiveAt)}</span>
 						<div class="flex justify-end gap-2">
 							<button
 								type="button"
+								disabled={mutationPending}
 								onclick={() => openAdjustment(member)}
-								class="inline-flex h-8 items-center gap-1.5 border border-[var(--color-app-border)] px-2 text-xs font-semibold text-slate-300 hover:border-cyan-400/35 hover:text-cyan-100"
+								class="inline-flex h-8 items-center gap-1.5 border border-[var(--color-app-border)] px-2 text-xs font-semibold text-slate-300 hover:border-cyan-400/35 hover:text-cyan-100 disabled:opacity-35"
 							>
 								<Gauge size={13} aria-hidden="true" /> MMR
 							</button>
 							<button
 								type="button"
+								disabled={mutationPending || cannotDeactivateSelf(member)}
 								onclick={() => toggleMember(member)}
-								aria-label={member.status === 'ACTIVE' ? '멤버 비활성화' : '멤버 복구'}
-								title={member.status === 'ACTIVE' ? '비활성화' : '복구'}
+								aria-label={statusActionLabel(member)}
+								title={statusActionLabel(member)}
 								class={`grid size-8 place-items-center border ${
 									member.status === 'ACTIVE'
 										? 'border-rose-300/25 text-rose-200 hover:bg-rose-400/10'
 										: 'border-emerald-300/25 text-emerald-200 hover:bg-emerald-400/10'
-								}`}
+								} disabled:opacity-35`}
 							>
 								{#if member.status === 'ACTIVE'}
 									<UserX size={14} aria-hidden="true" />
@@ -330,6 +415,7 @@
 								bind:value={selectedLane}
 								class="h-10 w-full min-w-0 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm text-slate-100 outline-none focus:border-cyan-400/45"
 							>
+								<option value="" disabled>포지션 선택</option>
 								{#each LANES as lane (lane)}
 									<option value={lane}>{laneLabel[lane]} · {selectedMember.laneMmr[lane]}</option>
 								{/each}
@@ -351,11 +437,15 @@
 							<span>조정 사유</span>
 							<input
 								bind:value={adjustmentNote}
+								maxlength="500"
 								placeholder="예: 누락된 경기 결과 반영"
 								class="h-10 w-full min-w-0 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/45"
 							/>
 						</label>
 					</div>
+					{#if errorMessage}
+						<p class="text-xs text-rose-200" role="alert">{errorMessage}</p>
+					{/if}
 				</div>
 				<footer class="flex justify-end gap-2 border-t border-[var(--color-app-border)] px-4 py-3">
 					<Dialog.Close

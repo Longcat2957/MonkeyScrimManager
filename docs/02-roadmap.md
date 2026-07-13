@@ -212,7 +212,8 @@ guild records는 내부 game 원장이 기준이며 /records는 Riot 외부 전�
 
 - member 조회와 ACTIVE/INACTIVE
 - manual MMR adjustment ledger
-- display/channel/operator role/public 설정
+- display/recruitment/entry/log channel/operator role/public 설정
+- 현재/종료 시즌 집계 조회와 새 시즌 전환
 - recent checkpoint revert
 - audit logs
 - API/PostgreSQL/Bot/Valkey status
@@ -220,15 +221,18 @@ guild records는 내부 game 원장이 기준이며 /records는 Riot 외부 전�
 웹에 만들지 않는 것:
 
 - 일괄 등록
-- 시즌 변경/초기화
+- 시즌 초기화
 - 오래된 내전 정리
 - 범용 maintenance dashboard
 
-현재 seasonId는 읽기 전용이며 Bot 명령으로 조정한다.
+시즌은 settings payload와 분리된 `GET/POST /api/guilds/{guildId}/seasons`로 조회하고 전환한다. Web
+운영자가 현재 시즌 ID를 concurrency token으로 보내며, 전환은 기존 시즌 종료, 새 시즌 생성, audit와
+idempotency 응답 저장을 한 transaction으로 commit한다. 향후 Bot `/새시즌`도 별도 Bot 인증으로 같은
+application command를 재사용한다.
 
 완료 기준:
 
-- 모든 admin mutation이 expectedRevision을 사용한다.
+- 모든 admin mutation이 aggregate에 맞는 concurrency token을 사용한다.
 - audit가 domain write와 같은 transaction에 남는다.
 
 ## Phase 8. Remaining Bot

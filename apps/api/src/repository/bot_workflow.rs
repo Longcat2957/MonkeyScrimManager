@@ -19,8 +19,8 @@ use crate::{
     auth::AuthService,
     domain::{
         DiscordChannelId, DiscordInteractionId, DiscordMessageId, DiscordRoleId, DiscordUserId,
-        GuildId, GuildStatus, IdempotencyRecordId, Lane, OutboxEventId, RecruitmentId,
-        RecruitmentStatus, SeasonId,
+        GuildId, GuildMemberStatus, GuildStatus, IdempotencyRecordId, Lane, OutboxEventId,
+        RecruitmentId, RecruitmentStatus, SeasonId,
     },
     infrastructure::postgres::{
         DatabaseTransaction, DeadlockRetryPolicy, TransactionAttemptError, TransactionRetryError,
@@ -296,8 +296,8 @@ async fn setup_guild_attempt(
     let config_revision = sqlx::query_scalar::<_, i64>(
         "INSERT INTO guild_config (
              guild_id, display_name, operator_role_id, recruitment_channel_id,
-             log_channel_id, is_externally_public, revision, updated_by, updated_at
-         ) VALUES ($1, $2, $3, NULL, NULL, false, 0, $4, $5)
+             entry_channel_id, log_channel_id, is_externally_public, revision, updated_by, updated_at
+         ) VALUES ($1, $2, $3, NULL, NULL, NULL, false, 0, $4, $5)
          ON CONFLICT (guild_id) DO UPDATE
          SET display_name = EXCLUDED.display_name,
              operator_role_id = EXCLUDED.operator_role_id,
@@ -425,6 +425,7 @@ async fn execute_recruitment_attempt(
 
     let actor = command.actor();
     sync_guild_actor(transaction, guild_id, actor, prepared.now).await?;
+    require_active_member(transaction, guild_id, &actor.id).await?;
 
     let (before, snapshot) = match command {
         BotRecruitmentCommand::Create { .. } => {
@@ -480,6 +481,7 @@ async fn execute_recruitment_attempt(
             lock_entry_draft(transaction, guild_id, *recruitment_id).await?;
             if actor.id != participant.id {
                 sync_guild_actor(transaction, guild_id, participant, prepared.now).await?;
+                require_active_member(transaction, guild_id, &participant.id).await?;
             }
             let before = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
             join_recruitment(
@@ -938,11 +940,9 @@ async fn sync_guild_actor(
          ) VALUES ($1, $2, $3, 'ACTIVE', NULL, $4, $4, NULL, $4, $4, NULL)
          ON CONFLICT (guild_id, user_id) DO UPDATE
          SET display_name = EXCLUDED.display_name,
-             status = 'ACTIVE',
              registered_at = COALESCE(guild_members.registered_at, EXCLUDED.registered_at),
              last_active_at = EXCLUDED.last_active_at,
-             last_synced_at = EXCLUDED.last_synced_at,
-             inactivated_at = NULL",
+             last_synced_at = EXCLUDED.last_synced_at",
     )
     .bind(guild_id)
     .bind(&actor.id)
@@ -976,6 +976,29 @@ async fn sync_guild_actor(
     }
 
     Ok(())
+}
+
+async fn require_active_member(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    user_id: &DiscordUserId,
+) -> Result<(), AttemptError> {
+    let status = sqlx::query_scalar::<_, GuildMemberStatus>(
+        "SELECT status
+         FROM guild_members
+         WHERE guild_id = $1 AND user_id = $2
+         FOR UPDATE",
+    )
+    .bind(guild_id)
+    .bind(user_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::MemberInactive)?;
+    if status == GuildMemberStatus::Active {
+        Ok(())
+    } else {
+        Err(AttemptError::MemberInactive)
+    }
 }
 
 async fn lock_active_guild(
@@ -1538,6 +1561,8 @@ enum AttemptError {
     GuildNotConfigured,
     #[error("the actor does not hold the configured operator role")]
     OperatorRequired,
+    #[error("the guild member is inactive")]
+    MemberInactive,
     #[error("the guild has no active season")]
     NoActiveSeason,
     #[error("the guild recruitment counter is missing")]
@@ -1583,6 +1608,7 @@ impl AttemptError {
             Self::GuildInactive(status) => BotWorkflowError::GuildInactive(status),
             Self::GuildNotConfigured => BotWorkflowError::GuildNotConfigured,
             Self::OperatorRequired => BotWorkflowError::OperatorRequired,
+            Self::MemberInactive => BotWorkflowError::MemberInactive,
             Self::NoActiveSeason => BotWorkflowError::NoActiveSeason,
             Self::MissingRecruitmentCounter => BotWorkflowError::InvariantViolation,
             Self::RecruitmentNotFound => BotWorkflowError::RecruitmentNotFound,
@@ -1619,6 +1645,8 @@ pub enum BotWorkflowError {
     GuildNotConfigured,
     #[error("the configured operator role is required")]
     OperatorRequired,
+    #[error("the guild member is inactive")]
+    MemberInactive,
     #[error("the guild has no active season")]
     NoActiveSeason,
     #[error("recruitment was not found")]

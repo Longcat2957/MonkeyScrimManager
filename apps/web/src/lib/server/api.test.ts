@@ -58,6 +58,22 @@ describe('server API client', () => {
 		});
 	});
 
+	it('preserves validated client errors returned by the API', async () => {
+		for (const [status, message] of [
+			[400, '검색어가 올바르지 않습니다.'],
+			[409, '같은 이름의 길드 멤버가 여러 명입니다.']
+		] as const) {
+			const fetcher = vi.fn(async () => errorResponse(status, message));
+
+			await expect(
+				apiGet(fetcher, '/api/me', meDataSchema, { url: pageUrl })
+			).rejects.toMatchObject({
+				status,
+				body: { message }
+			});
+		}
+	});
+
 	it('normalizes network failures and malformed successful payloads', async () => {
 		const networkFailure = vi.fn(async () => {
 			throw new Error('connect ECONNREFUSED with secret');

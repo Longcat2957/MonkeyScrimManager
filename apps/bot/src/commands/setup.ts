@@ -26,7 +26,7 @@ export const setupCommand: BotCommand = {
 			option.setName('길드이름').setDescription('MonkeyBot에 표시할 길드 이름')
 		),
 
-	async execute(interaction, { api, config }) {
+	async execute(interaction, { api, catalogSync, config, logger }) {
 		const guildError = guildInteractionError(interaction);
 		if (guildError) {
 			await interaction.reply({
@@ -43,6 +43,12 @@ export const setupCommand: BotCommand = {
 			await interaction.editReply('@everyone 역할은 운영자 역할로 사용할 수 없습니다.');
 			return;
 		}
+		if (operatorRole.managed) {
+			await interaction.editReply(
+				'Discord 또는 연동 서비스가 관리하는 역할은 운영자 역할로 사용할 수 없습니다.'
+			);
+			return;
+		}
 		const requestedName = interaction.options.getString('길드이름')?.trim();
 		const actor = actorFromInteraction(interaction);
 
@@ -57,6 +63,14 @@ export const setupCommand: BotCommand = {
 			},
 			{ idempotencyKey: interaction.id }
 		);
+		try {
+			await catalogSync.syncGuild(interaction.guild);
+		} catch (error) {
+			logger.warn(
+				{ err: error, guildId: interaction.guildId },
+				'Discord catalog sync after guild setup failed'
+			);
+		}
 
 		const dashboardUrl = new URL(`/g/${interaction.guildId}`, config.webOrigin);
 		await interaction.editReply(

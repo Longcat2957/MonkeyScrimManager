@@ -37,6 +37,7 @@ const MAX_DATABASE_CONNECTIONS: u64 = 100;
 const MAX_DATABASE_LIFETIME_MS: u64 = 86_400_000;
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MIN_BOT_SERVICE_TOKEN_LENGTH: usize = 32;
+const MIN_RIOT_SERVICE_TOKEN_LENGTH: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Environment {
@@ -104,7 +105,7 @@ pub struct BotServiceConfig {
 #[derive(Clone)]
 pub struct RiotServiceConfig {
     base_url: Url,
-    token: Option<SecretString>,
+    token: SecretString,
 }
 
 #[derive(Clone)]
@@ -302,36 +303,44 @@ impl RiotServiceConfig {
         };
         let base_url = Url::parse(&raw_url)
             .map_err(|_| ConfigError::invalid("MONKEYBOT_RIOT_SERVICE_URL", "invalid URL"))?;
-        if !matches!(base_url.scheme(), "http" | "https") || base_url.host().is_none() {
+        if !matches!(base_url.scheme(), "http" | "https")
+            || base_url.host().is_none()
+            || !base_url.username().is_empty()
+            || base_url.password().is_some()
+            || base_url.query().is_some()
+            || base_url.fragment().is_some()
+            || !base_url.path().ends_with('/')
+        {
             return Err(ConfigError::invalid(
                 "MONKEYBOT_RIOT_SERVICE_URL",
-                "must be an http(s) URL with a host",
+                "must be an http(s) directory URL without credentials, query, or fragment",
             ));
         }
 
         let token = lookup("MONKEYBOT_RIOT_SERVICE_TOKEN")
             .filter(|value| !value.trim().is_empty())
-            .map(SecretString::from);
-        let token = match token {
-            Some(token) if token.expose_secret().len() < 8 => {
-                return Err(ConfigError::invalid(
-                    "MONKEYBOT_RIOT_SERVICE_TOKEN",
-                    "must contain at least 8 characters",
-                ));
-            }
-            Some(token) => Some(token),
-            None => None,
-        };
+            .ok_or(ConfigError::Missing {
+                key: "MONKEYBOT_RIOT_SERVICE_TOKEN",
+            })?;
+        if token.chars().count() < MIN_RIOT_SERVICE_TOKEN_LENGTH {
+            return Err(ConfigError::invalid(
+                "MONKEYBOT_RIOT_SERVICE_TOKEN",
+                "must contain at least 32 characters",
+            ));
+        }
 
-        Ok(Some(Self { base_url, token }))
+        Ok(Some(Self {
+            base_url,
+            token: SecretString::from(token),
+        }))
     }
 
     pub fn base_url(&self) -> &Url {
         &self.base_url
     }
 
-    pub fn token(&self) -> Option<&SecretString> {
-        self.token.as_ref()
+    pub fn token(&self) -> &SecretString {
+        &self.token
     }
 }
 
@@ -840,6 +849,7 @@ mod tests {
         assert_eq!(config.max_body_bytes(), 1024 * 1024);
         assert!(config.database().is_none());
         assert!(config.bot_service().is_none());
+        assert!(config.riot_service().is_none());
     }
 
     #[test]
@@ -869,6 +879,50 @@ mod tests {
             Err(ConfigError::Invalid {
                 key: "MONKEYBOT_BOT_SERVICE_TOKEN",
                 ..
+            })
+        ));
+    }
+
+    #[test]
+    fn riot_service_requires_a_directory_url_and_redacted_token() {
+        let mut values = valid_values();
+        let token = "riot-service-token-that-is-at-least-32-characters";
+        values.insert(
+            "MONKEYBOT_RIOT_SERVICE_URL".to_owned(),
+            "http://riot-api:8080/internal/riot/".to_owned(),
+        );
+        values.insert("MONKEYBOT_RIOT_SERVICE_TOKEN".to_owned(), token.to_owned());
+
+        let config = Config::from_map(&values).expect("Riot service config should parse");
+        let riot = config.riot_service().expect("Riot service config");
+        assert_eq!(riot.base_url().path(), "/internal/riot/");
+        assert_eq!(riot.token().expose_secret(), token);
+        assert!(!format!("{config:?}").contains(token));
+
+        values.insert(
+            "MONKEYBOT_RIOT_SERVICE_URL".to_owned(),
+            "http://riot-api:8080/internal/riot".to_owned(),
+        );
+        assert!(matches!(
+            Config::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: "MONKEYBOT_RIOT_SERVICE_URL",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn riot_service_url_requires_a_service_token() {
+        let mut values = valid_values();
+        values.insert(
+            "MONKEYBOT_RIOT_SERVICE_URL".to_owned(),
+            "http://riot-api:8080/internal/riot/".to_owned(),
+        );
+        assert!(matches!(
+            Config::from_map(&values),
+            Err(ConfigError::Missing {
+                key: "MONKEYBOT_RIOT_SERVICE_TOKEN"
             })
         ));
     }

@@ -100,7 +100,7 @@ WS는 위 다섯 편집 workspace에만 사용한다.
 | GuildMemberManagementPanel              | nullable `mainLane`, `미설정` adapter                   |
 | OperationsQueueBoard                    | `RESULT` 작업을 pick-ban 입력 route로 연결              |
 | Admin page handler                      | silent return 대신 typed 409                            |
-| /records load                           | q를 Riot lookup에 전달                                  |
+| /records load                           | Riot ID를 gameName/tagLine으로 분리해 platform과 전달   |
 
 `apps/web/src/lib/contracts/dashboard.ts`의 lowercase kind/3단계 priority schema는 현재 어느 route도
 사용하지 않는 초기 흔적이다. OpenAPI 근거로 사용하지 않고 실사용 `OperationsQueueItem` 계약으로
@@ -117,7 +117,7 @@ HTTP 성공 전 local 상태를 server 원장으로 확정하지 않는다.
 - 경매 10인/20인 setup -> auction -> bracket -> lineup -> result -> MMR
 - records, leaderboard, minimal profile
 - Riot accounts, champion preferences, privacy, default guild
-- guild members/settings/audit/revert/status
+- guild members/settings/seasons/audit/revert/status
 - 제한적 WS invalidate/presence
 - Bot용 동일 application service/API
 
@@ -127,7 +127,7 @@ HTTP 성공 전 local 상태를 server 원장으로 확정하지 않는다.
 - CRDT/OT/offline mutation queue
 - 범용 undo/redo
 - Hard Fearless server 강제
-- 웹 시즌 변경/일괄 등록/시즌 초기화/오래된 내전 정리
+- 웹 일괄 등록/시즌 초기화/오래된 내전 정리
 - KDA/CS를 custom match 결과의 필수값으로 사용
 - 자체 회원가입과 Discord 외 OAuth
 
@@ -145,6 +145,14 @@ Axum HTTP adapter
   -> SQLx repository
   -> PostgreSQL
   -> transactional outbox
+
+Axum Riot client
+  -> private riot-api /internal/riot/**
+
+Discord Bot
+  -> /internal/guilds/{guildId}/discord-catalog
+  -> PostgreSQL guild role/channel catalog
+  -> Riot provider API
 
 Outbox relay
   -> Valkey Pub/Sub
@@ -190,6 +198,10 @@ apps/api/
     integrations/{discord,riot,bot}
     realtime/
     jobs/
+  tests/{contract,integration}
+apps/riot-api/
+  Cargo.toml
+  src/{main,lib,config,http,client,domain,service}
   tests/{contract,integration}
 apps/web/src/lib/api/{generated,adapters}
 ```
@@ -269,11 +281,31 @@ guild permission은 typed extractor 또는 application boundary에서 명시한�
 /api/guilds/{guildId}/leaderboard
 /api/guilds/{guildId}/members/**
 /api/guilds/{guildId}/settings
+/api/guilds/{guildId}/seasons
 /api/guilds/{guildId}/audit-logs
 /api/guilds/{guildId}/reverts/**
+
+/internal/guilds/{guildId}/discord-catalog
 ```
 
 전역 /api/series, /api/recruitments, /api/leaderboard는 사용하지 않는다.
+
+Riot HTTP adapter는 다음 input 계약만 받는다.
+
+```text
+GET  /api/riot/records?gameName={name}&tagLine={tag}&platform=KR
+GET  /api/riot/records/matches?gameName={name}&tagLine={tag}&platform=KR&offset={n}&count={1..20}
+POST /api/riot/records/refresh       { gameName, tagLine, platform }
+GET  /api/me/riot-accounts
+POST /api/me/riot-accounts           { gameName, tagLine, platform }
+PUT  /api/me/riot-accounts/{puuid}/main
+POST /api/me/riot-accounts/{puuid}/refresh
+DELETE /api/me/riot-accounts/{puuid}
+```
+
+PUUID, regional routing, canonical Riot ID, profile field는 create input이 아니다. Backend의 공통
+resolver가 이를 확정한다. Self-service mutation은 모두 최신 `riotAccounts` snapshot을 반환해 exact-one-main
+규칙을 한 곳에서 유지한다.
 
 Success:
 
@@ -395,7 +427,8 @@ REST, Bot event sync를 비교한다. 오래된 cache만으로 mutation을 허�
 
 Privacy:
 
-- external read는 guild isExternallyPublic와 user privacy를 함께 확인.
+- 현재 `/api/guilds/{guildId}/records/profile|search`는 same-guild ACTIVE member 전용이다. 이후 별도 external
+  custom-record route를 만들 때 guild isExternallyPublic와 user privacy를 함께 확인한다.
 - 같은 guild의 game/MMR 원장은 personal privacy로 숨기지 않음.
 - operation draft/admin/audit/permission은 외부 공개 금지.
 
@@ -430,6 +463,7 @@ Identity
 Guild
   guilds, guild_members, guild_member_discord_roles
   guild_config, guild_admin_state, seasons, guild_counters
+  guild_discord_roles, guild_discord_channels, guild_discord_catalog_state
 
 General
   recruitments, recruitment_participants, recruitment_preferred_lanes
@@ -622,7 +656,18 @@ Auction invariant:
 
 MMR 수동 조정은 MANUAL_ADJUSTMENT ledger와 actor/note/before/after를 남긴다.
 웹 settings mutation은 displayName, operatorRoleId, recruitmentChannelId,
-logChannelId, isExternallyPublic만 허용한다. seasonId는 read-only다.
+entryChannelId, logChannelId, isExternallyPublic과 expectedRevision만 허용한다. Settings GET/PUT은
+구현되어 있으며 `guild_config.revision`을 concurrency token으로 사용하고 성공 시
+`GUILD_SETTINGS_UPDATED` audit와 authoritative full settings/catalog snapshot을 남긴다.
+
+Bot은 별도 service-principal PUT으로 Discord role/channel catalog를 전체 교체한다. Role catalog는
+managed 여부까지 저장하되 Web 선택지와 새 operator 검증에서는 non-managed role만 사용한다. Channel
+catalog에는 Bot이 게시 가능한 TEXT/ANNOUNCEMENT channel만 포함한다. 기존 설정이 catalog에서 사라진
+경우 그대로 유지할 수 있지만 새 누락 ID 선택은 거부한다. 시즌 query/command는 settings 계약에
+포함하지 않고 별도 `GET/POST /api/guilds/{guildId}/seasons`로 제공한다. GET은 현재/종료 시즌별 네 가지
+핵심 집계, 경매 10인/20인 수와 최근 확정 경기 시각을 반환한다. POST는 현재 ACTIVE season ID를
+concurrency token으로 사용하고 기존 시즌 종료, 새 시즌 생성, audit와 idempotency response를 한
+transaction으로 저장한다. 과거 전적과 MMR 원장은 삭제하거나 초기화하지 않는다.
 
 ## 11. Audit, checkpoint, outbox
 
@@ -715,11 +760,14 @@ Valkey key:
 ```text
 monkeybot:{env}:pubsub:{topic}
 monkeybot:{env}:presence:{topic}:{connectionId}
-monkeybot:{env}:cache:riot:{key}
 monkeybot:{env}:ratelimit:{principal}:{route}
 ```
 
 Draft, bid, point, lineup, game, MMR은 Valkey에 저장하지 않는다.
+
+Riot records cache는 Valkey keyspace를 사용하지 않는다. Axum이 검증한 provider-neutral snapshot과
+recent page를 PostgreSQL의 전용 table에 한 번만 저장하고, private Riot service는 별도 장기 cache를 두지
+않는다.
 
 ## 13. External integration
 
@@ -732,9 +780,17 @@ Discord:
 
 Riot:
 
+- Axum은 private Riot integration service만 호출하고 `MONKEYBOT_RIOT_SERVICE_URL`과
+  `MONKEYBOT_RIOT_SERVICE_TOKEN`만 가진다. Riot developer key는 Axum/web에 두지 않는다.
+- 별도 Riot service만 `MONKEYBOT_RIOT_API_KEY`와 `MONKEYBOT_RIOT_INTERNAL_TOKEN`을 가지며,
+  internal token은 Axum service token과 constant-time 비교한다.
 - PUUID가 canonical account key.
-- Account-v1로 GameName#TagLine 확인.
-- region/platform/icon/lastSyncedAt.
+- HTTP input은 `gameName`, `tagLine`, `platform`; `GameName#TagLine` 문자열 parsing은 adapter 경계에서만 한다.
+- Account-v1로 canonical Riot ID와 PUUID를 확인하고 platform에서 regional routing을 결정한다.
+- records lookup, records refresh, account link가 같은 resolver/client policy를 사용한다.
+- provider-neutral records snapshot의 cache owner는 Axum/PostgreSQL 하나다. Cache hit GET은 provider를
+  다시 호출하지 않으며 명시 refresh는 DB에서 30초 cooldown과 단일 in-flight lease를 강제한다.
+- platform/routing/icon/lastSyncedAt은 server-derived field다.
 - account가 있으면 main 하나.
 - external call은 DB transaction 밖.
 - rate limit/timeout/stale cache 구분.
@@ -1047,6 +1103,8 @@ Migration:
 0007_game_inputs_games_mmr
 0008_audit_checkpoint_idempotency_outbox
 0009_read_indexes
+0010_riot_records_snapshots
+0011_guild_settings_discord_catalog
 ```
 
 Task:
@@ -1278,23 +1336,39 @@ Exit:
 Task:
 
 - BE-800 records search summary.
+- BE-800A same-guild records profile exact lookup, ordered champion preferences와 privacy-filtered linked Riot
+  account projection.
 - BE-801 general series detail.
 - BE-802 10/20 auction grouped detail.
 - BE-803 leaderboard.
-- BE-804 champion preferences.
-- BE-805 Riot account CRUD/main/refresh.
+- BE-804 authenticated champion preference full snapshot과 lane replace command.
+- BE-805 server-resolved Riot account link/list/main/refresh/delete와 snapshot response.
 - BE-806 privacy.
-- BE-807 external Riot records/cache.
+- BE-807 external Riot records, PostgreSQL snapshot/page cache, and private integration service.
 - BE-808 default guild.
+
+BE-800 search는 `q`, 선택 `seasonId`, opaque `cursor`, `limit=20(최대 50)`만 server input으로 받는다.
+`type`과 `lane`은 loaded page의 frontend local filter다. Season을 생략하면 ACTIVE만 선택하고, ACTIVE가
+없으면 CLOSED fallback 없이 `selectedSeasonId=null`을 반환한다. Lane MMR은 canonical 다섯 lane이며 row가
+없어도 read projection 1500/0게임/0승을 반환하고 `change`를 만들지 않는다. Outer records는 completed
+일반/10인 경매 `SERIES`와 20인 경매 `TOURNAMENT` union이고, 20인 bracket series와 confirmed game
+lineup/ban detail은 tournament 내부에 중첩한다.
 
 Test:
 
-- q/season/type/lane/cursor.
+- q/season/cursor/limit과 invalid query, foreign season, no-active-season empty projection.
+- frontend type/lane local filter가 API query를 추가하지 않음.
 - general/auction MMR before/after.
 - 20-person tournament grouping.
-- privacy/public matrix.
+- same-guild access와 show_riot_ids linkage matrix; external custom-record route는 현재 범위에서 제외.
+- records profile의 Discord ID/display name/exact Riot ID resolution, duplicate display name 409, hidden target
+  404, `show_riot_ids=false` empty account projection, response user ID/PUUID 부재.
+- champion preference lane allowlist, ordered unique max 10, empty clear, full snapshot response.
+- client supplied PUUID/profile field가 account link input으로 허용되지 않음.
+- records lookup과 account link의 Riot ID normalization/resolution golden vector 일치.
 - main Riot uniqueness.
 - Riot 429/timeout/stale.
+- invalid/missing internal bearer rejection and Riot key absence from Axum/web environment.
 - query performance.
 
 Exit:
@@ -1302,6 +1376,7 @@ Exit:
 - current records expand structure reproduced.
 - internal/external records separated.
 - Riot failure does not affect internal records.
+- Riot provider key is isolated to the private integration service.
 
 ### Phase 9. Guild admin
 
@@ -1311,29 +1386,36 @@ Task:
 - BE-901 manual MMR ledger.
 - BE-902 member status.
 - BE-903 typed settings.
+- BE-903A Discord role/channel catalog persistence와 Bot-only replace endpoint.
+- BE-903B typed season summary query와 idempotent rotate command.
 - BE-904 checkpoint/revert.
 - BE-905 audit log.
 - BE-906 service status.
 - FE-900 typed admin adapter.
+- FE-901 season query/rotate adapter.
+- BOT-900 ready/주기/event 기반 Discord catalog sync.
 
 Exclude:
 
 - web bulk register.
-- web season mutation/reset.
+- web season reset.
 - generic maintenance dashboard.
 
 Test:
 
 - audit in same transaction.
-- seasonId mutation rejection.
+- settings payload의 season field 거부.
+- season expectedCurrentSeasonId/idempotency conflict.
 - expectedRevision 409.
 - dependent revert rejection.
 - service-admin status auth.
 
 Exit:
 
-- current four admin tabs no fixture.
-- command boundary reusable by Bot.
+- member, settings, seasons와 audit log 화면은 fixture 없이 PostgreSQL authoritative snapshot을 사용한다.
+- 시즌 전환은 이전 시즌의 전적/MMR을 보존하고 audit와 idempotency record를 함께 commit한다. Audit log
+  조회는 `(created_at, id)` keyset page와 raw canonical summary를 사용한다.
+- command boundary와 Discord catalog sync는 Bot service principal에서 재사용한다.
 
 ### Phase 10. Remaining Bot boundary
 
@@ -1342,9 +1424,13 @@ Task:
 - BE-1000 Bot client를 경매/사용자 조회/admin command로 확장.
 - BE-1001 generic notification type과 retry 운영 확장.
 - BE-1002 heartbeat.
-- BE-1003 Bot-only season rotate command mapping.
+- BE-1003 Bot `/새시즌`을 기존 season rotate application command에 연결.
 - BOT-1000 auction recruitment/operation.
 - BOT-1001 user lookup/admin command mapping.
+
+Bot `/새시즌`은 미래 client 작업이다. Web `POST /api/guilds/{guildId}/seasons`의 Session/CSRF 인증을
+재사용하는 것이 아니라 Bot service principal과 Discord interaction ID를 사용하고, 인증 adapter 아래의
+동일 application command와 transaction만 재사용한다.
 
 Test:
 

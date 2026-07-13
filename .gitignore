@@ -19,5 +19,6 @@ target
 # Deployment credentials. Commit only the adjacent *.example files.
 deploy/api/runtime.env
 deploy/api/migration.env
+deploy/riot-api/runtime.env
 deploy/postgres/pg_service.conf
 deploy/postgres/pgpass

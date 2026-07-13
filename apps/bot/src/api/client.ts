@@ -7,6 +7,8 @@ import {
 	apiErrorEnvelopeSchema,
 	bindRecruitmentMessageRequestSchema,
 	createRecruitmentRequestSchema,
+	discordCatalogSyncDataSchema,
+	discordCatalogSyncRequestSchema,
 	joinRecruitmentRequestSchema,
 	recruitmentSnapshotSchema,
 	setPreferredLanesRequestSchema,
@@ -17,6 +19,8 @@ import {
 	type ApiReadinessData,
 	type BindRecruitmentMessageRequest,
 	type CreateRecruitmentRequest,
+	type DiscordCatalogSyncData,
+	type DiscordCatalogSyncRequest,
 	type JoinRecruitmentRequest,
 	type RecruitmentSnapshot,
 	type SetPreferredLanesRequest,
@@ -26,6 +30,10 @@ import {
 
 export interface ApiMutationContext {
 	idempotencyKey: string;
+	signal?: AbortSignal;
+}
+
+export interface ApiRequestContext {
 	signal?: AbortSignal;
 }
 
@@ -43,7 +51,9 @@ interface MutationRequest<TRequest, TResponse> {
 	body: TRequest;
 	requestSchema: ZodType<TRequest>;
 	responseSchema: ZodType<TResponse>;
-	context: ApiMutationContext;
+	context: ApiRequestContext;
+	idempotencyKey: string | null;
+	logRequest: boolean;
 }
 
 export class MonkeyBotApiError extends Error {
@@ -181,7 +191,26 @@ export class MonkeyBotApiClient {
 			body: input,
 			requestSchema: setupGuildRequestSchema,
 			responseSchema: setupGuildDataSchema,
-			context
+			context,
+			idempotencyKey: context.idempotencyKey,
+			logRequest: true
+		});
+	}
+
+	syncDiscordCatalog(
+		guildId: string,
+		input: DiscordCatalogSyncRequest,
+		context: ApiRequestContext = {}
+	): Promise<DiscordCatalogSyncData> {
+		return this.#mutate({
+			method: 'PUT',
+			segments: ['internal', 'guilds', guildId, 'discord-catalog'],
+			body: input,
+			requestSchema: discordCatalogSyncRequestSchema,
+			responseSchema: discordCatalogSyncDataSchema,
+			context,
+			idempotencyKey: null,
+			logRequest: false
 		});
 	}
 
@@ -298,15 +327,17 @@ export class MonkeyBotApiClient {
 			body,
 			requestSchema,
 			responseSchema: recruitmentSnapshotSchema,
-			context
+			context,
+			idempotencyKey: context.idempotencyKey,
+			logRequest: true
 		});
 	}
 
 	async #mutate<TRequest, TResponse>(
 		request: MutationRequest<TRequest, TResponse>
 	): Promise<TResponse> {
-		const idempotencyKey = request.context.idempotencyKey.trim();
-		if (!idempotencyKey || idempotencyKey.length > 255) {
+		const idempotencyKey = request.idempotencyKey?.trim() ?? null;
+		if (request.idempotencyKey !== null && (!idempotencyKey || idempotencyKey.length > 255)) {
 			throw new MonkeyBotApiContractError('idempotencyKey must contain 1 to 255 characters');
 		}
 		const body = request.requestSchema.safeParse(request.body);
@@ -331,24 +362,27 @@ export class MonkeyBotApiClient {
 
 		let response: Response;
 		try {
+			const headers = new Headers({
+				accept: 'application/json',
+				'content-type': 'application/json',
+				authorization: `Bearer ${this.#serviceToken}`
+			});
+			if (idempotencyKey) headers.set('idempotency-key', idempotencyKey);
 			response = await this.#fetch(url, {
 				method: request.method,
-				headers: {
-					accept: 'application/json',
-					'content-type': 'application/json',
-					authorization: `Bearer ${this.#serviceToken}`,
-					'idempotency-key': idempotencyKey
-				},
+				headers,
 				body: JSON.stringify(body.data),
 				redirect: 'error',
 				signal: controller.signal
 			});
 		} catch (error) {
 			const timedOut = controller.signal.aborted && !request.context.signal?.aborted;
-			this.#logger?.warn(
-				{ err: error, method: request.method, path: url.pathname, timedOut },
-				'bot API request failed'
-			);
+			if (request.logRequest) {
+				this.#logger?.warn(
+					{ err: error, method: request.method, path: url.pathname, timedOut },
+					'bot API request failed'
+				);
+			}
 			throw new MonkeyBotApiTransportError(
 				timedOut ? 'Bot API request timed out' : 'Bot API request failed',
 				{ cause: error }
@@ -364,16 +398,18 @@ export class MonkeyBotApiClient {
 			const requestId = parsed.success
 				? parsed.data.error.requestId
 				: response.headers.get('x-request-id');
-			this.#logger?.warn(
-				{
-					method: request.method,
-					path: url.pathname,
-					status: response.status,
-					requestId,
-					code: parsed.success ? parsed.data.error.code : 'invalid_error_response'
-				},
-				'bot API rejected request'
-			);
+			if (request.logRequest) {
+				this.#logger?.warn(
+					{
+						method: request.method,
+						path: url.pathname,
+						status: response.status,
+						requestId,
+						code: parsed.success ? parsed.data.error.code : 'invalid_error_response'
+					},
+					'bot API rejected request'
+				);
+			}
 			throw new MonkeyBotApiError({
 				status: response.status,
 				code: parsed.success ? parsed.data.error.code : 'invalid_error_response',
@@ -385,21 +421,25 @@ export class MonkeyBotApiClient {
 
 		const envelope = successEnvelopeSchema(request.responseSchema).safeParse(payload);
 		if (!envelope.success) {
-			this.#logger?.error(
-				{ method: request.method, path: url.pathname, status: response.status },
-				'bot API returned an invalid success payload'
-			);
+			if (request.logRequest) {
+				this.#logger?.error(
+					{ method: request.method, path: url.pathname, status: response.status },
+					'bot API returned an invalid success payload'
+				);
+			}
 			throw new MonkeyBotApiContractError('Bot API response does not match the expected contract');
 		}
-		this.#logger?.debug(
-			{
-				method: request.method,
-				path: url.pathname,
-				status: response.status,
-				requestId: envelope.data.meta.requestId
-			},
-			'bot API request completed'
-		);
+		if (request.logRequest) {
+			this.#logger?.debug(
+				{
+					method: request.method,
+					path: url.pathname,
+					status: response.status,
+					requestId: envelope.data.meta.requestId
+				},
+				'bot API request completed'
+			);
+		}
 		return envelope.data.data;
 	}
 

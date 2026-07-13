@@ -299,21 +299,29 @@ Web /me
 /등록 riot_id
   -> Discord user 확인
   -> users upsert
+  -> GameName, TagLine, platform 입력 검증
+  -> Riot Account-v1에서 PUUID/canonical Riot ID 확인
   -> riot_accounts 연결
-  -> Riot profile refresh
 
 Web Riot 계정 관리
   -> Discord OAuth2 session 확인
-  -> Riot 계정 추가 / 삭제 / 메인 지정 / 갱신
+  -> GameName, TagLine, platform으로 Riot 계정 추가
+  -> 삭제 / 메인 지정 / 갱신
+  -> mutation 응답의 최신 계정 목록으로 화면 교체
 ```
 
 원칙:
 
 - `/등록`은 회원가입이 아니다.
 - Riot 계정은 global user에 연결된다.
+- Bot과 Web은 같은 Riot ID resolver와 account linking application service를 사용한다.
+- 사용자나 frontend는 PUUID와 regional routing을 입력하지 않는다. Backend가 Riot 응답에서 확정한다.
 - guild별 전적과 MMR은 Riot account가 아니라 `guild_id + user_id` 기준으로 분리된다.
-- 사용자는 `/me`에서 외부 프로필, 연결 Riot ID, 외부 전적 검색 노출을 설정한다.
+- 사용자는 `/me`에서 외부 프로필, Discord 사용자와 Riot ID의 연결 관계, 길드 밖 custom match 전적
+  접근 범위를 설정한다.
 - 같은 guild 내부의 경기 기록과 MMR은 guild 원장이므로 개인 공개 설정으로 숨기지 않는다.
+- public Riot ID와 외부 Riot 전적 검색은 사용자 privacy flag로 제한하지 않으며 Discord 연결 관계와
+  PUUID를 노출하지 않는다.
 
 ## 6. 전적 검색 / 사용자 조회
 
@@ -337,12 +345,15 @@ Bot /전적 [riot_id]
 
 ```txt
 길드 전적 검색어 입력
-  -> Discord user / guild display name 검색
+  -> Discord ID / guild display name / 공개가 허용된 연결 Riot ID exact match
+  -> guild member와 전역 선호 챔피언 조회
+  -> show_riot_ids가 허용한 연결 Riot 계정 목록만 projection
   -> 현재 guild의 내부 내전 기록 조회
   -> games / participants / stats / picks / bans / mmr_ledger_entries 집계
 
 Riot 전적 검색어 입력
-  -> Riot ID lookup
+  -> GameName#TagLine을 UI/Bot adapter에서 GameName, TagLine으로 분리
+  -> platform과 함께 공통 Riot ID resolver 호출
   -> Riot profile / rank / champion aggregate / recent match 조회
 ```
 
@@ -350,6 +361,9 @@ Riot 전적 검색어 입력
 
 ```txt
 내부 내전 전적
+  사용자 표시명 / Discord avatar
+  포지션별 선호 챔피언
+  공개가 허용된 연결 Riot ID
   승패
   라인별 MMR
   최근 내전
@@ -370,6 +384,8 @@ Riot 외부 요약
 - 같은 Discord user라도 guild가 다르면 전적과 MMR은 다르게 보일 수 있다.
 - `/g/{guildId}/records`와 `/records`는 API와 화면을 분리한다. 한 응답에 내부 원장과 Riot match를
   섞지 않는다.
+- 길드 전적 profile의 Riot ID는 외부 match를 합치는 데이터가 아니라 Discord 사용자와 Riot 계정의
+  연결 관계를 표시하는 privacy-filtered identity다.
 - screening report와 `/전적검토`는 MVP 이후 별도 계약이 생길 때만 추가한다.
 
 ## 7. 대시보드 운영

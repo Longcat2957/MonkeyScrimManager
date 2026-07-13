@@ -20,7 +20,7 @@ use crate::{
     infrastructure::postgres::{self, PostgresError, PostgresReadinessProbe},
     integrations::{
         discord::{DiscordClientError, ReqwestDiscordClient},
-        riot::ReqwestRiotClient,
+        riot::{ReqwestRiotClient, RiotClientError},
     },
     repository::auth::AuthRepository,
     state::{AppState, AuthRuntime},
@@ -64,7 +64,7 @@ pub async fn run(config: Config) -> Result<(), BootstrapError> {
 
     if let Some(riot_config) = state.config().riot_service().cloned() {
         let riot =
-            ReqwestRiotClient::new(riot_config.base_url().clone(), riot_config.token().cloned());
+            ReqwestRiotClient::new(riot_config.base_url().clone(), riot_config.token().clone())?;
         state = state.with_riot(Arc::new(riot));
     }
 
@@ -186,6 +186,8 @@ pub enum BootstrapError {
     Auth(#[from] AuthCryptoError),
     #[error("Discord OAuth client initialization failed")]
     Discord(#[from] DiscordClientError),
+    #[error("Riot integration client initialization failed")]
+    Riot(#[from] RiotClientError),
     #[error("API server failed: {0}")]
     Serve(#[source] std::io::Error),
     #[error("graceful shutdown exceeded {0:?}")]

@@ -54,6 +54,6 @@
 
 ### P2
 
-- Frontend: `/g/[guildId]/admin`, `/admin/status`
+- Frontend: `/g/[guildId]/admin`, `/g/[guildId]/admin/seasons`, `/admin/status`
 - Backend: logs, deep health/admin status, guild member/settings/revert endpoints
 - Bot: 관리자 command, audit log link, maintenance command
