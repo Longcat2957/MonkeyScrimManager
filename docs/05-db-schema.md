@@ -1827,6 +1827,14 @@ Frontend 협업 계약과 DB revision owner는 다음과 같다.
 조회는 confirmed/non-voided games와 append-only ledger를 기준으로 계산한다. 실제 query가
 비싸다는 측정 결과가 나온 뒤에만 별도 read model을 추가한다.
 
+Leaderboard는 ACTIVE season만 조회한다. ACTIVE member의 `user_lane_mmr` 중 `games_played >= 1`인
+lane만 projection하고, player의 `compositeMmr`는 별도 column 없이
+`SUM(mmr * games_played) / SUM(games_played)`로 계산한다. `mainRole`은 실제 플레이한
+`guild_members.main_lane`을 우선하고, 없으면 games 내림차순, MMR 내림차순, canonical lane 순으로
+결정한다. lane별 대표 champion은 confirmed game 중 취소/삭제되지 않은 parent 아래의 참가 기록을
+champion별로 집계해 games 내림차순, champion ID 오름차순으로 고른다. Main Riot ID와 profile icon은
+`user_privacy_settings.show_riot_ids=true`일 때만 projection한다.
+
 Riot 외부 match 상세는 내부 `games`에 넣지 않는다. 검증한 records page DTO와 recent page만 위 전용
 PostgreSQL cache table에 저장한다. Private Riot integration service는 provider 호출/변환만 담당하고 같은
 payload의 별도 장기 cache를 소유하지 않는다. 이 cache는 guild MMR source of truth가 아니다.
@@ -2623,15 +2631,10 @@ guild_counters.next_value = counter별
 실제 cutover 전까지 v3 source는 그대로 운영한다. import rehearsal은 반복 가능한 새 staging DB에서
 실행하며 source에 migration/write를 수행하지 않는다.
 
-## 아직 계산식만 미정인 항목
-
-다음 frontend 값은 source data는 충분하지만 계산 의미가 아직 확정되지 않았다. 임의 column이나
-summary table을 추가하지 않고 API contract freeze 단계에서 결정한다.
-
-- leaderboard `compositeMmr` 계산식
+## 지원하지 않는 조회 의미
 
 Records는 별도 `change`를 반환하지 않고 명시 season 또는 ACTIVE season만 조회한다. `전체 시즌` current
-MMR을 합성하지 않는다. 따라서 두 값은 미정 계산식이 아니라 현재 API의 비지원 범위다.
+MMR을 합성하지 않는다. 이는 미정 계산식이 아니라 현재 API의 비지원 범위다.
 
 일반 game 입력은 `/series/{id}/pick-ban`, 완료 원장 조회는 `/series/{id}/result`가 담당한다.
 MVP에는 별도 최종 확인 command를 만들지 않으며 operations의 `RESULT` 작업은 입력 route로 연결한다.

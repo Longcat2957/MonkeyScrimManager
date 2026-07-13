@@ -744,15 +744,39 @@ source of truth이며 별도 records summary table을 두지 않는다.
 
 ### GET /api/guilds/{guildId}/leaderboard
 
-현재 frontend가 role별 정렬할 수 있는 player snapshot:
+로그인한 사용자가 ACTIVE guild의 ACTIVE member일 때만 조회한다. 접근할 수 없는 guild와 비활성 member는
+guild 존재 여부를 숨기는 `404`를 반환한다. Query parameter 없이 ACTIVE season만 조회하며, 활성 season이
+없으면 오류 대신 다음 `200`을 반환한다.
 
-```text
-id, name, tag, profileIconId
-compositeMmr, mainRole, isMe
-stats[lane] = mmr, games, wins, championId
+```json
+{
+	"data": { "season": null, "players": [] },
+	"meta": { "requestId": "..." }
+}
 ```
 
-MVP에서 records와 leaderboard는 WS를 사용하지 않는다.
+활성 season이 있으면 frontend가 통합/라인별 순위를 만들 수 있는 전체 player snapshot을 반환한다.
+
+```text
+season = id, name
+players[] = id, name, tag|null, profileIconId|null, compositeMmr, mainRole, isMe
+players[].stats[TOP|JUNGLE|MID|BOTTOM|SUPPORT] = mmr, games, wins, championId|null
+```
+
+`players`는 ACTIVE member 중 해당 season의 `user_lane_mmr.games_played >= 1`인 lane이 하나 이상 있는
+사용자만 포함한다. `stats`는 실제 플레이한 canonical lane만 key로 갖는 partial object다.
+`compositeMmr`는 반올림하지 않은
+`SUM(laneMmr * gamesPlayed) / SUM(gamesPlayed)`이고, API가 반환한 모든 lane을 사용한다. `mainRole`은
+member의 설정 `main_lane`이 실제 플레이한 lane이면 이를 사용한다. 그렇지 않으면 games 내림차순, MMR
+내림차순, `TOP, JUNGLE, MID, BOTTOM, SUPPORT` 순으로 하나를 결정한다.
+
+각 lane의 `championId`는 confirmed game 중 취소/삭제되지 않은 일반 series 또는 경매 match/tournament에
+속한 기록만 집계한 최다 플레이 champion이다. 동률은 champion ID 오름차순으로 결정한다. `tag`는 main
+Riot ID 문자열이고 `profileIconId`와 함께 대상 사용자의 `show_riot_ids=true`일 때만 반환한다. 이 privacy
+설정은 guild 내부 MMR/승패를 숨기지 않는다.
+
+통합/라인 탭, player 검색, 표시 인원 제한, 순위와 승률은 frontend가 받은 snapshot에서 계산한다. 이
+endpoint는 pagination/filter query와 WS를 사용하지 않는다.
 
 ## Riot 외부 전적
 

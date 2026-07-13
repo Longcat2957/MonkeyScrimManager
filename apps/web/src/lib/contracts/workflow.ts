@@ -318,6 +318,78 @@ export const guildRecordsSearchDataSchema = z
 		}
 	});
 
+export const guildLeaderboardRoleStatSchema = z
+	.object({
+		mmr: z.number().finite(),
+		games: z.number().int().positive(),
+		wins: nonnegativeInteger,
+		championId: z.string().min(1).max(64).nullable()
+	})
+	.strict()
+	.refine((stat) => stat.wins <= stat.games, 'Lane wins cannot exceed games');
+
+export const guildLeaderboardPlayerSchema = z
+	.object({
+		id: snowflakeSchema,
+		name: z.string().min(1),
+		tag: z.string().min(1).nullable(),
+		profileIconId: nonnegativeInteger.nullable(),
+		compositeMmr: z.number().finite(),
+		mainRole: championPreferenceLaneSchema,
+		isMe: z.boolean(),
+		stats: z
+			.object({
+				TOP: guildLeaderboardRoleStatSchema.optional(),
+				JUNGLE: guildLeaderboardRoleStatSchema.optional(),
+				MID: guildLeaderboardRoleStatSchema.optional(),
+				BOTTOM: guildLeaderboardRoleStatSchema.optional(),
+				SUPPORT: guildLeaderboardRoleStatSchema.optional()
+			})
+			.strict()
+	})
+	.strict()
+	.refine((player) => player.stats[player.mainRole] !== undefined, {
+		path: ['mainRole'],
+		message: 'Main role must refer to a played lane'
+	});
+
+export const guildLeaderboardDataSchema = z
+	.object({
+		season: z
+			.object({
+				id: uuidSchema,
+				name: z.string().min(1).max(100)
+			})
+			.strict()
+			.nullable(),
+		players: z.array(guildLeaderboardPlayerSchema)
+	})
+	.strict()
+	.superRefine((snapshot, context) => {
+		if (snapshot.season === null && snapshot.players.length > 0) {
+			context.addIssue({
+				code: 'custom',
+				path: ['players'],
+				message: 'A leaderboard without an active season cannot contain players'
+			});
+		}
+		const playerIds = snapshot.players.map((player) => player.id);
+		if (new Set(playerIds).size !== playerIds.length) {
+			context.addIssue({
+				code: 'custom',
+				path: ['players'],
+				message: 'Leaderboard players must be unique'
+			});
+		}
+		if (snapshot.players.filter((player) => player.isMe).length > 1) {
+			context.addIssue({
+				code: 'custom',
+				path: ['players'],
+				message: 'Leaderboard can contain at most one current user'
+			});
+		}
+	});
+
 function validateMmrDelta(
 	games: Array<z.infer<typeof guildRecordsGameSchema>>,
 	actual: number | null,
@@ -731,6 +803,9 @@ export type GuildRecordsTournamentSeries = z.infer<typeof guildRecordsTournament
 export type GuildRecordsTournamentRecord = z.infer<typeof guildRecordsTournamentRecordSchema>;
 export type GuildRecordsRecord = z.infer<typeof guildRecordsRecordSchema>;
 export type GuildRecordsSearchSnapshot = z.infer<typeof guildRecordsSearchDataSchema>;
+export type GuildLeaderboardRoleStat = z.infer<typeof guildLeaderboardRoleStatSchema>;
+export type GuildLeaderboardPlayer = z.infer<typeof guildLeaderboardPlayerSchema>;
+export type GuildLeaderboardSnapshot = z.infer<typeof guildLeaderboardDataSchema>;
 export type RiotAccount = z.infer<typeof riotAccountSchema>;
 export type PrivacySettings = z.infer<typeof privacySettingsSchema>;
 export type GuildMemberStatus = z.infer<typeof guildMemberStatusSchema>;

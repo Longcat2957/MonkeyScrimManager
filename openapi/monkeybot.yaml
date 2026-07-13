@@ -1422,6 +1422,74 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/leaderboard:
+    get:
+      operationId: getGuildLeaderboard
+      summary: Get the active-season guild leaderboard
+      description: >-
+        Returns one complete active-season player snapshot for frontend-local composite and lane
+        rankings. The caller must be an active member of the active guild; otherwise the endpoint
+        hides guild existence with a 404. Only active members and user_lane_mmr rows with at least
+        one played game are included. Search, role selection, sorting, and display limits are
+        intentionally not API query parameters. This endpoint does not use WebSocket delivery.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: >-
+            Active-season leaderboard snapshot. A guild without an active season returns
+            season=null and an empty players array rather than an error.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildLeaderboardResponse'
+              examples:
+                noActiveSeason:
+                  summary: Guild without an active season
+                  value:
+                    data:
+                      season: null
+                      players: []
+                    meta:
+                      requestId: 01900000-0000-7000-8000-000000000001
+                activeSeason:
+                  summary: Active season with one ranked member
+                  value:
+                    data:
+                      season:
+                        id: 019f5701-4eb2-74e1-a5e6-6473a732ce98
+                        name: 시즌 1
+                      players:
+                        - id: '1525847677542207548'
+                          name: Longcat
+                          tag: Longcat#KR1
+                          profileIconId: 588
+                          compositeMmr: 1525
+                          mainRole: MID
+                          isMe: true
+                          stats:
+                            MID:
+                              mmr: 1525
+                              games: 8
+                              wins: 5
+                              championId: Ahri
+                    meta:
+                      requestId: 01900000-0000-7000-8000-000000000001
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/riot/records:
     get:
       operationId: getRiotRecords
@@ -3211,6 +3279,139 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/GuildRecordsSearchData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildLeaderboardSeason:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    GuildLeaderboardRoleStat:
+      type: object
+      additionalProperties: false
+      required: [mmr, games, wins, championId]
+      properties:
+        mmr:
+          type: number
+          format: double
+        games:
+          type: integer
+          format: int32
+          minimum: 1
+        wins:
+          type: integer
+          format: int32
+          minimum: 0
+        championId:
+          oneOf:
+            - $ref: '#/components/schemas/ChampionId'
+            - type: 'null'
+      description: >-
+        One played lane from user_lane_mmr. Wins never exceeds games. championId is the
+        most-played champion in confirmed games under non-cancelled, non-deleted regular-series or
+        auction parents; ties use champion ID ascending. It is null when no qualifying champion
+        pick exists.
+    GuildLeaderboardStats:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      maxProperties: 5
+      description: >-
+        Partial canonical-lane object. A lane is present only when its games_played value is at
+        least one.
+      properties:
+        TOP:
+          $ref: '#/components/schemas/GuildLeaderboardRoleStat'
+        JUNGLE:
+          $ref: '#/components/schemas/GuildLeaderboardRoleStat'
+        MID:
+          $ref: '#/components/schemas/GuildLeaderboardRoleStat'
+        BOTTOM:
+          $ref: '#/components/schemas/GuildLeaderboardRoleStat'
+        SUPPORT:
+          $ref: '#/components/schemas/GuildLeaderboardRoleStat'
+    GuildLeaderboardPlayer:
+      type: object
+      additionalProperties: false
+      required: [id, name, tag, profileIconId, compositeMmr, mainRole, isMe, stats]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        name:
+          type: string
+          minLength: 1
+        tag:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+          description: Main Riot ID as GameName#TagLine, or null when show_riot_ids is not true.
+        profileIconId:
+          oneOf:
+            - type: integer
+              format: int32
+              minimum: 0
+            - type: 'null'
+          description: Main Riot account profile icon, or null when show_riot_ids is not true.
+        compositeMmr:
+          type: number
+          format: double
+          description: >-
+            Exact unrounded SUM(lane MMR * games played) / SUM(games played) over every returned
+            lane stat.
+        mainRole:
+          $ref: '#/components/schemas/Lane'
+          description: >-
+            A played configured main lane when available; otherwise highest games, then highest
+            MMR, then canonical lane order.
+        isMe:
+          type: boolean
+        stats:
+          $ref: '#/components/schemas/GuildLeaderboardStats'
+    GuildLeaderboardWithoutSeasonData:
+      type: object
+      additionalProperties: false
+      required: [season, players]
+      properties:
+        season:
+          type: 'null'
+        players:
+          type: array
+          maxItems: 0
+          items:
+            $ref: '#/components/schemas/GuildLeaderboardPlayer'
+    GuildLeaderboardActiveSeasonData:
+      type: object
+      additionalProperties: false
+      required: [season, players]
+      properties:
+        season:
+          $ref: '#/components/schemas/GuildLeaderboardSeason'
+        players:
+          type: array
+          description: >-
+            Active members with at least one played lane. Player IDs are unique and at most one
+            entry has isMe=true.
+          items:
+            $ref: '#/components/schemas/GuildLeaderboardPlayer'
+    GuildLeaderboardData:
+      oneOf:
+        - $ref: '#/components/schemas/GuildLeaderboardWithoutSeasonData'
+        - $ref: '#/components/schemas/GuildLeaderboardActiveSeasonData'
+    GuildLeaderboardResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildLeaderboardData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     ChampionId:

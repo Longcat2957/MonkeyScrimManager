@@ -9,4 +9,8 @@
 	<title>리더보드 | MonkeyBot</title>
 </svelte:head>
 
-<LeaderboardBoard catalog={data.championCatalog} />
+<LeaderboardBoard
+	catalog={data.championCatalog}
+	snapshot={data.snapshot}
+	loadError={data.loadError}
+/>

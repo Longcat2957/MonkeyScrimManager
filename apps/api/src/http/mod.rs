@@ -6,6 +6,7 @@ mod extractors;
 mod guild_admin_member_routes;
 mod guild_admin_settings_routes;
 mod guild_audit_log_routes;
+mod guild_leaderboard_routes;
 mod guild_record_profile_routes;
 mod guild_season_routes;
 mod middleware;
@@ -83,6 +84,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/audit-logs",
             get(guild_audit_log_routes::audit_logs),
+        )
+        .route(
+            "/api/guilds/{guild_id}/leaderboard",
+            get(guild_leaderboard_routes::leaderboard),
         )
         .route(
             "/api/guilds/{guild_id}/operations",

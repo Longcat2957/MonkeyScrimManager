@@ -547,11 +547,18 @@ WebSocket: 사용하지 않는다.
 
 목적:
 
-- 라인별/통합 리더보드.
+- ACTIVE season의 길드 MMR을 라인별/통합 리더보드로 표시한다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/leaderboard`
+
+`+page.server.ts`가 인증 cookie를 전달해 snapshot을 한 번 읽는다. 활성 season이 없으면
+`season=null, players=[]`을 정상 empty state로 표시한다. API의 `stats`는 실제 game이 한 건 이상인 lane만
+포함하며, Riot ID와 profile icon은 backend가 적용한 `show_riot_ids` projection을 그대로 신뢰한다.
+
+통합/라인 탭, player 검색, 25/50/100 표시 제한, MMR 정렬, 순위와 승률은 읽은 전체 snapshot 위에서
+`LeaderboardBoard`가 local state로 처리한다. 이 UI state를 query parameter나 별도 API로 보내지 않는다.
 
 WebSocket: 사용하지 않는다.
 

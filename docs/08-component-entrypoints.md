@@ -92,7 +92,7 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 
 | 컴포넌트                        | 운영 위치                                                    | 주요 계약과 상태                                                                 |
 | ------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `LeaderboardBoard`              | `/g/[guildId]/leaderboard`                                   | `catalog: ChampionCatalog`; 랭킹 row는 내부 목업                                 |
+| `LeaderboardBoard`              | `/g/[guildId]/leaderboard`                                   | `catalog`, API `snapshot`, 선택 `loadError`; 탭·검색·표시 제한은 local state     |
 | `RiotAccountManager`            | `/me` Riot 계정 탭                                           | `initialAccounts`; Riot ID 연결과 snapshot mutation은 `/api/me/riot-accounts/**` |
 | `UserChampionPreferencesEditor` | `/me` 선호 챔피언 탭                                         | `catalog`, 선택 `maxPreferences`; 선호 목록과 저장은 내부 목업                   |
 | `UserPrivacySettingsPanel`      | `/me` 개인정보 탭                                            | 외부 프로필, Discord↔Riot 연결 관계, 길드 밖 내전 전적 접근 설정                 |
@@ -161,8 +161,16 @@ export async function load({ fetch }) {
 	let { data }: PageProps = $props();
 </script>
 
-<LeaderboardBoard catalog={data.championCatalog} />
+<LeaderboardBoard
+	catalog={data.championCatalog}
+	snapshot={data.snapshot}
+	loadError={data.loadError}
+/>
 ```
+
+리더보드 `+page.server.ts`는 `GET /api/guilds/{guildId}/leaderboard`를 호출해 `snapshot`을 제공한다. 활성
+season이 없는 `season=null, players=[]`은 오류가 아니며, 컴포넌트는 내부 fixture나 별도 WS를 사용하지
+않는다.
 
 `profileIconVersion`과 `version`에는 catalog의 `version`을 전달한다. route 컴포넌트에서 Data Dragon URL을 직접 조합하지 않는다.
 

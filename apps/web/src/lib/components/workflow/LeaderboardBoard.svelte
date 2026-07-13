@@ -1,43 +1,32 @@
 <script lang="ts">
-	import { Search, Trophy } from 'lucide-svelte';
+	import { Search, Trophy, UserRound } from 'lucide-svelte';
 	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
-	import type { ChampionCatalog } from '$lib/datadragon';
+	import type {
+		GuildLeaderboardPlayer,
+		GuildLeaderboardRoleStat,
+		GuildLeaderboardSnapshot
+	} from '$lib/contracts/workflow';
+	import { findChampion, type ChampionCatalog } from '$lib/datadragon';
 	import type { Lane } from '$lib/fixtures/workflow';
 
 	type LeaderboardRole = 'COMPOSITE' | Lane;
 
-	interface RoleStat {
-		mmr: number;
-		games: number;
-		wins: number;
-		championId: string;
-	}
-
-	interface LeaderboardPlayer {
-		id: string;
-		name: string;
-		tag: string;
-		profileIconId: number;
-		compositeMmr: number;
-		mainRole: Lane;
-		isMe?: boolean;
-		stats: Partial<Record<Lane, RoleStat>>;
-	}
-
 	interface DisplayRow {
 		rank: number;
-		player: LeaderboardPlayer;
+		player: GuildLeaderboardPlayer;
 		mmr: number;
 		games: number;
 		wins: number;
 		losses: number;
-		championId: string;
+		championId: string | null;
 		rolesPlayed: number;
 	}
 
 	interface Props {
 		catalog: ChampionCatalog;
+		snapshot: GuildLeaderboardSnapshot | null;
+		loadError?: string | null;
 	}
 
 	const roleOrder: LeaderboardRole[] = ['COMPOSITE', 'TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT'];
@@ -49,113 +38,14 @@
 		BOTTOM: '원딜',
 		SUPPORT: '서폿'
 	};
-	const players: LeaderboardPlayer[] = [
-		{
-			id: 'user-tamsol',
-			name: '탐솔',
-			tag: '탐솔#KR1',
-			profileIconId: 588,
-			compositeMmr: 1718,
-			mainRole: 'MID',
-			isMe: true,
-			stats: {
-				MID: { mmr: 1762, games: 31, wins: 20, championId: 'Ahri' },
-				BOTTOM: { mmr: 1588, games: 10, wins: 6, championId: 'Ezreal' },
-				SUPPORT: { mmr: 1510, games: 6, wins: 4, championId: 'Nautilus' }
-			}
-		},
-		{
-			id: 'user-seocho',
-			name: '서초',
-			tag: '서초#JGL',
-			profileIconId: 29,
-			compositeMmr: 1744,
-			mainRole: 'JUNGLE',
-			stats: {
-				JUNGLE: { mmr: 1810, games: 42, wins: 29, championId: 'LeeSin' },
-				MID: { mmr: 1602, games: 8, wins: 5, championId: 'Sylas' }
-			}
-		},
-		{
-			id: 'user-maru',
-			name: '마루',
-			tag: '마루#TOP',
-			profileIconId: 22,
-			compositeMmr: 1696,
-			mainRole: 'TOP',
-			stats: {
-				TOP: { mmr: 1784, games: 38, wins: 24, championId: 'Ornn' },
-				SUPPORT: { mmr: 1492, games: 7, wins: 4, championId: 'Poppy' }
-			}
-		},
-		{
-			id: 'user-moka',
-			name: '모카',
-			tag: '모카#ADC',
-			profileIconId: 7,
-			compositeMmr: 1668,
-			mainRole: 'BOTTOM',
-			stats: {
-				BOTTOM: { mmr: 1741, games: 35, wins: 22, championId: 'Kaisa' },
-				MID: { mmr: 1534, games: 9, wins: 5, championId: 'Orianna' }
-			}
-		},
-		{
-			id: 'user-pado',
-			name: '파도',
-			tag: '파도#SUP',
-			profileIconId: 10,
-			compositeMmr: 1640,
-			mainRole: 'SUPPORT',
-			stats: {
-				SUPPORT: { mmr: 1728, games: 40, wins: 25, championId: 'Thresh' },
-				JUNGLE: { mmr: 1486, games: 6, wins: 3, championId: 'Sejuani' }
-			}
-		},
-		{
-			id: 'user-lowell',
-			name: '로웰',
-			tag: '로웰#KR1',
-			profileIconId: 11,
-			compositeMmr: 1615,
-			mainRole: 'TOP',
-			stats: {
-				TOP: { mmr: 1689, games: 27, wins: 16, championId: 'Renekton' },
-				MID: { mmr: 1508, games: 11, wins: 6, championId: 'Azir' }
-			}
-		},
-		{
-			id: 'user-yuja',
-			name: '유자',
-			tag: '유자#MID',
-			profileIconId: 12,
-			compositeMmr: 1589,
-			mainRole: 'MID',
-			stats: {
-				MID: { mmr: 1648, games: 26, wins: 15, championId: 'Syndra' },
-				BOTTOM: { mmr: 1516, games: 8, wins: 4, championId: 'Jinx' }
-			}
-		},
-		{
-			id: 'user-nuri',
-			name: '누리',
-			tag: '누리#SUP',
-			profileIconId: 13,
-			compositeMmr: 1552,
-			mainRole: 'SUPPORT',
-			stats: {
-				SUPPORT: { mmr: 1612, games: 24, wins: 13, championId: 'Rakan' },
-				TOP: { mmr: 1472, games: 5, wins: 2, championId: 'Gnar' }
-			}
-		}
-	];
 
-	let { catalog }: Props = $props();
+	let { catalog, snapshot, loadError = null }: Props = $props();
 	let selectedRole = $state<LeaderboardRole>('COMPOSITE');
 	let query = $state('');
 	let limit = $state(25);
 	let selectedPlayerId = $state<string | null>(null);
 
+	const players = $derived(snapshot?.players ?? []);
 	const rows = $derived(buildRows(selectedRole));
 	const visibleRows = $derived(
 		rows
@@ -164,16 +54,26 @@
 				return (
 					!needle ||
 					row.player.name.toLocaleLowerCase().includes(needle) ||
-					row.player.tag.toLocaleLowerCase().includes(needle)
+					(row.player.tag?.toLocaleLowerCase().includes(needle) ?? false)
 				);
 			})
 			.slice(0, limit)
 	);
+	const seasonLabel = $derived(
+		loadError ? '조회 실패' : (snapshot?.season?.name ?? '활성 시즌 없음')
+	);
+	const emptyMessage = $derived.by(() => {
+		if (loadError) return loadError;
+		if (snapshot?.season === null) return '현재 진행 중인 시즌이 없습니다.';
+		if (players.length === 0) return '이번 시즌에 집계된 내전 기록이 없습니다.';
+		if (query.trim()) return '검색 조건에 맞는 플레이어가 없습니다.';
+		return '선택한 라인에 집계된 기록이 없습니다.';
+	});
 
 	function buildRows(role: LeaderboardRole): DisplayRow[] {
 		return players
 			.flatMap((player) => {
-				const roleStats = Object.values(player.stats) as RoleStat[];
+				const roleStats = Object.values(player.stats) as GuildLeaderboardRoleStat[];
 				if (role === 'COMPOSITE') {
 					const mainStat = player.stats[player.mainRole];
 					if (!mainStat) return [];
@@ -208,7 +108,7 @@
 					}
 				];
 			})
-			.sort((a, b) => b.mmr - a.mmr)
+			.sort((a, b) => b.mmr - a.mmr || a.player.id.localeCompare(b.player.id))
 			.map((row, index) => ({ ...row, rank: index + 1 }));
 	}
 
@@ -219,7 +119,7 @@
 	}
 
 	function winRate(row: DisplayRow): number {
-		return Math.round((row.wins / row.games) * 100);
+		return row.games === 0 ? 0 : Math.round((row.wins / row.games) * 100);
 	}
 
 	function profileIconUrl(id: number): string {
@@ -244,13 +144,13 @@
 			<Trophy size={20} class="text-amber-300" aria-hidden="true" />
 			<div class="min-w-0">
 				<h2 class="truncate text-sm font-semibold text-slate-50">리더보드</h2>
-				<p class="text-xs text-slate-500">시즌 3 · {visibleRows.length}명</p>
+				<p class="text-xs text-slate-500">{seasonLabel} · {rows.length}명</p>
 			</div>
 		</div>
 
-		<div class="flex items-center gap-2">
+		<div class="flex min-w-0 flex-wrap items-center gap-2">
 			<label
-				class="flex h-9 w-64 items-center gap-2 rounded-sm border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 focus-within:border-cyan-400/50"
+				class="flex h-9 w-64 max-w-full items-center gap-2 rounded-sm border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 focus-within:border-cyan-400/50"
 			>
 				<Search size={15} class="shrink-0 text-slate-500" aria-hidden="true" />
 				<input
@@ -314,6 +214,7 @@
 			</div>
 
 			{#each visibleRows as row (row.player.id)}
+				{@const champion = row.championId ? findChampion(catalog, row.championId) : undefined}
 				<button
 					type="button"
 					class={`grid min-h-[62px] w-full grid-cols-[72px_minmax(240px,1fr)_110px_120px_100px_200px_100px] items-center border-b border-[var(--color-app-border-muted)] px-3 text-left hover:bg-[var(--color-app-hover)] ${
@@ -325,18 +226,31 @@
 				>
 					<strong class={`text-sm tabular-nums ${rankClass(row.rank)}`}>#{row.rank}</strong>
 					<span class="flex min-w-0 items-center gap-3">
-						<img
-							src={profileIconUrl(row.player.profileIconId)}
-							alt=""
-							class="size-10 shrink-0 object-cover"
-							loading="lazy"
-						/>
+						<span
+							class="relative grid size-10 shrink-0 place-items-center overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-control)] text-slate-500"
+							aria-hidden="true"
+						>
+							<UserRound size={20} />
+							{#if row.player.profileIconId !== null}
+								<img
+									src={profileIconUrl(row.player.profileIconId)}
+									alt=""
+									class="absolute inset-0 size-full object-cover"
+									loading="lazy"
+									onerror={(event) => event.currentTarget.setAttribute('hidden', '')}
+								/>
+							{/if}
+						</span>
 						<span class="min-w-0">
 							<strong class="block truncate text-sm text-slate-100">{row.player.name}</strong>
-							<small class="block truncate text-[10px] text-slate-600">{row.player.tag}</small>
+							<small class="block truncate text-[10px] text-slate-600"
+								>{row.player.tag ?? 'Riot ID 비공개'}</small
+							>
 						</span>
 					</span>
-					<strong class="text-right text-sm tabular-nums text-cyan-200">{row.mmr}</strong>
+					<strong class="text-right text-sm tabular-nums text-cyan-200"
+						>{Math.round(row.mmr)}</strong
+					>
 					<span class="text-right text-xs tabular-nums text-slate-400"
 						>{row.wins}승 {row.losses}패</span
 					>
@@ -344,13 +258,10 @@
 						>{winRate(row)}%</span
 					>
 					<span class="min-w-0 pl-6">
-						{#if catalog.byId[row.championId]}
-							<ChampionFace
-								champion={catalog.byId[row.championId]}
-								version={catalog.version}
-								size="sm"
-								showName
-							/>
+						{#if champion}
+							<ChampionFace {champion} version={catalog.version} size="sm" showName />
+						{:else}
+							<span class="text-xs text-slate-600">{row.championId ?? '기록 없음'}</span>
 						{/if}
 					</span>
 					<span class="text-right text-xs tabular-nums text-slate-500">
@@ -358,7 +269,7 @@
 					</span>
 				</button>
 			{:else}
-				<p class="px-4 py-12 text-center text-sm text-slate-600">표시할 기록 없음</p>
+				<p class="px-4 py-12 text-center text-sm text-slate-500">{emptyMessage}</p>
 			{/each}
 		</div>
 	</div>
