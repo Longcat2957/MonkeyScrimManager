@@ -17,6 +17,7 @@ export function actorFromInteraction(interaction: GuildInteractionIdentity): Act
 
 	return {
 		id: interaction.user.id,
+		globalDisplayName: interaction.user.globalName ?? interaction.user.username,
 		displayName,
 		avatarHash: interaction.user.avatar,
 		roleIds

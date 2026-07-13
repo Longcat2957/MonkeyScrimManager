@@ -82,7 +82,7 @@ pub async fn me(
     let service_admin = state
         .config()
         .auth()
-        .is_some_and(|auth| auth.is_service_admin(&session.user_id));
+        .is_some_and(|auth| auth.is_service_admin(&session.discord_id));
 
     Ok(error::success(
         StatusCode::OK,
@@ -91,8 +91,8 @@ pub async fn me(
             avatar_url: session
                 .avatar_hash
                 .as_deref()
-                .and_then(|hash| discord_cdn_url("avatars", session.user_id.as_str(), hash)),
-            discord_id: session.user_id,
+                .and_then(|hash| discord_cdn_url("avatars", session.discord_id.as_str(), hash)),
+            discord_id: session.discord_id,
             display_name: session.display_name,
             default_guild_id: session.default_guild_id,
             service_admin,

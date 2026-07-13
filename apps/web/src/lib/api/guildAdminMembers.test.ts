@@ -17,6 +17,7 @@ const snapshot: GuildAdminMembersSnapshot = {
 	members: [
 		{
 			id: memberId,
+			identityKind: 'DISCORD',
 			discordName: 'Longcat',
 			riotId: 'Longcat#KR1',
 			role: 'OPERATOR',
@@ -60,6 +61,22 @@ describe('guild admin members API client', () => {
 			`/api/guilds/${guildId}/members`,
 			expect.objectContaining({ credentials: 'same-origin' })
 		);
+	});
+
+	it('treats a pre-identity-kind member response as a Discord identity during rolling reloads', async () => {
+		const legacyMember = { ...snapshot.members[0] } as Record<string, unknown>;
+		delete legacyMember.identityKind;
+		const fetcher = fetchMock(() =>
+			Response.json({
+				data: { ...snapshot, members: [legacyMember] },
+				meta: { requestId }
+			})
+		);
+		installBrowser(fetcher);
+
+		await expect(fetchGuildAdminMembers(guildId)).resolves.toMatchObject({
+			members: [{ identityKind: 'DISCORD' }]
+		});
 	});
 
 	it('sends an MMR command with CSRF and a browser idempotency key', async () => {

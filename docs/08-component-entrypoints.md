@@ -40,6 +40,7 @@
 ```txt
 $lib/components/layout      App shell과 화면 조립 primitive
 $lib/components/workflow    모집, 편성, 픽밴, 경매, 결과, 사용자 workflow
+$lib/components/dev         service-admin 전용 더미 사용자와 기능 배치 UI
 $lib/components/fab         전역 빠른 실행과 그 내부 modal
 $lib/components/champion    Data Dragon 기반 챔피언 표시 primitive
 $lib/fixtures               UI 확인용 목업과 임시 타입
@@ -106,6 +107,24 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 | `GuildOperationsAdminPanel`     | MVP 미노출, 후속 롤백 기능 검토용                            | checkpoint snapshot, revision, 고정 revert command                               |
 | `GuildSettingsAdminPanel`       | `/g/[guildId]/admin` 길드 설정 탭                            | API settings/catalog snapshot, revision, authoritative 저장 callback             |
 | `GuildAuditLogPanel`            | `/g/[guildId]/admin` 감사 로그 탭                            | API cursor page, local 작업·대상·실행자 필터, raw audit 상세, `더 보기`          |
+
+## Development Entrypoints
+
+| 컴포넌트                           | 운영 위치                                 | 주요 계약과 상태                                                                                    |
+| ---------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `DummyUserWorkspace`               | `/dev/users`                              | `initialUsers`, `initialGroups`, `initialTotal`, `guilds`, `championCatalog`; 선택 `initialGuildId` |
+| `DummyMemberPicker`                | 더미 group 편집과 기능별 더미 참가자 선택 | `users`, `selectedIds`, `onSelectionChange`; 선택 `requiredGuildId`, `maxSelected`, `disabled`      |
+| `RecruitmentDummyParticipantPanel` | `/g/[guildId]/recruitments/[id]/entry`    | `guildId`, `recruitmentId`; API overview/preview/apply를 내부에서 연결                              |
+
+세 컴포넌트는 `MONKEYBOT_DUMMY_USERS_ENABLED=true`인 non-production 환경의 service admin 도구다.
+`RecruitmentDummyParticipantPanel`은 service admin이면서 현재 길드 operator일 때만 route에서 렌더링한다.
+`DummyMemberPicker.requiredGuildId`가 있으면 해당 길드의 ACTIVE membership만 선택하며, 최종 자격·정원·중복
+검증은 apply API가 다시 수행한다.
+
+`DummyUserWorkspace`는 persistent DB entity를 관리한다. `$lib/fixtures`를 읽거나 더미 사용자를 browser
+memory에만 생성하지 않는다. 일괄 생성은 포함된 길드 배치/MMR까지 한 bulk request로 처리하고, group 연결은
+별도 revision mutation 결과를 명시적으로 반영한다. Delete 전에 deletion-impact를 읽고 blocking reference가
+있으면 archive를 안내한다.
 
 ## Page-local UI
 

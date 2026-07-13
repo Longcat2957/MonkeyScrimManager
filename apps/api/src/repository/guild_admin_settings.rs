@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{DiscordChannelId, DiscordRoleId, DiscordUserId, GuildId},
+    domain::{DiscordChannelId, DiscordRoleId, GuildId, UserId},
     infrastructure::postgres::{
         DatabaseTransaction, DeadlockRetryPolicy, TransactionAttemptError, TransactionRetryError,
         run_with_deadlock_retry,
@@ -88,7 +88,7 @@ pub struct GuildSettingsSnapshot {
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
-    pub updated_by: Option<DiscordUserId>,
+    pub updated_by: Option<UserId>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub catalog_updated_at: Option<OffsetDateTime>,
     pub roles: Vec<GuildSettingsRole>,
@@ -147,7 +147,7 @@ pub async fn replace_discord_catalog(
 pub async fn get(
     pool: &PgPool,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<GuildSettingsSnapshot, GuildAdminSettingsRepositoryError> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -166,7 +166,7 @@ pub async fn get(
 pub async fn update(
     pool: &PgPool,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     request_id: &str,
     command: UpdateGuildSettingsCommand,
 ) -> Result<GuildSettingsSnapshot, GuildAdminSettingsRepositoryError> {
@@ -283,7 +283,7 @@ async fn replace_discord_catalog_attempt(
 async fn update_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     request_id: &str,
     audit_id: Uuid,
     command: &UpdateGuildSettingsCommand,
@@ -349,7 +349,7 @@ async fn update_attempt(
 async fn authorize_operator(
     connection: &mut PgConnection,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<(), AttemptError> {
     let authorized = sqlx::query_scalar::<_, bool>(
         "SELECT true
@@ -380,7 +380,7 @@ async fn authorize_operator(
 async fn lock_operator_settings(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<SettingsRow, AttemptError> {
     let row = sqlx::query_as::<_, SettingsRow>(
         "SELECT config.display_name,
@@ -419,7 +419,7 @@ async fn lock_operator_settings(
 async fn classify_access_failure(
     connection: &mut PgConnection,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<AttemptError, sqlx::Error> {
     let active_member = sqlx::query_scalar::<_, bool>(
         "SELECT true
@@ -748,7 +748,7 @@ struct SettingsRow {
     is_externally_public: bool,
     revision: i64,
     updated_at: OffsetDateTime,
-    updated_by: Option<DiscordUserId>,
+    updated_by: Option<UserId>,
 }
 
 impl SettingsRow {
@@ -766,7 +766,7 @@ impl SettingsRow {
 
 struct AuditInsert<'a> {
     id: Uuid,
-    actor_id: &'a DiscordUserId,
+    actor_id: &'a UserId,
     request_id: &'a str,
     before_summary: Value,
     after_summary: Value,
@@ -788,7 +788,7 @@ enum AttemptError {
         expected: i64,
         current: i64,
         updated_at: OffsetDateTime,
-        updated_by: Option<DiscordUserId>,
+        updated_by: Option<UserId>,
     },
     #[error("stored settings selection is invalid for field {field}")]
     InvalidSelection { field: &'static str },
@@ -837,7 +837,7 @@ pub enum GuildAdminSettingsRepositoryError {
         expected: i64,
         current: i64,
         updated_at: OffsetDateTime,
-        updated_by: Option<DiscordUserId>,
+        updated_by: Option<UserId>,
     },
     #[error("expected revision is invalid")]
     InvalidExpectedRevision,

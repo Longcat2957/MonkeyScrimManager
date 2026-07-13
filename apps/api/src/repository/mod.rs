@@ -2,6 +2,8 @@ pub mod auth;
 pub mod bot_workflow;
 pub mod champion_preferences;
 pub mod context;
+pub mod dummy_recruitment;
+pub mod dummy_users;
 pub mod guild_admin_members;
 pub mod guild_admin_settings;
 pub mod guild_audit_logs;

@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     auth::AuthService,
-    domain::{DiscordUserId, GuildId, IdempotencyRecordId, SeasonId, SeasonStatus},
+    domain::{GuildId, IdempotencyRecordId, SeasonId, SeasonStatus, UserId},
     infrastructure::postgres::{
         DatabaseTransaction, DeadlockRetryPolicy, TransactionAttemptError, TransactionRetryError,
         run_with_deadlock_retry,
@@ -64,7 +64,7 @@ pub struct SeasonSummary {
 pub async fn get(
     pool: &PgPool,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<GuildSeasonsSnapshot, GuildSeasonsRepositoryError> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -83,7 +83,7 @@ pub async fn get(
 pub async fn rotate(
     pool: &PgPool,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     idempotency_key: &str,
     request_id: &str,
     command: RotateSeasonCommand,
@@ -131,7 +131,7 @@ pub async fn rotate(
 async fn rotate_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     idempotency_key: &str,
     request_id: &str,
     request_hash: &[u8],
@@ -238,7 +238,7 @@ async fn lock_guild_rotation(
 async fn authorize_operator(
     connection: &mut PgConnection,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<(), AttemptError> {
     let is_operator = sqlx::query_scalar::<_, bool>(
         "SELECT true
@@ -395,7 +395,7 @@ async fn lock_active_season(
 async fn insert_audit(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     request_id: &str,
     audit_id: Uuid,
     previous: &LockedSeason,

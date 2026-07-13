@@ -3,6 +3,7 @@
 	import EntryDraftBoard from '$lib/components/workflow/EntryDraftBoard.svelte';
 	import RealtimeEditStateBar from '$lib/components/workflow/RealtimeEditStateBar.svelte';
 	import SeriesCompletedEntryRosterBoard from '$lib/components/workflow/SeriesCompletedEntryRosterBoard.svelte';
+	import RecruitmentDummyParticipantPanel from '$lib/components/dev/RecruitmentDummyParticipantPanel.svelte';
 	import { scrimPickBanResultInputChampions } from '$lib/fixtures/scrimPickBanResultInputFixtures';
 	import {
 		mockCompletedEntryAssignments,
@@ -58,6 +59,10 @@
 			</div>
 		{/snippet}
 	</WorkspaceHeader>
+
+	{#if data.user.serviceAdmin && data.guild.currentUserRole === 'OPERATOR'}
+		<RecruitmentDummyParticipantPanel guildId={data.guildId} recruitmentId={data.recruitmentId} />
+	{/if}
 
 	{#if activeView === 'draft'}
 		<RealtimeEditStateBar

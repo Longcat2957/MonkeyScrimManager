@@ -2,6 +2,8 @@ mod auth_routes;
 mod bot_routes;
 mod champion_preference_routes;
 mod context_routes;
+mod dummy_recruitment_routes;
+mod dummy_user_routes;
 mod extractors;
 mod guild_admin_member_routes;
 mod guild_admin_settings_routes;
@@ -30,6 +32,11 @@ pub fn build_router(state: AppState) -> Router {
 
 fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> Router {
     let max_body_bytes = state.config().max_body_bytes();
+    let dummy_user_routes = if state.config().dummy_users_enabled() {
+        dummy_user_routes::router().merge(dummy_recruitment_routes::router())
+    } else {
+        Router::new()
+    };
 
     Router::new()
         .route("/healthz", get(routes::healthz))
@@ -40,6 +47,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/internal/guilds/{guild_id}/setup",
             post(bot_routes::setup_guild),
+        )
+        .route(
+            "/internal/guilds/{guild_id}/registrations",
+            post(bot_routes::register_guild_member),
         )
         .route(
             "/internal/guilds/{guild_id}/discord-catalog",
@@ -171,6 +182,7 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             "/api/me/privacy",
             get(riot_routes::privacy).put(riot_routes::update_privacy),
         )
+        .merge(dummy_user_routes)
         .merge(extra_routes)
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
@@ -421,5 +433,21 @@ mod tests {
             body_json(response).await["error"]["code"],
             "method_not_allowed"
         );
+    }
+
+    #[tokio::test]
+    async fn dummy_user_routes_are_not_mounted_when_disabled() {
+        let app = build_router(state(100, 1024));
+        let response = app
+            .oneshot(
+                Request::get("/api/dev/dummy-users")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(body_json(response).await["error"]["code"], "not_found");
     }
 }

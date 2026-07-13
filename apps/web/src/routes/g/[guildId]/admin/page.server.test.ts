@@ -102,6 +102,32 @@ describe('guild admin server load', () => {
 		});
 	});
 
+	it('accepts a rolling legacy member response without identityKind', async () => {
+		const legacySnapshot = {
+			...memberSnapshot,
+			members: [
+				{
+					id: '390526792496054283',
+					discordName: 'Longcat',
+					riotId: null,
+					role: 'OPERATOR',
+					mainLane: 'MID',
+					laneMmr: { TOP: 1500, JUNGLE: 1500, MID: 1500, BOTTOM: 1500, SUPPORT: 1500 },
+					registered: true,
+					status: 'ACTIVE',
+					lastActiveAt: null
+				}
+			]
+		};
+		const fetcher = vi.fn(async () => Response.json({ data: legacySnapshot, meta: { requestId } }));
+
+		await expect(run(`http://localhost:5173/g/${guildId}/admin`, fetcher)).resolves.toMatchObject({
+			memberSnapshot: {
+				members: [{ id: '390526792496054283', identityKind: 'DISCORD' }]
+			}
+		});
+	});
+
 	it('loads only the first authoritative audit log page for the log tab', async () => {
 		const fetcher = defaultFetcher();
 		await expect(

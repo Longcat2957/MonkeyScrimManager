@@ -165,7 +165,7 @@ pub async fn oauth_callback(
     let session_ttl = i64::try_from(auth.service().cookies().session_ttl().as_secs())
         .expect("session TTL is bounded by configuration");
     let login = NewLogin {
-        user_id: discord_user.id,
+        discord_user_id: discord_user.id,
         display_name: discord_user.display_name,
         avatar_hash: discord_user.avatar_hash,
         previous_session_token_hash,
@@ -265,7 +265,9 @@ fn invalid_oauth_state(request_id: &RequestId) -> ApiError {
 fn auth_repository_error(error: &AuthRepositoryError, request_id: &RequestId) -> ApiError {
     match error {
         AuthRepositoryError::Database(source) => error::database_failure(source, request_id),
-        AuthRepositoryError::InvalidStoredSnowflake(_) => internal(request_id),
+        AuthRepositoryError::InvalidStoredSnowflake(_)
+        | AuthRepositoryError::InvalidStoredUserId(_)
+        | AuthRepositoryError::IdentityConflict => internal(request_id),
     }
 }
 

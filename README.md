@@ -62,6 +62,7 @@ docs/06-expected-workflows.md   예상 사용 workflow
 docs/07-realtime-collaboration.md 동시 편집과 WebSocket 계약
 docs/08-component-entrypoints.md UI 컴포넌트 진입점과 호출 계약
 docs/09-backend-development-plan.md Axum/PostgreSQL 상세 실행계획
+docs/11-dummy-users.md          개발용 더미 사용자 신원, 관리, 기능 연결 계약
 docs/routing/frontend.md        Frontend route
 docs/routing/backend.md         Backend API route
 docs/routing/bot.md             Bot command/component route
@@ -124,6 +125,15 @@ set +a
 
 cargo run --locked -p monkeybot-api --bin monkeybot-migrate
 cargo run --locked -p monkeybot-api --bin monkeybot-api
+```
+
+`0012_user_identity_kinds.sql`을 처음 적용하는 기존 database에서는 column rename 동안 구 Axum binary가
+호환되지 않는다. 로컬 service를 먼저 중지하고 migration을 적용한 뒤 새 binary로 reload한다.
+
+```bash
+systemctl --user stop monkeybot-api-local.service
+cargo run --locked -p monkeybot-api --bin monkeybot-migrate
+scripts/local-api-reload.sh '/api/me'
 ```
 
 이미 실행 중인 로컬 Axum systemd user service에 라우트 변경을 반영할 때는 빌드, 재시작, readiness,

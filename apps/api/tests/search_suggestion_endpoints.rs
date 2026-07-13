@@ -250,7 +250,7 @@ async fn seed_login(
 ) -> TestResult {
     repository
         .complete_login(&NewLogin {
-            user_id: DiscordUserId::parse(user_id)?,
+            discord_user_id: DiscordUserId::parse(user_id)?,
             display_name: display_name.to_owned(),
             avatar_hash: None,
             previous_session_token_hash: None,
@@ -273,7 +273,7 @@ async fn seed_search_data(pool: &PgPool) -> TestResult {
     ] {
         sqlx::query(
             "INSERT INTO users (
-                 discord_id, display_name, avatar_hash, created_at, updated_at, deleted_at
+                 user_id, display_name, avatar_hash, created_at, updated_at, deleted_at
              ) VALUES ($1, $2, NULL, clock_timestamp(), clock_timestamp(), NULL)",
         )
         .bind(user_id)

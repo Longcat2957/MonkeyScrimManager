@@ -14,6 +14,10 @@
 		catalog: ChampionCatalog;
 		initialPreferences: ChampionPreferences;
 		maxPreferences?: number;
+		onSaveLane?: (
+			lane: ChampionPreferenceLane,
+			championIds: string[]
+		) => Promise<ChampionPreferences>;
 	}
 
 	const laneOrder: ChampionPreferenceLane[] = ['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT'];
@@ -25,7 +29,12 @@
 		SUPPORT: '서폿'
 	};
 
-	let { catalog, initialPreferences, maxPreferences = 10 }: Props = $props();
+	let {
+		catalog,
+		initialPreferences,
+		maxPreferences = 10,
+		onSaveLane = updateChampionPreferences
+	}: Props = $props();
 	let selectedLane = $state<ChampionPreferenceLane>('MID');
 	let query = $state('');
 	let savedPreferences = $derived<ChampionPreferences>(clonePreferences(initialPreferences));
@@ -97,7 +106,7 @@
 		savedNotice = false;
 		error = null;
 		try {
-			const preferences = await updateChampionPreferences(lane, championIds);
+			const preferences = await onSaveLane(lane, championIds);
 			savedPreferences = clonePreferences(preferences);
 			draftPreferences = clonePreferences(preferences);
 			savedNotice = true;

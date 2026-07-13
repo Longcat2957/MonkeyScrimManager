@@ -1,5 +1,5 @@
 use serde_json::Value;
-use sqlx::FromRow;
+use sqlx::{FromRow, PgPool};
 use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -60,6 +60,26 @@ pub enum AcquireIdempotencyOutcome {
 }
 
 #[derive(Debug)]
+pub struct PreflightIdempotency<'a> {
+    pub scope: &'a TenantScope,
+    pub principal_type: IdempotencyPrincipalType,
+    pub principal_id: &'a str,
+    pub method: &'a str,
+    pub route_template: &'a str,
+    pub idempotency_key: &'a str,
+    pub request_hash: &'a [u8],
+    pub inspected_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreflightIdempotencyOutcome {
+    Missing,
+    Replay { response: IdempotentResponse },
+    Conflict,
+    InProgress,
+}
+
+#[derive(Debug)]
 pub struct CompleteIdempotency<'a> {
     pub scope: &'a TenantScope,
     pub record_id: IdempotencyRecordId,
@@ -71,6 +91,58 @@ pub struct CompleteIdempotency<'a> {
 pub enum CompleteIdempotencyOutcome {
     Completed,
     NotInProgress,
+}
+
+pub async fn preflight(
+    pool: &PgPool,
+    command: &PreflightIdempotency<'_>,
+) -> Result<PreflightIdempotencyOutcome, IdempotencyRepositoryError> {
+    let existing = sqlx::query_as::<_, IdempotencyRow>(
+        "SELECT id, request_hash, state, status_code, response_body
+         FROM idempotency_records
+         WHERE scope_key = $1
+           AND guild_id IS NOT DISTINCT FROM $2::text
+           AND principal_type = $3
+           AND principal_id = $4
+           AND method = $5
+           AND route_template = $6
+           AND idempotency_key = $7
+           AND expires_at > $8",
+    )
+    .bind(command.scope.scope_key())
+    .bind(command.scope.database_guild_id())
+    .bind(command.principal_type.as_str())
+    .bind(command.principal_id)
+    .bind(command.method)
+    .bind(command.route_template)
+    .bind(command.idempotency_key)
+    .bind(command.inspected_at)
+    .fetch_optional(pool)
+    .await?;
+    let Some(existing) = existing else {
+        return Ok(PreflightIdempotencyOutcome::Missing);
+    };
+    if existing.request_hash.as_slice() != command.request_hash {
+        return Ok(PreflightIdempotencyOutcome::Conflict);
+    }
+
+    match existing.state.as_str() {
+        "IN_PROGRESS" => Ok(PreflightIdempotencyOutcome::InProgress),
+        "COMPLETED" => {
+            let status_code = existing
+                .status_code
+                .ok_or(IdempotencyRepositoryError::CorruptCompletedRecord)?;
+            let status_code = u16::try_from(status_code)
+                .map_err(|_| IdempotencyRepositoryError::CorruptCompletedRecord)?;
+            Ok(PreflightIdempotencyOutcome::Replay {
+                response: IdempotentResponse {
+                    status_code,
+                    body: existing.response_body,
+                },
+            })
+        }
+        _ => Err(IdempotencyRepositoryError::UnknownStoredState),
+    }
 }
 
 pub async fn acquire(

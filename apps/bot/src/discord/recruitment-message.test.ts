@@ -7,7 +7,10 @@ const guildId = '200000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const webOrigin = new URL('https://dev.monkeybot.lol');
 
-function snapshot(status: 'OPEN' | 'CLOSED' | 'CANCELLED', participantCount: number) {
+function snapshot(
+	status: 'OPEN' | 'CLOSED' | 'CANCELLED',
+	participantCount: number
+): RecruitmentSnapshot {
 	return {
 		recruitment: {
 			id: recruitmentId,
@@ -26,7 +29,7 @@ function snapshot(status: 'OPEN' | 'CLOSED' | 'CANCELLED', participantCount: num
 			preferredLanes: index === 0 ? (['MID', 'JUNGLE'] as const) : ([] as const)
 		})),
 		links: { entry: `/g/${guildId}/recruitments/${recruitmentId}/entry` }
-	} satisfies RecruitmentSnapshot;
+	};
 }
 
 function json(value: unknown): Record<string, unknown> {
@@ -44,6 +47,20 @@ describe('renderRecruitmentMessage', () => {
 		expect(serialized).toContain(`recruit:join:${recruitmentId}`);
 		expect(serialized).toContain(`recruit:leave:${recruitmentId}`);
 		expect(serialized).toContain(`recruit:roles:${recruitmentId}`);
+	});
+
+	it('renders a dummy participant by display name without treating its ID as a Discord mention', () => {
+		const withDummy = snapshot('OPEN', 1);
+		withDummy.participants[0] = {
+			id: 'dmy_01900000-0000-7000-8000-000000000001',
+			displayName: 'Dummy Mid',
+			preferredLanes: ['MID']
+		};
+		const serialized = JSON.stringify(json(renderRecruitmentMessage(withDummy, webOrigin)));
+
+		expect(serialized).toContain('Dummy Mid');
+		expect(serialized).not.toContain('dmy_01900000-0000-7000-8000-000000000001');
+		expect(serialized).not.toContain('<@');
 	});
 
 	it('keeps leave and lane controls available when the roster reaches ten', () => {

@@ -5,7 +5,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{DiscordUserId, GuildId, Lane, SeasonId};
+use crate::domain::{DiscordUserId, GuildId, Lane, SeasonId, UserId};
 use crate::repository::champion_preferences::ChampionPreferencesSnapshot;
 use crate::repository::riot::normalize_riot_id_v1;
 
@@ -206,7 +206,7 @@ pub struct GuildRecordLineup {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GuildRecordProfileMember {
-    pub user_id: DiscordUserId,
+    pub user_id: UserId,
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub main_lane: Option<Lane>,
@@ -232,7 +232,7 @@ pub struct VisibleRiotAccount {
 
 pub async fn find_member(
     pool: &PgPool,
-    viewer_id: &DiscordUserId,
+    viewer_id: &UserId,
     guild_id: &GuildId,
     query: &str,
 ) -> Result<GuildRecordProfileLookup, GuildRecordProfileRepositoryError> {
@@ -241,14 +241,15 @@ pub async fn find_member(
 
 async fn find_member_with<'e, E>(
     executor: E,
-    viewer_id: &DiscordUserId,
+    viewer_id: &UserId,
     guild_id: &GuildId,
     query: &str,
 ) -> Result<GuildRecordProfileLookup, GuildRecordProfileRepositoryError>
 where
     E: Executor<'e, Database = Postgres>,
 {
-    let query_is_discord_id = DiscordUserId::parse(query).is_ok();
+    let query_is_user_id = DiscordUserId::parse(query).is_ok()
+        || (query.starts_with("dmy_") && UserId::parse(query).is_ok());
     let normalized_riot_id = normalize_riot_id_v1(query);
     let rows = sqlx::query_as::<_, GuildRecordProfileMemberRow>(
         "WITH viewer AS (
@@ -283,7 +284,7 @@ where
                     ) AS matched_by_riot_id
              FROM guild_members AS member
              JOIN users AS app_user
-               ON app_user.discord_id = member.user_id
+               ON app_user.user_id = member.user_id
               AND app_user.deleted_at IS NULL
              WHERE (SELECT has_access FROM viewer)
                AND member.guild_id = $2
@@ -323,7 +324,7 @@ where
     .bind(viewer_id)
     .bind(guild_id)
     .bind(query)
-    .bind(query_is_discord_id)
+    .bind(query_is_user_id)
     .bind(normalized_riot_id)
     .fetch_all(executor)
     .await?;
@@ -333,14 +334,14 @@ where
 
 pub async fn list_visible_riot_accounts(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<Vec<VisibleRiotAccount>, GuildRecordProfileRepositoryError> {
     list_visible_riot_accounts_with(pool, user_id).await
 }
 
 async fn list_visible_riot_accounts_with<'e, E>(
     executor: E,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<Vec<VisibleRiotAccount>, GuildRecordProfileRepositoryError>
 where
     E: Executor<'e, Database = Postgres>,
@@ -366,7 +367,7 @@ where
 
 pub async fn search(
     pool: &PgPool,
-    viewer_id: &DiscordUserId,
+    viewer_id: &UserId,
     guild_id: &GuildId,
     query: &str,
     requested_season_id: Option<SeasonId>,
@@ -467,7 +468,7 @@ pub async fn search(
 
 async fn load_champion_preferences(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<ChampionPreferencesSnapshot, GuildRecordProfileRepositoryError> {
     let rows = sqlx::query_as::<_, ChampionPreferenceRow>(
         "SELECT lane, position, champion_id
@@ -523,7 +524,7 @@ async fn load_summary(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
     season_id: SeasonId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<GuildRecordSummary, GuildRecordProfileRepositoryError> {
     let row = sqlx::query_as::<_, GuildRecordSummaryRow>(
         "SELECT count(*) AS games,
@@ -586,7 +587,7 @@ async fn load_lane_mmr(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
     season_id: SeasonId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<Vec<GuildRecordLaneMmr>, GuildRecordProfileRepositoryError> {
     let rows = sqlx::query_as::<_, GuildRecordLaneMmrRow>(
         "SELECT lane, mmr, games_played, wins
@@ -635,7 +636,7 @@ async fn load_champion_records(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
     season_id: SeasonId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<Vec<GuildRecordChampion>, GuildRecordProfileRepositoryError> {
     Ok(sqlx::query_as::<_, GuildRecordChampion>(
         "SELECT participant.champion_id,
@@ -745,7 +746,7 @@ async fn load_record_page(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
     season_id: SeasonId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     cursor: Option<GuildRecordCursor>,
     limit: i64,
 ) -> Result<(Vec<GuildRecord>, Option<GuildRecordCursor>), GuildRecordProfileRepositoryError> {
@@ -927,7 +928,7 @@ async fn load_record_page(
 async fn hydrate_record_heads(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     heads: Vec<GuildRecordHeadRow>,
 ) -> Result<Vec<GuildRecord>, GuildRecordProfileRepositoryError> {
     if heads.is_empty() {
@@ -970,7 +971,7 @@ async fn hydrate_record_heads(
 async fn load_games(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     scopes: &[String],
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<GuildRecordGame>>, GuildRecordProfileRepositoryError> {
@@ -1149,7 +1150,7 @@ async fn load_games(
 async fn load_tournament_series_meta(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     tournament_ids: &[Uuid],
 ) -> Result<Vec<GuildRecordTournamentSeriesRow>, GuildRecordProfileRepositoryError> {
     if tournament_ids.is_empty() {
@@ -1204,7 +1205,7 @@ async fn load_tournament_series_meta(
 async fn load_tournament_rosters(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     tournament_ids: &[Uuid],
     team_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<GuildRecordLineup>>, GuildRecordProfileRepositoryError> {
@@ -1584,7 +1585,7 @@ impl GuildRecordProfileMemberRow {
             ));
         };
         Some(
-            DiscordUserId::parse(user_id)
+            UserId::parse(user_id)
                 .map_err(|_| GuildRecordProfileRepositoryError::StoredInvariantViolation)
                 .map(|user_id| GuildRecordProfileMember {
                     user_id,

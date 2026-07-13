@@ -1,7 +1,7 @@
 use sqlx::{FromRow, PgPool, Postgres};
 use thiserror::Error;
 
-use crate::domain::{DiscordUserId, GuildId, Lane, SeasonId};
+use crate::domain::{GuildId, Lane, SeasonId, UserId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuildLeaderboardSnapshot {
@@ -17,7 +17,7 @@ pub struct GuildLeaderboardSeason {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuildLeaderboardPlayer {
-    pub id: DiscordUserId,
+    pub id: UserId,
     pub name: String,
     pub tag: Option<String>,
     pub profile_icon_id: Option<i32>,
@@ -39,7 +39,7 @@ pub struct GuildLeaderboardRoleStat {
 pub async fn get(
     pool: &PgPool,
     guild_id: &GuildId,
-    viewer_id: &DiscordUserId,
+    viewer_id: &UserId,
 ) -> Result<GuildLeaderboardSnapshot, GuildLeaderboardRepositoryError> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -71,7 +71,7 @@ pub async fn get(
 async fn load_access(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: &GuildId,
-    viewer_id: &DiscordUserId,
+    viewer_id: &UserId,
 ) -> Result<Option<AccessRow>, sqlx::Error> {
     sqlx::query_as::<_, AccessRow>(
         "SELECT season.id AS season_id, season.name AS season_name
@@ -194,7 +194,7 @@ async fn load_rows(
 
 fn build_players(
     rows: Vec<LeaderboardRow>,
-    viewer_id: &DiscordUserId,
+    viewer_id: &UserId,
 ) -> Result<Vec<GuildLeaderboardPlayer>, GuildLeaderboardRepositoryError> {
     let mut players = Vec::new();
     let mut current: Option<PlayerBuilder> = None;
@@ -241,7 +241,7 @@ fn validate_row(row: &LeaderboardRow) -> Result<(), GuildLeaderboardRepositoryEr
 }
 
 struct PlayerBuilder {
-    id: DiscordUserId,
+    id: UserId,
     name: String,
     tag: Option<String>,
     profile_icon_id: Option<i32>,
@@ -283,7 +283,7 @@ impl PlayerBuilder {
 
     fn finish(
         self,
-        viewer_id: &DiscordUserId,
+        viewer_id: &UserId,
     ) -> Result<GuildLeaderboardPlayer, GuildLeaderboardRepositoryError> {
         let main_role = self
             .configured_main_lane
@@ -345,7 +345,7 @@ struct AccessRow {
 
 #[derive(Debug, FromRow)]
 struct LeaderboardRow {
-    user_id: DiscordUserId,
+    user_id: UserId,
     name: String,
     main_lane: Option<Lane>,
     tag: Option<String>,
@@ -373,8 +373,8 @@ mod tests {
 
     #[test]
     fn player_projection_uses_played_lane_weighting_and_deterministic_main_role() {
-        let viewer = DiscordUserId::parse("100000000000000001").expect("viewer ID");
-        let player = DiscordUserId::parse("100000000000000002").expect("player ID");
+        let viewer = UserId::parse("100000000000000001").expect("viewer ID");
+        let player = UserId::parse("100000000000000002").expect("player ID");
         let rows = vec![
             row(player.clone(), None, Lane::Top, 1600.0, 2, 1),
             row(player, None, Lane::Jungle, 1500.0, 6, 4),
@@ -389,7 +389,7 @@ mod tests {
     }
 
     fn row(
-        user_id: DiscordUserId,
+        user_id: UserId,
         main_lane: Option<Lane>,
         lane: Lane,
         mmr: f64,

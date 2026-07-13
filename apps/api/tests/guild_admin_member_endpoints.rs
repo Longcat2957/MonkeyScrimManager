@@ -136,6 +136,7 @@ async fn run_flow() -> TestResult {
     let initial = body_json(initial).await?;
     assert_eq!(initial["data"]["revision"], 0);
     let member = find_member(&initial)?;
+    assert_eq!(member["identityKind"], "DISCORD");
     assert_eq!(member["riotId"], "NoLaneMain#KR1");
     assert_eq!(member["role"], "MEMBER");
     assert_eq!(member["mainLane"], Value::Null);
@@ -356,7 +357,7 @@ async fn create_login(
 ) -> TestResult {
     repository
         .complete_login(&NewLogin {
-            user_id: DiscordUserId::parse(user_id)?,
+            discord_user_id: DiscordUserId::parse(user_id)?,
             display_name: display_name.to_owned(),
             avatar_hash: None,
             previous_session_token_hash: None,

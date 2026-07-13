@@ -544,7 +544,10 @@ pub async fn update_privacy(
     ))
 }
 
-fn riot_service(state: &AppState, request_id: &RequestId) -> Result<RiotService, ApiError> {
+pub(super) fn riot_service(
+    state: &AppState,
+    request_id: &RequestId,
+) -> Result<RiotService, ApiError> {
     state.riot().cloned().map(RiotService::new).ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -568,7 +571,10 @@ fn database<'a>(state: &'a AppState, request_id: &RequestId) -> Result<&'a PgPoo
     })
 }
 
-fn parse_platform(value: &str, request_id: &RequestId) -> Result<RiotPlatform, ApiError> {
+pub(super) fn parse_platform(
+    value: &str,
+    request_id: &RequestId,
+) -> Result<RiotPlatform, ApiError> {
     RiotPlatform::from_str(value).map_err(|_| {
         ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -580,7 +586,7 @@ fn parse_platform(value: &str, request_id: &RequestId) -> Result<RiotPlatform, A
     })
 }
 
-fn canonical_account(
+pub(super) fn canonical_account(
     resolved: ResolvedRiotAccount,
     request_id: &RequestId,
 ) -> Result<CanonicalRiotAccount, ApiError> {
@@ -666,7 +672,7 @@ fn validate_puuid_path(value: &str, request_id: &RequestId) -> Result<(), ApiErr
     }
 }
 
-fn riot_client_error(source: RiotClientError, request_id: &RequestId) -> ApiError {
+pub(super) fn riot_client_error(source: RiotClientError, request_id: &RequestId) -> ApiError {
     match source {
         RiotClientError::InvalidInput => ApiError::new(
             StatusCode::BAD_REQUEST,

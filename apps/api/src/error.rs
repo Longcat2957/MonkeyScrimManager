@@ -87,9 +87,10 @@ impl ApiError {
                 "unsupported_media_type",
                 "지원하지 않는 요청 본문 형식입니다.",
             ),
-            StatusCode::UNPROCESSABLE_ENTITY => {
-                ("unprocessable_entity", "요청 내용을 처리할 수 없습니다.")
-            }
+            StatusCode::UNPROCESSABLE_ENTITY => (
+                "unprocessable_entity",
+                "요청 JSON의 필드 또는 값이 API 계약과 일치하지 않습니다.",
+            ),
             StatusCode::TOO_MANY_REQUESTS => (
                 "rate_limited",
                 "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",

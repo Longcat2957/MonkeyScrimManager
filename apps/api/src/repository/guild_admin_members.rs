@@ -16,7 +16,9 @@ use super::{
 };
 use crate::{
     auth::AuthService,
-    domain::{DiscordUserId, GuildId, GuildMemberStatus, IdempotencyRecordId, Lane, SeasonId},
+    domain::{
+        GuildId, GuildMemberStatus, IdempotencyRecordId, Lane, SeasonId, UserId, UserIdentityKind,
+    },
     infrastructure::postgres::{
         DatabaseTransaction, DeadlockRetryPolicy, TransactionAttemptError, TransactionRetryError,
         run_with_deadlock_retry,
@@ -51,14 +53,15 @@ pub struct GuildMembersSnapshot {
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
-    pub updated_by: Option<DiscordUserId>,
+    pub updated_by: Option<UserId>,
     pub members: Vec<GuildAdminMember>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuildAdminMember {
-    pub id: DiscordUserId,
+    pub id: UserId,
+    pub identity_kind: UserIdentityKind,
     pub discord_name: String,
     pub riot_id: Option<String>,
     pub role: GuildAdminRole,
@@ -114,7 +117,7 @@ impl LaneMmr {
 pub async fn get(
     pool: &PgPool,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<GuildMembersSnapshot, GuildAdminMembersRepositoryError> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -133,8 +136,8 @@ pub async fn get(
 pub async fn adjust_mmr(
     pool: &PgPool,
     guild_id: &GuildId,
-    member_id: &DiscordUserId,
-    actor_id: &DiscordUserId,
+    member_id: &UserId,
+    actor_id: &UserId,
     idempotency_key: &str,
     request_id: &str,
     command: AdjustMmrCommand,
@@ -184,8 +187,8 @@ pub async fn adjust_mmr(
 pub async fn set_status(
     pool: &PgPool,
     guild_id: &GuildId,
-    member_id: &DiscordUserId,
-    actor_id: &DiscordUserId,
+    member_id: &UserId,
+    actor_id: &UserId,
     request_id: &str,
     command: SetMemberStatusCommand,
 ) -> Result<GuildMembersSnapshot, GuildAdminMembersRepositoryError> {
@@ -229,8 +232,8 @@ pub async fn set_status(
 async fn adjust_mmr_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    member_id: &DiscordUserId,
-    actor_id: &DiscordUserId,
+    member_id: &UserId,
+    actor_id: &UserId,
     idempotency_key: &str,
     request_id: &str,
     request_hash: &[u8],
@@ -364,8 +367,8 @@ async fn adjust_mmr_attempt(
 async fn set_status_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    member_id: &DiscordUserId,
-    actor_id: &DiscordUserId,
+    member_id: &UserId,
+    actor_id: &UserId,
     request_id: &str,
     command: &SetMemberStatusCommand,
     prepared: StatusPrepared,
@@ -419,7 +422,7 @@ async fn set_status_attempt(
 async fn authorize_operator(
     connection: &mut PgConnection,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<(), AttemptError> {
     let is_operator = sqlx::query_scalar::<_, bool>(
         "SELECT true
@@ -492,6 +495,7 @@ async fn fetch_snapshot(
              WHERE guild_id = $1 AND status = 'ACTIVE'
          )
          SELECT member.user_id,
+                app_user.identity_kind,
                 member.display_name,
                 riot.riot_id,
                 EXISTS (
@@ -508,6 +512,7 @@ async fn fetch_snapshot(
                 canonical_lanes.lane AS mmr_lane,
                 COALESCE(lane_mmr.mmr, 1500::double precision) AS mmr
          FROM guild_members AS member
+         JOIN users AS app_user ON app_user.user_id = member.user_id
          JOIN guild_config AS config ON config.guild_id = member.guild_id
          CROSS JOIN canonical_lanes
          LEFT JOIN active_season ON true
@@ -569,7 +574,7 @@ fn members_from_rows(rows: Vec<MemberLaneRow>) -> Result<Vec<GuildAdminMember>, 
 async fn ensure_and_lock_members_state(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     now: OffsetDateTime,
 ) -> Result<LockedMembersState, AttemptError> {
     sqlx::query(
@@ -611,7 +616,7 @@ fn ensure_revision(expected: i64, state: &LockedMembersState) -> Result<(), Atte
 async fn ensure_member_exists(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    member_id: &DiscordUserId,
+    member_id: &UserId,
 ) -> Result<(), AttemptError> {
     lock_member_status(transaction, guild_id, member_id)
         .await
@@ -621,7 +626,7 @@ async fn ensure_member_exists(
 async fn lock_member_status(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    member_id: &DiscordUserId,
+    member_id: &UserId,
 ) -> Result<GuildMemberStatus, AttemptError> {
     sqlx::query_scalar::<_, GuildMemberStatus>(
         "SELECT status
@@ -655,7 +660,7 @@ async fn lock_active_season(
 async fn increment_members_revision(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     current_revision: i64,
     now: OffsetDateTime,
 ) -> Result<(), AttemptError> {
@@ -789,7 +794,7 @@ fn validate_expected_revision(
 
 fn request_hash<T: Serialize>(
     guild_id: &GuildId,
-    member_id: &DiscordUserId,
+    member_id: &UserId,
     command: &T,
 ) -> Result<Vec<u8>, GuildAdminMembersRepositoryError> {
     let canonical = serde_json::to_string(&(guild_id, member_id, command))?;
@@ -825,12 +830,13 @@ fn map_transaction_error(
 struct SnapshotMetadataRow {
     revision: i64,
     updated_at: OffsetDateTime,
-    updated_by: Option<DiscordUserId>,
+    updated_by: Option<UserId>,
 }
 
 #[derive(Debug, FromRow)]
 struct MemberLaneRow {
-    user_id: DiscordUserId,
+    user_id: UserId,
+    identity_kind: UserIdentityKind,
     display_name: String,
     riot_id: Option<String>,
     is_operator: bool,
@@ -852,6 +858,7 @@ impl MemberAccumulator {
         Self {
             member: GuildAdminMember {
                 id: row.user_id.clone(),
+                identity_kind: row.identity_kind,
                 discord_name: row.display_name.clone(),
                 riot_id: row.riot_id.clone(),
                 role: if row.is_operator {
@@ -882,7 +889,7 @@ impl MemberAccumulator {
 struct LockedMembersState {
     revision: i64,
     updated_at: OffsetDateTime,
-    updated_by: Option<DiscordUserId>,
+    updated_by: Option<UserId>,
 }
 
 #[derive(Clone, Copy)]
@@ -933,7 +940,7 @@ enum IdempotencyDecision<T> {
 
 struct AuditInsert<'a> {
     id: Uuid,
-    actor_id: &'a DiscordUserId,
+    actor_id: &'a UserId,
     action: &'a str,
     target_type: &'a str,
     target_id: &'a str,
@@ -969,7 +976,7 @@ enum AttemptError {
         expected: i64,
         current: i64,
         updated_at: OffsetDateTime,
-        updated_by: Option<DiscordUserId>,
+        updated_by: Option<UserId>,
     },
     #[error("MMR adjustment is invalid")]
     InvalidAdjustment,
@@ -1047,7 +1054,7 @@ pub enum GuildAdminMembersRepositoryError {
         expected: i64,
         current: i64,
         updated_at: OffsetDateTime,
-        updated_by: Option<DiscordUserId>,
+        updated_by: Option<UserId>,
     },
     #[error("MMR adjustment is invalid")]
     InvalidAdjustment,

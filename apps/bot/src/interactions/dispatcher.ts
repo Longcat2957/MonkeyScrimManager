@@ -12,6 +12,7 @@ import { actorFromInteraction } from '../discord/actor.js';
 import { renderRecruitmentMessage } from '../discord/recruitment-message.js';
 import { parseRecruitmentCustomId } from './custom-id.js';
 import type { InteractionContext } from './context.js';
+import { botErrorReference, reasonWithErrorReference } from './error-format.js';
 import { guildInteractionError } from './guild-context.js';
 
 type PreferredLane = RecruitmentSnapshot['participants'][number]['preferredLanes'][number];
@@ -50,7 +51,7 @@ export async function dispatchInteraction(
 			},
 			'Discord interaction failed'
 		);
-		await reportInteractionError(interaction);
+		await reportInteractionError(interaction, error);
 	}
 }
 
@@ -176,15 +177,34 @@ function parsePreferredLanes(values: readonly string[]): PreferredLane[] | null 
 	return lanes;
 }
 
-async function reportInteractionError(interaction: Interaction): Promise<void> {
+export function interactionErrorContent(error: unknown, interactionId: string): string {
+	const reference = botErrorReference(error, interactionId);
+	return [
+		'요청을 처리하지 못했습니다.',
+		reasonWithErrorReference(`사유: ${reference.reason}`, reference)
+	].join('\n');
+}
+
+async function reportInteractionError(interaction: Interaction, error: unknown): Promise<void> {
 	if (!interaction.isRepliable()) return;
 	const reply = {
-		content: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+		content: interactionErrorContent(error, interaction.id),
+		allowedMentions: { parse: [] },
 		flags: MessageFlags.Ephemeral
 	} as const;
 
 	try {
-		if (interaction.deferred || interaction.replied) {
+		if (interaction.isChatInputCommand() && interaction.deferred && !interaction.replied) {
+			if (interaction.ephemeral === true) {
+				await interaction.editReply({
+					content: reply.content,
+					allowedMentions: reply.allowedMentions
+				});
+			} else {
+				await interaction.followUp(reply);
+				await interaction.deleteReply();
+			}
+		} else if (interaction.deferred || interaction.replied) {
 			await interaction.followUp(reply);
 		} else {
 			await interaction.reply(reply);

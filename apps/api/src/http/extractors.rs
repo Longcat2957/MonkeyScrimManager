@@ -171,6 +171,15 @@ fn auth_repository_error(error: &AuthRepositoryError, request_id: &RequestId) ->
             "요청을 처리하는 중 내부 오류가 발생했습니다.",
             None,
         ),
+        AuthRepositoryError::InvalidStoredUserId(_) | AuthRepositoryError::IdentityConflict => {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
     }
 }
 

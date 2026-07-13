@@ -5,7 +5,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{DiscordUserId, GuildId};
+use crate::domain::{GuildId, UserId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuditLogCursor {
@@ -59,7 +59,7 @@ pub struct GuildAuditLogPage {
 pub async fn list(
     pool: &PgPool,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
     cursor: Option<AuditLogCursor>,
     limit: i64,
 ) -> Result<GuildAuditLogPage, GuildAuditLogsRepositoryError> {
@@ -80,7 +80,7 @@ pub async fn list(
 async fn authorize_operator(
     connection: &mut PgConnection,
     guild_id: &GuildId,
-    actor_id: &DiscordUserId,
+    actor_id: &UserId,
 ) -> Result<(), AttemptError> {
     let is_operator = sqlx::query_scalar::<_, bool>(
         "SELECT true
@@ -168,7 +168,7 @@ async fn fetch_page(
           AND principal.user_id = audit.principal_id
           AND audit.principal_type = 'USER'
          LEFT JOIN users AS principal_user
-           ON principal_user.discord_id = audit.principal_id
+           ON principal_user.user_id = audit.principal_id
           AND audit.principal_type = 'USER'
          LEFT JOIN guild_members AS target_member
            ON target_member.guild_id = audit.guild_id

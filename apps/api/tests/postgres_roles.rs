@@ -121,24 +121,24 @@ async fn run_postgres_role_contract() -> TestResult {
 async fn assert_current_table_contract(runtime: &PgPool) -> TestResult {
     let mut transaction = runtime.begin().await?;
     sqlx::query(
-        "INSERT INTO users (discord_id, display_name, created_at, updated_at)
+        "INSERT INTO users (user_id, display_name, created_at, updated_at)
          VALUES ('990000000000000001', 'runtime-role-test', now(), now())",
     )
     .execute(&mut *transaction)
     .await?;
     let display_name = sqlx::query_scalar::<_, String>(
-        "SELECT display_name FROM users WHERE discord_id = '990000000000000001'",
+        "SELECT display_name FROM users WHERE user_id = '990000000000000001'",
     )
     .fetch_one(&mut *transaction)
     .await?;
     assert_eq!(display_name, "runtime-role-test");
     sqlx::query(
         "UPDATE users SET display_name = 'runtime-role-updated'
-         WHERE discord_id = '990000000000000001'",
+         WHERE user_id = '990000000000000001'",
     )
     .execute(&mut *transaction)
     .await?;
-    sqlx::query("DELETE FROM users WHERE discord_id = '990000000000000001'")
+    sqlx::query("DELETE FROM users WHERE user_id = '990000000000000001'")
         .execute(&mut *transaction)
         .await?;
     transaction.commit().await?;

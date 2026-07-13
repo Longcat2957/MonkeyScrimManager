@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::{
     domain::{
         DiscordChannelId, DiscordInteractionId, DiscordMessageId, DiscordRoleId, DiscordUserId,
-        GuildId, Lane, RecruitmentId,
+        GuildId, Lane, RecruitmentId, UserId,
     },
     error::{self, ApiError},
     http::extractors::BotServicePrincipal,
     repository::bot_workflow::{
-        self, BotActor, BotRecruitmentCommand, BotWorkflowError, SetupGuildCommand,
+        self, BotActor, BotRecruitmentCommand, BotWorkflowError, RegisterGuildMemberCommand,
+        RegisterGuildMemberInput, SetupGuildCommand,
     },
     state::{AppState, RequestId},
 };
@@ -25,6 +26,7 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ActorRequest {
     id: DiscordUserId,
+    global_display_name: String,
     display_name: String,
     avatar_hash: Option<String>,
     role_ids: Vec<DiscordRoleId>,
@@ -44,6 +46,15 @@ pub struct SetupGuildRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActorOnlyRequest {
     actor: ActorRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegisterGuildMemberRequest {
+    actor: ActorRequest,
+    game_name: String,
+    tag_line: String,
+    platform: String,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +156,57 @@ pub async fn setup_guild(
     ))
 }
 
+pub async fn register_guild_member(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(guild_id): Path<GuildId>,
+    headers: HeaderMap,
+    _principal: BotServicePrincipal,
+    Json(request): Json<RegisterGuildMemberRequest>,
+) -> Result<Response, ApiError> {
+    let interaction_id = interaction_id(&headers, &request_id)?;
+    let actor = actor(request.actor, &request_id)?;
+    let platform = super::riot_routes::parse_platform(&request.platform, &request_id)?;
+    crate::integrations::riot::RiotId::new(&request.game_name, &request.tag_line)
+        .map_err(|source| super::riot_routes::riot_client_error(source, &request_id))?;
+    let input = RegisterGuildMemberInput {
+        actor,
+        requested_game_name: request.game_name.trim().to_owned(),
+        requested_tag_line: request.tag_line.trim().to_owned(),
+        requested_platform: platform.as_str().to_owned(),
+    };
+    let pool = database(&state, &request_id)?;
+    if let Some(result) =
+        bot_workflow::preflight_guild_registration(pool, &guild_id, &interaction_id, &input)
+            .await
+            .map_err(|error| registration_command_error(error, &request_id))?
+    {
+        return Ok(error::success(StatusCode::OK, &request_id, result));
+    }
+    let resolved = super::riot_routes::riot_service(&state, &request_id)?
+        .resolve_account(
+            &input.requested_game_name,
+            &input.requested_tag_line,
+            platform,
+        )
+        .await
+        .map_err(|source| super::riot_routes::riot_client_error(source, &request_id))?;
+    let canonical = super::riot_routes::canonical_account(resolved, &request_id)?;
+    let result = bot_workflow::register_guild_member(
+        pool,
+        &guild_id,
+        &interaction_id,
+        RegisterGuildMemberCommand {
+            input,
+            account: canonical,
+        },
+    )
+    .await
+    .map_err(|error| registration_command_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, result))
+}
+
 pub async fn create_recruitment(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -216,7 +278,7 @@ pub async fn join_recruitment(
 pub async fn leave_recruitment(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
-    Path((guild_id, recruitment_id, user_id)): Path<(GuildId, RecruitmentId, DiscordUserId)>,
+    Path((guild_id, recruitment_id, user_id)): Path<(GuildId, RecruitmentId, UserId)>,
     headers: HeaderMap,
     _principal: BotServicePrincipal,
     Json(request): Json<ActorOnlyRequest>,
@@ -239,7 +301,7 @@ pub async fn leave_recruitment(
 pub async fn set_preferred_lanes(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
-    Path((guild_id, recruitment_id, user_id)): Path<(GuildId, RecruitmentId, DiscordUserId)>,
+    Path((guild_id, recruitment_id, user_id)): Path<(GuildId, RecruitmentId, UserId)>,
     headers: HeaderMap,
     _principal: BotServicePrincipal,
     Json(request): Json<PreferredLanesRequest>,
@@ -316,6 +378,12 @@ async fn recruitment_command(
 }
 
 fn actor(request: ActorRequest, request_id: &RequestId) -> Result<BotActor, ApiError> {
+    validate_text(
+        &request.global_display_name,
+        100,
+        "actor.globalDisplayName",
+        request_id,
+    )?;
     validate_text(&request.display_name, 100, "actor.displayName", request_id)?;
     if request
         .avatar_hash
@@ -329,6 +397,7 @@ fn actor(request: ActorRequest, request_id: &RequestId) -> Result<BotActor, ApiE
     }
     Ok(BotActor {
         id: request.id,
+        global_display_name: request.global_display_name.trim().to_owned(),
         display_name: request.display_name.trim().to_owned(),
         avatar_hash: request.avatar_hash,
         role_ids: request.role_ids,
@@ -341,7 +410,7 @@ fn validate_text(
     field: &'static str,
     request_id: &RequestId,
 ) -> Result<(), ApiError> {
-    if value.trim().is_empty() || value.len() > maximum {
+    if value.trim().is_empty() || value.chars().count() > maximum {
         Err(invalid_request(field, request_id))
     } else {
         Ok(())
@@ -431,6 +500,20 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "현재 길드에서는 command를 실행할 수 없습니다.",
             Some(serde_json::json!({ "currentStatus": status.as_str() })),
         ),
+        BotWorkflowError::GuildAlreadyConfigured => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "guild_already_configured",
+            "이미 초기 설정이 완료된 길드입니다. 길드 관리 화면에서 설정을 변경해 주세요.",
+            None,
+        ),
+        BotWorkflowError::GuildSetupUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "guild_setup_unavailable",
+            "비활성화되었거나 연결이 해제된 길드는 초기 설정을 실행할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
         BotWorkflowError::GuildNotConfigured | BotWorkflowError::NoActiveSeason => ApiError::new(
             StatusCode::CONFLICT,
             request_id,
@@ -450,6 +533,27 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             request_id,
             "member_inactive",
             "비활성화된 길드 멤버는 이 작업을 수행할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::RiotAccountAlreadyLinked => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "riot_account_already_linked",
+            "이 Riot 계정은 이미 다른 사용자에게 연결되어 있습니다.",
+            None,
+        ),
+        BotWorkflowError::RiotIdentityConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "riot_id_conflict",
+            "동일한 Riot ID가 다른 계정에 연결되어 있습니다.",
+            None,
+        ),
+        BotWorkflowError::UserIdentityConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "user_identity_conflict",
+            "이 Discord 계정 식별자는 다른 사용자 유형에서 이미 사용 중입니다.",
             None,
         ),
         BotWorkflowError::RecruitmentNotOpen(status)
@@ -524,5 +628,31 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "요청을 처리하는 중 내부 오류가 발생했습니다.",
             None,
         ),
+    }
+}
+
+fn registration_command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::GuildNotFound | BotWorkflowError::GuildNotConfigured => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "guild_setup_required",
+            "길드 초기 설정을 먼저 완료해야 합니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_validation_counts_unicode_characters_instead_of_utf8_bytes() {
+        let request_id = RequestId("test-request".to_owned());
+
+        assert!(validate_text(&"가".repeat(100), 100, "displayName", &request_id).is_ok());
+        assert!(validate_text(&"가".repeat(101), 100, "displayName", &request_id).is_err());
     }
 }

@@ -3,13 +3,13 @@ use thiserror::Error;
 use time::OffsetDateTime;
 
 use crate::{
-    domain::{DiscordUserId, GuildId, Lane, SeasonId},
+    domain::{GuildId, Lane, SeasonId, UserId},
     infrastructure::postgres::DatabaseTransaction,
 };
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct MmrLaneKey {
-    pub user_id: DiscordUserId,
+    pub user_id: UserId,
     pub lane: Lane,
 }
 

@@ -56,6 +56,13 @@ macro_rules! text_status {
 }
 
 text_status! {
+    pub enum UserIdentityKind {
+        Discord => "DISCORD",
+        Dummy => "DUMMY",
+    }
+}
+
+text_status! {
     pub enum GuildStatus {
         Installed => "INSTALLED",
         SetupRequired => "SETUP_REQUIRED",

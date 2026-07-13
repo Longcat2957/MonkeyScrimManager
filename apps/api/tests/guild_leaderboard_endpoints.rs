@@ -159,7 +159,7 @@ async fn run_flow() -> TestResult {
 
 async fn seed_leaderboard(pool: &PgPool) -> TestResult {
     sqlx::raw_sql(
-        "INSERT INTO users (discord_id, display_name, avatar_hash, created_at, updated_at, deleted_at)
+        "INSERT INTO users (user_id, display_name, avatar_hash, created_at, updated_at, deleted_at)
          VALUES
            ('100000000000000003', 'Longcat User', NULL, clock_timestamp(), clock_timestamp(), NULL),
            ('100000000000000004', 'Zero User', NULL, clock_timestamp(), clock_timestamp(), NULL),
@@ -302,7 +302,7 @@ async fn seed_login(
 ) -> TestResult {
     repository
         .complete_login(&NewLogin {
-            user_id: DiscordUserId::parse(user_id)?,
+            discord_user_id: DiscordUserId::parse(user_id)?,
             display_name: display_name.to_owned(),
             avatar_hash: None,
             previous_session_token_hash: None,

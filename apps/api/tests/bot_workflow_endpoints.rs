@@ -142,6 +142,97 @@ async fn run_bot_workflow() -> TestResult {
     assert_eq!(setup_replay.status(), StatusCode::OK);
     assert_eq!(body_json(setup_replay).await?["data"], setup_body["data"]);
 
+    let mut repeated_setup = setup_a.clone();
+    repeated_setup["guildName"] = json!("Must Not Replace Guild");
+    repeated_setup["guildIconHash"] = json!("must-not-replace-icon");
+    repeated_setup["operatorRoleId"] = json!(OPERATOR_ROLE_B);
+    repeated_setup["seasonName"] = json!("Must Not Replace Season");
+    repeated_setup["actor"]["globalDisplayName"] = json!("Must Not Replace User");
+    repeated_setup["actor"]["displayName"] = json!("Must Not Replace Member");
+    let setup_refresh = bot_request(
+        &app,
+        Method::POST,
+        &format!("/internal/guilds/{GUILD_A}/setup"),
+        BOT_TOKEN,
+        "setup-guild-a-refresh",
+        &repeated_setup,
+    )
+    .await?;
+    assert_eq!(setup_refresh.status(), StatusCode::CONFLICT);
+    let setup_refresh_error = body_json(setup_refresh).await?;
+    assert_eq!(
+        setup_refresh_error["error"]["code"],
+        "guild_already_configured"
+    );
+    assert_eq!(
+        setup_refresh_error["error"]["message"],
+        "이미 초기 설정이 완료된 길드입니다. 길드 관리 화면에서 설정을 변경해 주세요."
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT revision FROM guild_config WHERE guild_id = $1")
+            .bind(GUILD_A)
+            .fetch_one(&pool)
+            .await?,
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM admin_audit_log WHERE guild_id = $1 AND action = 'GUILD_SETUP'"
+        )
+        .bind(GUILD_A)
+        .fetch_one(&pool)
+        .await?,
+        1
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT discord_name, icon_hash FROM guilds WHERE guild_id = $1"
+        )
+        .bind(GUILD_A)
+        .fetch_one(&pool)
+        .await?,
+        (
+            "MonkeyBot Test Guild".to_owned(),
+            Some("guild-a-icon".to_owned())
+        )
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT display_name, operator_role_id FROM guild_config WHERE guild_id = $1"
+        )
+        .bind(GUILD_A)
+        .fetch_one(&pool)
+        .await?,
+        (
+            "MonkeyBot Test Guild".to_owned(),
+            OPERATOR_ROLE_A.to_owned()
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT name FROM seasons WHERE guild_id = $1")
+            .bind(GUILD_A)
+            .fetch_one(&pool)
+            .await?,
+        "2026 Summer"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT display_name FROM users WHERE user_id = $1")
+            .bind(OPERATOR_ID)
+            .fetch_one(&pool)
+            .await?,
+        "Guild A Operator"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT display_name FROM guild_members WHERE guild_id = $1 AND user_id = $2"
+        )
+        .bind(GUILD_A)
+        .bind(OPERATOR_ID)
+        .fetch_one(&pool)
+        .await?,
+        "Guild A Operator"
+    );
+
     let mut conflicting_setup = setup_a.clone();
     conflicting_setup["guildName"] = json!("Conflicting Guild Name");
     assert_error(
@@ -453,6 +544,7 @@ async fn run_bot_workflow() -> TestResult {
 fn actor(user_id: &str, display_name: &str, role_ids: &[&str]) -> Value {
     json!({
         "id": user_id,
+        "globalDisplayName": display_name,
         "displayName": display_name,
         "avatarHash": null,
         "roleIds": role_ids

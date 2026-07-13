@@ -2,7 +2,7 @@ use sqlx::{FromRow, PgPool};
 use thiserror::Error;
 use time::OffsetDateTime;
 
-use crate::domain::{DiscordUserId, GuildId, SeasonId};
+use crate::domain::{DiscordUserId, GuildId, SeasonId, UserId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GuildContextRole {
@@ -21,6 +21,7 @@ impl GuildContextRole {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MeRecord {
+    pub user_id: UserId,
     pub discord_id: DiscordUserId,
     pub display_name: String,
     pub avatar_hash: Option<String>,
@@ -61,10 +62,11 @@ pub struct DefaultGuildRecord {
 
 pub async fn get_me(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<Option<MeRecord>, ContextRepositoryError> {
     let row = sqlx::query_as::<_, MeRow>(
-        "SELECT app_user.discord_id,
+        "SELECT app_user.user_id,
+                identity.discord_id,
                 app_user.display_name,
                 app_user.avatar_hash,
                 CASE
@@ -74,16 +76,19 @@ pub async fn get_me(
                     ELSE NULL
                 END AS default_guild_id
          FROM users AS app_user
+         JOIN user_discord_identities AS identity
+           ON identity.user_id = app_user.user_id
          LEFT JOIN user_guild_preferences AS preference
-           ON preference.user_id = app_user.discord_id
+           ON preference.user_id = app_user.user_id
          LEFT JOIN guilds AS default_guild
            ON default_guild.guild_id = preference.default_guild_id
           AND default_guild.status = 'ACTIVE'
          LEFT JOIN guild_members AS default_membership
            ON default_membership.guild_id = preference.default_guild_id
-          AND default_membership.user_id = app_user.discord_id
+          AND default_membership.user_id = app_user.user_id
           AND default_membership.status = 'ACTIVE'
-         WHERE app_user.discord_id = $1
+         WHERE app_user.user_id = $1
+           AND app_user.identity_kind = 'DISCORD'
            AND app_user.deleted_at IS NULL",
     )
     .bind(user_id)
@@ -95,7 +100,7 @@ pub async fn get_me(
 
 pub async fn list_guilds(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<Vec<GuildSummaryRecord>, ContextRepositoryError> {
     let rows = sqlx::query_as::<_, GuildSummaryRow>(
         "SELECT guild.guild_id AS id,
@@ -133,7 +138,7 @@ pub async fn list_guilds(
 
 pub async fn get_guild(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
 ) -> Result<Option<GuildContextRecord>, ContextRepositoryError> {
     let row = sqlx::query_as::<_, GuildContextRow>(
@@ -181,22 +186,22 @@ pub async fn get_guild(
 
 pub async fn set_default_guild(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
 ) -> Result<Option<DefaultGuildRecord>, ContextRepositoryError> {
     let row = sqlx::query_as::<_, DefaultGuildRecord>(
         "INSERT INTO user_guild_preferences (user_id, default_guild_id, updated_at)
-         SELECT app_user.discord_id, guild.guild_id, clock_timestamp()
+         SELECT app_user.user_id, guild.guild_id, clock_timestamp()
          FROM users AS app_user
          JOIN guild_members AS current_membership
-           ON current_membership.user_id = app_user.discord_id
+           ON current_membership.user_id = app_user.user_id
           AND current_membership.guild_id = $2
           AND current_membership.status = 'ACTIVE'
          JOIN guilds AS guild
            ON guild.guild_id = current_membership.guild_id
           AND guild.guild_id = $2
           AND guild.status = 'ACTIVE'
-         WHERE app_user.discord_id = $1
+         WHERE app_user.user_id = $1
            AND app_user.deleted_at IS NULL
          ON CONFLICT (user_id) DO UPDATE
          SET default_guild_id = EXCLUDED.default_guild_id,
@@ -213,6 +218,7 @@ pub async fn set_default_guild(
 
 #[derive(Debug, FromRow)]
 struct MeRow {
+    user_id: UserId,
     discord_id: DiscordUserId,
     display_name: String,
     avatar_hash: Option<String>,
@@ -222,6 +228,7 @@ struct MeRow {
 impl MeRow {
     fn into_record(self) -> MeRecord {
         MeRecord {
+            user_id: self.user_id,
             discord_id: self.discord_id,
             display_name: self.display_name,
             avatar_hash: self.avatar_hash,

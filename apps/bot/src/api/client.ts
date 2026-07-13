@@ -10,6 +10,8 @@ import {
 	discordCatalogSyncDataSchema,
 	discordCatalogSyncRequestSchema,
 	joinRecruitmentRequestSchema,
+	registerGuildMemberDataSchema,
+	registerGuildMemberRequestSchema,
 	recruitmentSnapshotSchema,
 	setPreferredLanesRequestSchema,
 	setupGuildDataSchema,
@@ -22,6 +24,8 @@ import {
 	type DiscordCatalogSyncData,
 	type DiscordCatalogSyncRequest,
 	type JoinRecruitmentRequest,
+	type RegisterGuildMemberData,
+	type RegisterGuildMemberRequest,
 	type RecruitmentSnapshot,
 	type SetPreferredLanesRequest,
 	type SetupGuildData,
@@ -211,6 +215,23 @@ export class MonkeyBotApiClient {
 			context,
 			idempotencyKey: null,
 			logRequest: false
+		});
+	}
+
+	registerGuildMember(
+		guildId: string,
+		input: RegisterGuildMemberRequest,
+		context: ApiMutationContext
+	): Promise<RegisterGuildMemberData> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['internal', 'guilds', guildId, 'registrations'],
+			body: input,
+			requestSchema: registerGuildMemberRequestSchema,
+			responseSchema: registerGuildMemberDataSchema,
+			context,
+			idempotencyKey: context.idempotencyKey,
+			logRequest: true
 		});
 	}
 

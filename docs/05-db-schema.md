@@ -122,7 +122,8 @@ Guild A URL에서 Guild B ID를 전달하면 repository query가 row를 찾지 �
 ### `users`
 
 ```text
-discord_id       text        PK
+user_id          text        PK
+identity_kind    text        NOT NULL CHECK DISCORD|DUMMY
 display_name     text        NOT NULL
 avatar_hash      text        NULL
 created_at       timestamptz NOT NULL
@@ -130,9 +131,23 @@ updated_at       timestamptz NOT NULL
 deleted_at       timestamptz NULL
 ```
 
-- Discord identity의 전역 root다.
+- 서비스 사용자의 전역 root다. `DISCORD` 사용자는 canonical snowflake를, `DUMMY` 사용자는
+  `dmy_<UUIDv7>`를 `user_id`로 사용하며 DB constraint가 identity kind와 ID 형식을 함께 검증한다.
 - 삭제는 `deleted_at` soft delete다. domain history FK는 `RESTRICT`한다.
 - guild nickname은 이 table이 아니라 `guild_members.display_name`에 둔다.
+
+### `user_discord_identities`
+
+```text
+user_id       text        PK FK -> users(user_id, identity_kind) CASCADE
+discord_id    text        NOT NULL UQ CHECK Discord snowflake
+identity_kind text        NOT NULL CHECK DISCORD
+created_at    timestamptz NOT NULL
+updated_at    timestamptz NOT NULL
+```
+
+Discord OAuth와 Bot 입력은 `discord_id`로 사용자를 찾은 뒤 내부 `user_id`로 변환한다. `DUMMY` 사용자는
+이 table의 row를 가질 수 없으며 composite FK가 이를 강제한다.
 
 ### `oauth_login_attempts`
 
@@ -155,7 +170,7 @@ consumed_at              timestamptz NULL
 
 ```text
 id                uuid        PK
-user_id           text        NOT NULL FK -> users.discord_id RESTRICT
+user_id           text        NOT NULL FK -> users.user_id RESTRICT
 token_hash        bytea       NOT NULL UQ
 csrf_secret_hash  bytea       NOT NULL
 rotated_from_id   uuid        NULL FK -> user_sessions.id SET NULL
@@ -178,7 +193,9 @@ Indexes:
 
 ```text
 puuid                    text        PK
-user_id                  text        NOT NULL FK -> users.discord_id RESTRICT
+user_id                  text        NOT NULL FK -> users.user_id RESTRICT
+origin                   text        NOT NULL CHECK RIOT|DUMMY
+owner_identity_kind      text        GENERATED ALWAYS AS RIOT->DISCORD, DUMMY->DUMMY
 platform                 text        NOT NULL       # KR 등
 routing_region           text        NOT NULL       # ASIA 등
 game_name                text        NOT NULL
@@ -196,8 +213,11 @@ updated_at                timestamptz NOT NULL
 
 Constraints:
 
-- `UQ (routing_region, normalized_game_name, normalized_tag_line)`
+- `FK (user_id, owner_identity_kind) -> users(user_id, identity_kind) RESTRICT`
+- partial `UQ (routing_region, normalized_game_name, normalized_tag_line) WHERE origin=RIOT`
 - partial `UQ (user_id) WHERE is_main`
+- partial `UQ (user_id) WHERE origin=DUMMY`
+- `origin=DUMMY`이면 `puuid LIKE 'dummy:%'`이고 `last_synced_at IS NULL`
 - account가 하나 이상이면 정확히 하나가 main이라는 최소 1개 규칙은 계정 추가/삭제/메인 변경
   transaction에서 검증한다.
 - `game_name`, `tag_line`의 원문은 표시용이고 normalized 값은 lookup용이다.
@@ -209,6 +229,10 @@ Constraints:
   PUUID는 자동 이전하지 않고 conflict로 거절한다.
 - create/list/main/refresh/delete command 응답은 commit 후 같은 transaction 결과로 만든 최신 user account
   snapshot이다. Client가 main account를 추론하거나 mutation 직후 재조회할 필요가 없다.
+- `origin=RIOT`은 `identity_kind=DISCORD`, `origin=DUMMY`는 `identity_kind=DUMMY` user만 소유한다.
+  Generated owner kind와 composite FK가 application 경계를 우회한 잘못된 소유 관계도 거부한다.
+- 합성 account는 Riot provider lookup/refresh, public Riot autocomplete와 실제 PUUID ownership query에서
+  제외한다.
 - `normalize_riot_id_v1`은 Unicode NFKC, 앞뒤 Unicode whitespace trim, locale-independent Unicode
   case fold 순으로 적용하며 내부 whitespace는 보존한다. PostgreSQL collation/`lower()`에 맡기지
   않고 Rust의 같은 pure function을 create/update/search/import에 사용하고 golden vector를 둔다.
@@ -265,7 +289,7 @@ snapshot 갱신 성공 시 match ordering이 달라질 수 있으므로 같은 t
 ### `user_privacy_settings`
 
 ```text
-user_id                       text        PK FK -> users.discord_id CASCADE
+user_id                       text        PK FK -> users.user_id CASCADE
 public_profile_enabled        boolean     NOT NULL
 show_riot_ids                 boolean     NOT NULL
 allow_external_record_search boolean     NOT NULL
@@ -286,7 +310,7 @@ updated_at                    timestamptz NOT NULL
 ### `user_guild_preferences`
 
 ```text
-user_id          text        PK FK -> users.discord_id CASCADE
+user_id          text        PK FK -> users.user_id CASCADE
 default_guild_id text        NULL
 updated_at       timestamptz NOT NULL
 
@@ -301,7 +325,7 @@ ACTIVE membership만 사용한다.
 ### `user_champion_preferences`
 
 ```text
-user_id      text     NOT NULL FK -> users.discord_id CASCADE
+user_id      text     NOT NULL FK -> users.user_id CASCADE
 lane         text     NOT NULL CHECK canonical lane
 position     smallint NOT NULL CHECK 1..10
 champion_id  text     NOT NULL
@@ -319,6 +343,78 @@ UQ (user_id, lane, champion_id)
 - replace transaction은 기존 lane row를 교체하고 position을 1부터 다시 부여한 뒤 commit 결과에서 다섯
   lane의 full snapshot을 만든다. Row가 없는 lane도 response에서 빈 배열로 반환한다.
 
+## Development 더미 사용자 관리
+
+### `dummy_user_profiles`
+
+```text
+user_id       text        PK FK -> users.user_id RESTRICT CHECK dmy_<UUIDv7>
+stable_key    text        NOT NULL UQ CHECK ^[a-z0-9][a-z0-9_-]{0,63}$
+state         text        NOT NULL CHECK ACTIVE|ARCHIVED
+avatar_seed   text        NULL CHECK trim, 1..128
+notes         text        NULL CHECK <= 1000
+revision      bigint      NOT NULL CHECK >= 0
+created_by    text        NOT NULL FK -> users.user_id RESTRICT
+updated_by    text        NOT NULL FK -> users.user_id RESTRICT
+created_at    timestamptz NOT NULL
+updated_at    timestamptz NOT NULL
+```
+
+Profile에는 provenance, 표시 seed, 메모, lifecycle과 revision만 둔다. Privacy, guild membership/MMR,
+선호 챔피언, 합성 Riot account, workflow participant를 JSON으로 복제하지 않는다. `created_by`와
+`updated_by`는 로그인한 실제 service admin이다.
+
+`ARCHIVED`는 `users.deleted_at` soft delete와 다른 운영 상태다. Archive는 OPEN/CLOSED 일반·경매 모집의
+JOINED 참가가 없을 때만 허용하고, ACTIVE 길드 소속을 INACTIVE로 바꾸면서 각 길드의 MEMBERS revision과
+감사 로그를 갱신한다. Restore는 profile만 ACTIVE로 바꾸고 길드 소속은 자동 재활성화하지 않는다.
+
+### `dummy_user_groups`
+
+```text
+id           uuid        PK
+name         text        NOT NULL CHECK trim, 1..100
+description  text        NULL CHECK <= 500
+revision     bigint      NOT NULL CHECK >= 0
+created_by   text        NOT NULL FK -> users.user_id RESTRICT
+updated_by   text        NOT NULL FK -> users.user_id RESTRICT
+created_at   timestamptz NOT NULL
+updated_at   timestamptz NOT NULL
+
+UQ lower(name)
+```
+
+### `dummy_user_group_members`
+
+```text
+group_id  uuid        NOT NULL FK -> dummy_user_groups.id CASCADE
+user_id   text        NOT NULL FK -> dummy_user_profiles.user_id RESTRICT
+position  smallint    NOT NULL CHECK 1..100
+added_at  timestamptz NOT NULL
+
+PK (group_id, user_id)
+UQ (group_id, position)
+```
+
+Group은 guild나 workflow에 종속되지 않는 재사용 선택 집합이다. Position은 UI와 기능 배치에서 사용하는
+명시적 순서이며 member 전체 교체 transaction에서 1부터 다시 부여한다.
+
+### `dummy_user_audit_log`
+
+```text
+id              uuid        PK
+actor_user_id   text        NOT NULL FK -> users.user_id RESTRICT
+action          text        NOT NULL CHECK 1..100
+target_type     text        NOT NULL CHECK DUMMY_USER|DUMMY_USER_GROUP|GUILD_MEMBER
+target_id       text        NOT NULL CHECK 1..256
+request_id      text        NOT NULL CHECK 1..128
+before_summary  jsonb       NULL
+after_summary   jsonb       NULL
+created_at      timestamptz NOT NULL
+```
+
+이 table은 append-only다. 길드 소속이나 모집 참가처럼 기존 guild 업무 원장에도 영향을 주는 mutation은
+해당 `admin_audit_log`도 함께 기록한다.
+
 ## Guild root와 시즌
 
 ### `guilds`
@@ -328,7 +424,7 @@ guild_id      text        PK
 discord_name  text        NOT NULL
 icon_hash     text        NULL
 status        text        NOT NULL CHECK INSTALLED|SETUP_REQUIRED|ACTIVE|DISABLED|LEFT
-installed_by  text        NULL FK -> users.discord_id RESTRICT
+installed_by  text        NULL FK -> users.user_id RESTRICT
 installed_at  timestamptz NOT NULL
 activated_at  timestamptz NULL
 left_at       timestamptz NULL
@@ -341,7 +437,7 @@ Bot이 제거되어도 row와 domain history는 삭제하지 않고 `LEFT`로 �
 
 ```text
 guild_id          text        NOT NULL FK -> guilds.guild_id RESTRICT
-user_id           text        NOT NULL FK -> users.discord_id RESTRICT
+user_id           text        NOT NULL FK -> users.user_id RESTRICT
 display_name      text        NOT NULL
 status            text        NOT NULL CHECK ACTIVE|INACTIVE
 main_lane         text        NULL CHECK canonical lane
@@ -360,6 +456,13 @@ PK (guild_id, user_id)
   동기화된 Discord role membership으로 판정한다.
 - `registered`는 `registered_at IS NOT NULL`로 계산한다. ACTIVE/INACTIVE와 Riot 계정 연결 여부는
   별도 개념이며 합치지 않는다.
+- guild에서 실행한 `/등록`이 성공하면 Discord snowflake로 `users`를 확인한 뒤
+  `(guild_id, user_id)` row와 PUUID 기반 `riot_accounts` 연결을 같은 짧은 transaction에서 확정한다.
+  새 member는 ACTIVE와 `registered_at`을 기록한다. 기존 ACTIVE member는 status를 유지하면서 Discord
+  전역/길드 표시 정보, 활동·동기화 시각과 role snapshot을 최신 interaction 기준으로 갱신한다. 기존
+  INACTIVE member의 status와 `inactivated_at`은 변경하지 않고 command를 거절한다.
+- 같은 interaction 또는 같은 사용자의 반복 `/등록`은 멱등적으로 처리한다. `PK (guild_id, user_id)`와
+  PUUID/user ownership constraint를 우회해 중복 소속이나 중복 계정을 만들지 않는다.
 - admin member DTO의 `mainLane`과 `lastActiveAt`은 각각 nullable 원본을 그대로 사용한다. 값이 없는
   member에 임의 lane이나 timestamp를 합성하지 않는다.
 - 상대 시간 label과 한국어 role/status label은 frontend에서 timestamp/canonical enum으로 계산한다.
@@ -2143,6 +2246,15 @@ FK dependency가 성립하는 순서로 migration을 고정한다.
 
 0011_guild_settings_discord_catalog.sql
   guild_config entry channel, Discord role/channel catalogs and sync state
+
+0012_user_identity_kinds.sql
+  provider-neutral user ID, DISCORD/DUMMY identity kind, Discord identity mapping
+
+0013_dummy_users.sql
+  persistent dummy profiles/groups/audit, synthetic Riot account origin
+
+0014_riot_account_owner_identity.sql
+  Riot account origin and owner identity kind composite FK
 ```
 
 `games.auction_match_id`가 참조할 table보다 먼저 games를 생성하지 않는다. migration file은
@@ -2322,7 +2434,7 @@ logical schema fingerprint는 정렬한 `PRAGMA table_info/index_list/foreign_ke
 
 | v3                               | PostgreSQL                                          |
 | -------------------------------- | --------------------------------------------------- |
-| Discord user ID                  | `users.discord_id` 그대로 보존                      |
+| Discord user ID                  | `user_discord_identities.discord_id`에 그대로 보존  |
 | numeric season ID                | UUIDv7 + `legacy_entity_maps`                       |
 | series/recruitment 동일 ID       | 서로 다른 UUID, `series.source_recruitment_id` 연결 |
 | tournament/recruitment 동일 ID   | 서로 다른 UUID, source FK 연결                      |
@@ -2641,7 +2753,7 @@ MVP에는 별도 최종 확인 command를 만들지 않으며 operations의 `RES
 
 ## Schema 완료 조건
 
-- 빈 DB에 `0001..0011` migration이 한 번에 성공한다.
+- 빈 DB에 repository의 모든 forward migration이 한 번에 성공한다.
 - migration 순서에 존재하지 않는 parent FK가 없다.
 - 모든 guild-owned FK가 tenant를 포함한다.
 - 모든 frontend command가 명확한 aggregate, revision, transaction을 가진다.

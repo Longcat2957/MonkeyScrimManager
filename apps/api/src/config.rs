@@ -75,6 +75,7 @@ impl FromStr for Environment {
 #[derive(Clone)]
 pub struct Config {
     environment: Environment,
+    dummy_users_enabled: bool,
     bind_addr: SocketAddr,
     public_origin: Uri,
     log_filter: String,
@@ -144,6 +145,13 @@ impl Config {
         let environment = required(&mut lookup, "MONKEYBOT_ENV")?
             .parse()
             .map_err(|()| ConfigError::invalid("MONKEYBOT_ENV", "unsupported environment"))?;
+        let dummy_users_enabled = parse_bool(&mut lookup, "MONKEYBOT_DUMMY_USERS_ENABLED", false)?;
+        if dummy_users_enabled && environment == Environment::Production {
+            return Err(ConfigError::invalid(
+                "MONKEYBOT_DUMMY_USERS_ENABLED",
+                "cannot be enabled in production",
+            ));
+        }
 
         let bind_addr: SocketAddr = required(&mut lookup, "MONKEYBOT_BIND_ADDR")?
             .parse()
@@ -193,6 +201,7 @@ impl Config {
 
         Ok(Self {
             environment,
+            dummy_users_enabled,
             bind_addr,
             public_origin,
             log_filter,
@@ -208,6 +217,10 @@ impl Config {
 
     pub const fn environment(&self) -> Environment {
         self.environment
+    }
+
+    pub const fn dummy_users_enabled(&self) -> bool {
+        self.dummy_users_enabled
     }
 
     pub const fn bind_addr(&self) -> SocketAddr {
@@ -678,6 +691,7 @@ impl fmt::Debug for Config {
         formatter
             .debug_struct("Config")
             .field("environment", &self.environment)
+            .field("dummy_users_enabled", &self.dummy_users_enabled)
             .field("bind_addr", &self.bind_addr)
             .field("public_origin", &self.public_origin)
             .field("log_filter", &self.log_filter)
@@ -740,6 +754,19 @@ fn parse_origin(value: &str, environment: Environment) -> Result<Uri, ConfigErro
     }
 
     Ok(origin)
+}
+
+fn parse_bool(
+    lookup: &mut impl FnMut(&str) -> Option<String>,
+    key: &'static str,
+    default: bool,
+) -> Result<bool, ConfigError> {
+    match lookup(key).as_deref() {
+        None => Ok(default),
+        Some("true" | "1") => Ok(true),
+        Some("false" | "0") => Ok(false),
+        Some(_) => Err(ConfigError::invalid(key, "must be true, false, 1, or 0")),
+    }
 }
 
 fn validate_database_url(value: &str, key: &'static str) -> Result<(), ConfigError> {
@@ -844,12 +871,44 @@ mod tests {
         let config = Config::from_map(&valid_values()).expect("config should parse");
 
         assert_eq!(config.environment(), Environment::Test);
+        assert!(!config.dummy_users_enabled());
         assert_eq!(config.request_timeout(), Duration::from_secs(10));
         assert_eq!(config.shutdown_timeout(), Duration::from_secs(20));
         assert_eq!(config.max_body_bytes(), 1024 * 1024);
         assert!(config.database().is_none());
         assert!(config.bot_service().is_none());
         assert!(config.riot_service().is_none());
+    }
+
+    #[test]
+    fn dummy_users_can_only_be_enabled_outside_production() {
+        let mut values = valid_values();
+        values.insert(
+            "MONKEYBOT_DUMMY_USERS_ENABLED".to_owned(),
+            "true".to_owned(),
+        );
+        assert!(
+            Config::from_map(&values)
+                .expect("test dummy users should be allowed")
+                .dummy_users_enabled()
+        );
+
+        values.insert("MONKEYBOT_ENV".to_owned(), "production".to_owned());
+        values.insert(
+            "MONKEYBOT_DATABASE_URL".to_owned(),
+            "postgresql://localhost/monkeybot".to_owned(),
+        );
+        values.insert(
+            "MONKEYBOT_PUBLIC_ORIGIN".to_owned(),
+            "https://monkeybot.lol".to_owned(),
+        );
+        assert!(matches!(
+            Config::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: "MONKEYBOT_DUMMY_USERS_ENABLED",
+                ..
+            })
+        ));
     }
 
     #[test]

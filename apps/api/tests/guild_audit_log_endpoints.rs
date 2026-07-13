@@ -323,7 +323,7 @@ async fn create_login(
 ) -> TestResult {
     repository
         .complete_login(&NewLogin {
-            user_id: DiscordUserId::parse(user_id)?,
+            discord_user_id: DiscordUserId::parse(user_id)?,
             display_name: display_name.to_owned(),
             avatar_hash: None,
             previous_session_token_hash: None,
@@ -340,7 +340,7 @@ async fn seed_data(pool: &PgPool) -> TestResult {
     let now = OffsetDateTime::now_utc();
     sqlx::query(
         "INSERT INTO users (
-             discord_id, display_name, avatar_hash, created_at, updated_at, deleted_at
+             user_id, display_name, avatar_hash, created_at, updated_at, deleted_at
          ) VALUES ($1, 'Global Fallback', NULL, $2, $2, NULL)",
     )
     .bind(FALLBACK_USER_ID)

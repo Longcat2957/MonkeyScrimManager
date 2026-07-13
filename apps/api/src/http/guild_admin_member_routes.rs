@@ -7,7 +7,7 @@ use axum::{
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    domain::{DiscordUserId, GuildId},
+    domain::{GuildId, UserId},
     error::{self, ApiError},
     http::extractors::{AuthenticatedSession, require_csrf},
     repository::guild_admin_members::{
@@ -38,7 +38,7 @@ pub async fn members(
 pub async fn adjust_mmr(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
-    Path((guild_id, member_id)): Path<(GuildId, DiscordUserId)>,
+    Path((guild_id, member_id)): Path<(GuildId, UserId)>,
     headers: HeaderMap,
     principal: AuthenticatedSession,
     Json(command): Json<AdjustMmrCommand>,
@@ -62,7 +62,7 @@ pub async fn adjust_mmr(
 pub async fn set_status(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
-    Path((guild_id, member_id)): Path<(GuildId, DiscordUserId)>,
+    Path((guild_id, member_id)): Path<(GuildId, UserId)>,
     headers: HeaderMap,
     principal: AuthenticatedSession,
     Json(command): Json<SetMemberStatusCommand>,

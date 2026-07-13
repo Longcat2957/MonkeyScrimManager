@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 const snowflakeSchema = z.string().regex(/^[1-9][0-9]{0,19}$/);
+const dummyUserIdSchema = z
+	.string()
+	.regex(/^dmy_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+export const userIdSchema = z.union([snowflakeSchema, dummyUserIdSchema]);
 const uuidSchema = z.uuid();
 const timestampSchema = z.iso.datetime({ offset: true });
 const hrefSchema = z.string().startsWith('/g/');
@@ -330,7 +334,7 @@ export const guildLeaderboardRoleStatSchema = z
 
 export const guildLeaderboardPlayerSchema = z
 	.object({
-		id: snowflakeSchema,
+		id: userIdSchema,
 		name: z.string().min(1),
 		tag: z.string().min(1).nullable(),
 		profileIconId: nonnegativeInteger.nullable(),
@@ -499,6 +503,7 @@ export const guildContextDataSchema = guildAccessSummarySchema
 	.strict();
 
 export const guildMemberStatusSchema = z.enum(['ACTIVE', 'INACTIVE']);
+export const userIdentityKindSchema = z.enum(['DISCORD', 'DUMMY']);
 
 const guildMemberLaneMmrSchema = z
 	.object({
@@ -512,7 +517,8 @@ const guildMemberLaneMmrSchema = z
 
 export const guildAdminMemberSchema = z
 	.object({
-		id: snowflakeSchema,
+		id: userIdSchema,
+		identityKind: userIdentityKindSchema.default('DISCORD'),
 		discordName: z.string().min(1),
 		riotId: z.string().min(1).nullable(),
 		role: guildRoleSchema,
@@ -528,7 +534,7 @@ export const guildAdminMembersDataSchema = z
 	.object({
 		revision: nonnegativeInteger,
 		updatedAt: timestampSchema,
-		updatedBy: snowflakeSchema.nullable(),
+		updatedBy: userIdSchema.nullable(),
 		members: z.array(guildAdminMemberSchema)
 	})
 	.strict();
@@ -562,7 +568,7 @@ export const guildAdminSettingsDataSchema = z
 		settings: guildAdminSettingsSchema,
 		revision: nonnegativeInteger,
 		updatedAt: timestampSchema,
-		updatedBy: snowflakeSchema.nullable(),
+		updatedBy: userIdSchema.nullable(),
 		catalogUpdatedAt: timestampSchema.nullable(),
 		roles: z.array(guildAdminRoleOptionSchema),
 		channels: z.array(guildAdminChannelOptionSchema)

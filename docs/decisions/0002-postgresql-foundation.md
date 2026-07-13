@@ -23,6 +23,11 @@ Axum API의 PostgreSQL 기반과 Phase 2 이후 repository가 따라야 할 저�
 - `0001`부터 `0009`까지 SQLx forward migration을 순서대로 적용한다.
 - API process는 startup migration을 실행하지 않는다.
 - 배포 전 `monkeybot-migrate` one-shot process가 별도 migration credential로 migration을 적용한다.
+- 기본 배포는 expand-contract migration만 허용한다. 실행 중인 binary가 참조하는 column을 rename/drop하는
+  migration은 rolling 배포와 섞지 않고 모든 API instance를 내린 maintenance window에서만 적용한다.
+- `0012_user_identity_kinds.sql`은 `users.discord_id`를 `users.user_id`로 바꾸는 명시적 maintenance
+  migration이다. 이 migration을 포함한 최초 배포는 새 image를 먼저 준비한 뒤 API 전체 중지, backup
+  확인, migration, runtime grant, 새 API 기동 순서를 지켜야 한다.
 - `/readyz`는 연결 성공만으로 준비 완료가 되지 않는다. embedded migration과 DB의 version, success,
   checksum 집합이 정확히 같아야 한다.
 - migration SQL은 기존 배포 후 수정하지 않는다. 변경은 새 forward migration으로 추가한다.

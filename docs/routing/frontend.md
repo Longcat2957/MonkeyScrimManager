@@ -186,6 +186,45 @@ WebSocket: 사용하지 않는다.
 - image binary를 Valkey에 저장하지 않는다.
 - versioned Data Dragon asset은 HTTP cache 계층에서 처리한다.
 
+## Development 사용자 Routes
+
+### `/dev/users`
+
+파일:
+
+- `apps/web/src/routes/dev/users/+page.server.ts`
+- `apps/web/src/routes/dev/users/+page.svelte`
+
+목적:
+
+- PostgreSQL에 지속되는 더미 사용자를 단일/일괄 생성한다.
+- Privacy, 길드 소속과 초기 lane MMR, 선호 챔피언, 합성 Riot 계정을 관리한다.
+- 5/10/20인 등 기능에서 재사용할 순서 있는 사용자 group을 관리한다.
+- 삭제 영향 확인, 삭제, archive/restore를 수행한다.
+
+접근 조건:
+
+- `MONKEYBOT_DUMMY_USERS_ENABLED=true`인 non-production API.
+- Discord OAuth로 로그인한 service admin.
+- AppShell의 service-admin 계정 menu와 길드 member 관리 화면의 `더미 회원` 링크에서 진입한다.
+
+초기 데이터:
+
+- `GET /api/dev/dummy-users?limit=100&offset=0`
+- `GET /api/dev/dummy-users/catalog`
+- `GET /api/dev/dummy-groups`
+- `GET /api/me`
+- `GET /api/me/guilds`
+- Data Dragon champion catalog
+
+Mutation은 모두 CSRF와 새 browser `Idempotency-Key`를 사용한다. Revision conflict나 삭제 차단처럼 backend가
+반환한 public error code/message/request ID를 그대로 표시한다. 일괄 생성과 포함된 길드 배치/MMR은 bulk
+API 한 번으로 확정한다. 선택 group 추가는 별도 revision mutation이므로 실패해도 생성 성공을 숨기지 않고
+후속 배치 실패 이유를 표시한다.
+
+이 route는 production 사용자 관리 화면이 아니다. 더미 identity는 로그인하거나 guild operator가 될 수
+없으며 UI도 Discord role, mention, DM 동작을 제공하지 않는다.
+
 ## 일반 내전 Routes
 
 ### `/g/[guildId]/recruitments/[id]/entry`
@@ -213,6 +252,17 @@ Backend 데이터:
 - `POST /api/guilds/:guildId/recruitments/:id/entry-draft/reset`
 - `POST /api/guilds/:guildId/recruitments/:id/reopen`
 - `POST /api/guilds/:guildId/series`
+
+Service admin이면서 현재 길드 operator인 경우에만 `더미 참가자` 개발 panel을 추가로 표시한다.
+
+- `GET /api/dev/guilds/:guildId/recruitments/:id/participants`
+- `POST /api/dev/guilds/:guildId/recruitments/:id/participants/preview`
+- `POST|DELETE /api/dev/guilds/:guildId/recruitments/:id/participants`
+- `GET /api/dev/dummy-users?state=ACTIVE&guildId=:guildId&limit=100&offset=0`
+
+Panel은 먼저 preview의 전체 issue와 예상 인원을 보여주고 `canApply=true`일 때만 적용한다. Apply에는
+preview의 `currentRevision`과 새 idempotency key를 전달하며 성공한 authoritative overview로 panel을
+갱신한다. 실제 참가자/entry draft 화면 갱신은 같은 recruitment topic invalidate 후 재조회 계약을 따른다.
 
 현재 mock page에 없는 reset/reopen/createSeries control은 API adapter 단계에서
 `EntryDraftBoard` callback으로 연결해야 하며 backend만 구현하고 숨겨 두지 않는다.

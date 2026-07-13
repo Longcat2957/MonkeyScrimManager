@@ -39,8 +39,15 @@ MonkeyBot의 인증은 오직 Discord OAuth2만 지원한다.
 - 이메일/비밀번호 계정은 만들지 않는다.
 - 자체 username/password 로그인은 만들지 않는다.
 - 소셜 로그인 제공자를 추가하지 않는다.
-- 앱 내부 사용자는 Discord OAuth2 session에서 확인된 Discord user id를 기준으로 식별한다.
-- `/등록` 명령과 Riot 계정 관리는 앱 회원가입이 아니라, 이미 Discord로 식별된 사용자에게 Riot ID를 연결하는 기능이다.
+- 웹과 Bot에서 행동하는 실제 사용자는 Discord OAuth2/interaction에서 확인된 Discord user id를
+  `user_discord_identities`를 거쳐 내부 `UserId`로 식별한다. Development DB의 `DUMMY` 사용자는 같은
+  participant/MMR 관계에 참여할 수 있지만 로그인, Discord role, mention/DM의 principal이 될 수 없다.
+- `/등록` 명령과 Riot 계정 관리는 앱 회원가입이 아니다. 사용자는 Discord user id(snowflake)로
+  식별하고 Riot 계정은 Riot PUUID로 식별한다. Discord 전역 표시명은 `users`, 서버별 닉네임은
+  `guild_members`에 분리하며 닉네임과 Riot ID 문자열은 identity key로 사용하지 않는다.
+- Discord guild에서 실행한 `/등록`은 Riot 계정 연결과 함께 `(guild_id, Discord user id)` 길드 소속을
+  등록한다. 같은 사용자가 여러 guild에서 실행해도 전역 사용자/Riot 계정은 공유하고 길드 소속과
+  전적/MMR은 각 guild에 분리한다.
 
 ## 계승할 핵심 기능
 

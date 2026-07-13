@@ -1,7 +1,7 @@
 use sqlx::{FromRow, PgPool};
 use thiserror::Error;
 
-use crate::domain::{DiscordUserId, GuildId};
+use crate::domain::{GuildId, UserId};
 
 #[derive(Clone, Debug, Eq, FromRow, PartialEq)]
 pub struct RiotAccountSuggestionRecord {
@@ -43,6 +43,7 @@ pub async fn public_riot_accounts(
                     1 AS source_priority
              FROM riot_accounts AS account
              WHERE account.platform = $1
+               AND account.origin = 'RIOT'
                AND (
                    starts_with(account.normalized_game_name, $2)
                    OR starts_with(
@@ -119,7 +120,7 @@ pub async fn public_riot_accounts(
 
 pub async fn guild_members(
     pool: &PgPool,
-    viewer_id: &DiscordUserId,
+    viewer_id: &UserId,
     guild_id: &GuildId,
     display_name_prefix: &str,
     limit: i64,
@@ -152,7 +153,7 @@ pub async fn guild_members(
                     END AS profile_icon_id
              FROM guild_members AS member
              JOIN users AS app_user
-               ON app_user.discord_id = member.user_id
+               ON app_user.user_id = member.user_id
               AND app_user.deleted_at IS NULL
              LEFT JOIN riot_accounts AS account
                ON account.user_id = member.user_id

@@ -28,7 +28,9 @@ Backend 책임:
 ## 공통 계약
 
 - 모든 guild resource는 /api/guilds/{guildId}/ 아래에 둔다.
-- ID와 Discord snowflake는 JSON string이다.
+- `UserId`는 provider와 무관한 opaque JSON string이다. Discord 사용자는 snowflake, 개발용 더미
+  사용자는 `dmy_<UUIDv7>`를 사용한다. Guild/role/channel/message/interaction ID는 계속 Discord
+  snowflake다.
 - JSON은 camelCase, timestamp는 UTC RFC 3339다.
 - lane은 TOP/JUNGLE/MID/BOTTOM/SUPPORT다.
 - workflow root DTO는 opaque `id`와 사람용 `displayNumber`를 분리한다. Route/deep link는 id,
@@ -140,13 +142,15 @@ currentSeason
 
 `/초기설정` 전용 Bot service-principal command다. Discord interaction ID를
 `Idempotency-Key`로 전달한다. actor의 Discord guild 관리 권한은 Bot이 먼저 확인하고,
-backend는 guild/user/member/config/ACTIVE season/counter를 한 transaction에서 upsert한다.
+backend는 `INSTALLED|SETUP_REQUIRED`이고 `guild_config`가 없는 길드에만
+guild/user/member/config/ACTIVE season/counter를 한 transaction에서 생성한다.
 
 ```json
 {
 	"actor": {
 		"id": "100000000000000001",
-		"displayName": "Longcat",
+		"globalDisplayName": "Longcat",
+		"displayName": "MSM Longcat",
 		"avatarHash": null,
 		"roleIds": ["300000000000000001"]
 	},
@@ -158,7 +162,65 @@ backend는 guild/user/member/config/ACTIVE season/counter를 한 transaction에�
 ```
 
 같은 key와 body의 재전송은 같은 guild/season response를 반환한다. 같은 key의 다른 body는
-`409 idempotency_conflict`다.
+`409 idempotency_conflict`다. 설정 완료 뒤 새 interaction으로 다시 실행하면
+`409 guild_already_configured`를 반환하고 길드 이름, 운영자 role, member, season을 변경하지 않는다.
+초기화 이후 설정 변경은 `PUT /api/guilds/{guildId}/settings`에서 revision 검증과 감사 로그를 거쳐
+수행한다.
+
+### POST /internal/guilds/{guildId}/registrations
+
+Discord `/등록 riot_id` 전용 Bot service-principal command다. Discord interaction snowflake를
+`Idempotency-Key`로 전달하며, DM이 아닌 현재 guild의 실행자 본인만 대상이 된다.
+
+```json
+{
+	"actor": {
+		"id": "100000000000000001",
+		"globalDisplayName": "Longcat",
+		"displayName": "긴고양이",
+		"avatarHash": null,
+		"roleIds": ["300000000000000001"]
+	},
+	"gameName": "Longcat",
+	"tagLine": "KR1",
+	"platform": "KR"
+}
+```
+
+`actor.id`가 전역 사용자 identity다. `globalDisplayName`은 `users.display_name`, `displayName`은 현재
+서버의 `guild_members.display_name`에만 반영하며 어느 표시명도 key로 사용하지 않는다. Riot account의
+canonical key는 provider가 확인한 PUUID다.
+
+Riot resolve는 DB transaction 전에 수행한다. 성공한 resolved account로 짧은 transaction을 열어
+`users`, 현재 `(guild_id, user_id)`의 `guild_members`, PUUID 기반 `riot_accounts`와 Discord role
+snapshot을 함께 확정한다. 어느 한쪽만 저장된 상태로 성공을 응답하지 않는다.
+
+성공은 `200`이며 data는 다음 형태다.
+
+```text
+member
+  id
+  displayName
+  status            ACTIVE
+riotAccount
+  puuid
+  gameName
+  tagLine
+  platform
+  isMain
+registration        CREATED | EXISTING
+accountLink         CREATED | EXISTING
+```
+
+`registration`은 현재 guild membership의 생성 여부이고 `accountLink`는 전역 PUUID 연결의 생성 여부다.
+같은 사용자가 같은 guild에서 반복 실행하면 둘 다 `EXISTING`일 수 있다. 다른 guild에서 같은 PUUID를
+등록하면 `registration=CREATED`, `accountLink=EXISTING`으로 전역 계정만 재사용한다.
+
+같은 idempotency key와 payload 재전송은 기존 response를 replay하고, 같은 key의 다른 payload는 `409
+idempotency_conflict`다. 기존 member가 INACTIVE면 사용자/소속/role/Riot 계정을 갱신하거나 자동
+재활성화하지 않고 `403 member_inactive`를 반환한다. 그 밖의 주요 오류는 `400 invalid_riot_id`, `404`
+Riot account not found, `409 guild_setup_required|guild_inactive|riot_account_already_linked`, `429` provider
+rate limit, `502` provider timeout/failure, `503` Riot service unavailable이다.
 
 ### PUT /internal/guilds/{guildId}/discord-catalog
 
@@ -185,6 +247,220 @@ role/channel ID는 각 목록에서 중복될 수 없고 `@everyone` role(`role.
 404다. Bot은 ready와 60초 주기 full sync, guild/channel/role 변경 event의 1초 debounce, `/초기설정`
 직후 동기화를 통해 이 endpoint를 호출한다. Channel projection은 Bot이 `ViewChannel`과 `SendMessages`
 권한을 가진 text/announcement channel만 포함한다.
+
+## Development 더미 사용자
+
+더미 사용자는 test fixture가 아니라 development PostgreSQL에 지속되는 `identity_kind=DUMMY` 사용자다.
+모든 경로는 `MONKEYBOT_DUMMY_USERS_ENABLED=true`일 때만 router에 등록한다. Production에서는 이 설정을
+거절하고, 기능이 꺼진 환경에서는 아래 경로가 `403`이 아니라 `404`다.
+
+공통 권한과 요청 규칙:
+
+- 모든 read와 preview는 Discord OAuth session의 service admin만 호출한다.
+- mutation은 session, exact Origin, CSRF cookie/header, visible ASCII 1..128 byte
+  `Idempotency-Key`가 모두 필요하다.
+- mutation replay 보존 기간은 24시간이다. 같은 key와 같은 요청은 저장 응답을 재생하고 다른 요청은
+  `409 idempotency_conflict`, 처리 중이면 `409 idempotency_in_progress`다.
+- 실제 로그인한 service admin이 audit actor다. 더미 사용자는 권한 principal이 될 수 없다.
+- JSON body는 `deny_unknown_fields`이며 응답은 항상 authoritative post-commit snapshot이다.
+
+### GET/POST /api/dev/dummy-users
+
+GET query:
+
+```text
+query                 표시 이름 또는 stable key 부분 검색
+state                 ACTIVE | ARCHIVED
+guildId               해당 길드에 배치된 사용자
+groupId               해당 재사용 그룹의 사용자
+limit                 기본 50, 1..100
+offset                기본 0, 0 이상
+```
+
+POST는 한 사용자를 생성한다. `stableKey`는 전역에서 유일한 1..64자 소문자 영숫자/`_`/`-` 값이고 첫
+문자는 영숫자다. `displayName`은 trim된 1..100자다. `avatarSeed`, `notes`, privacy, 길드 배치,
+합성 Riot 계정은 선택이다. Privacy 기본은 세 값 모두 `false`다.
+
+```json
+{
+	"stableKey": "balanced-mid-01",
+	"displayName": "MID 01",
+	"privacy": {
+		"publicProfileEnabled": false,
+		"showRiotIds": false,
+		"allowExternalRecordSearch": false
+	},
+	"guildMemberships": [
+		{
+			"guildId": "1525851181157580861",
+			"displayName": "MID 01",
+			"status": "ACTIVE",
+			"mainLane": "MID",
+			"laneMmr": {
+				"top": 1500,
+				"jungle": 1500,
+				"mid": 1600,
+				"bottom": 1500,
+				"support": 1500
+			}
+		}
+	]
+}
+```
+
+사용자 생성과 포함된 privacy, 길드 소속, 활성 시즌 MMR, 합성 Riot 계정은 한 transaction이다.
+
+### POST /api/dev/dummy-users/bulk
+
+`{ users: CreateDummyUser[] }`로 1..100명을 한 transaction에서 생성한다. Batch 안의 stable key도
+중복될 수 없다. 한 사용자라도 validation, guild, season, identity 제약에 실패하면 전체를 rollback한다.
+성공은 `201 { total, users }`다.
+
+### GET/PATCH/DELETE /api/dev/dummy-users/{userId}
+
+GET은 privacy, 합성 Riot 계정, 다섯 lane 선호 챔피언, 길드 배치/MMR, group ID를 합친 projection을
+반환한다. PATCH는 `expectedRevision`과 변경할 `displayName|avatarSeed|notes|privacy` 중 하나 이상을
+받는다.
+
+DELETE 전에 `GET /api/dev/dummy-users/{userId}/deletion-impact`로 다음 count를 확인한다.
+
+```text
+blockingReferences
+  guildMemberships, recruitmentParticipants, auctionParticipants, gameParticipants,
+  userSessions, discordIdentities, realRiotAccounts
+removableReferences
+  groupMemberships, championPreferences, syntheticRiotAccounts
+```
+
+blocking count가 하나라도 있으면 `canDelete=false`이며 DELETE는 `409 dummy_user_deletion_blocked`다.
+연결 이력이 없는 경우에만 removable child와 사용자를 삭제한다. 이력이 있으면 archive를 사용한다.
+
+### POST /api/dev/dummy-users/{userId}/archive
+
+### POST /api/dev/dummy-users/{userId}/restore
+
+두 경로 모두 `{ expectedRevision }`을 받는다. Archive는 계정 삭제와 분리된 profile 상태 전이이므로
+`users.deleted_at`을 설정하지 않고 역사 조회를 보존하면서 신규 수정, 그룹 추가, 길드 배치, 모집 참가를
+막는다.
+
+Archive 직전 일반/경매 모집을 모두 검사한다. `OPEN|CLOSED` 모집에 `JOINED` 참가가 하나라도 있으면
+`409 dummy_user_archive_blocked_by_recruitment`이고 transaction 전체를 rollback한다. 오류 details의
+`joinedRecruitments`, `joinedAuctionRecruitments` count를 확인해 참가를 먼저 취소해야 한다. 성공 시
+현재 ACTIVE인 길드 소속만 INACTIVE로 전환하고, 영향받은 각 길드의 MEMBERS revision과
+`MEMBER_STATUS_CHANGED` audit을 함께 기록한다. Admin members는 WebSocket topic을 사용하지 않는 기존
+계약을 따르므로 별도 invalidate outbox는 없다.
+
+Restore는 profile을 ACTIVE로 바꾸지만 길드 소속은 자동으로 ACTIVE로 되돌리지 않는다. Archive 전에
+이미 INACTIVE였던 소속과 archive가 바꾼 소속을 추측해 일괄 복구하지 않고, 필요한 길드만 별도 membership
+PUT으로 명시적으로 활성화한다.
+
+### GET /api/dev/dummy-users/catalog
+
+`LEFT`가 아닌 guild의 `guildId`, 표시 이름, status, nullable active season ID를 반환한다.
+
+### PUT/DELETE /api/dev/dummy-users/{userId}/guilds/{guildId}
+
+PUT은 길드 표시명, `ACTIVE|INACTIVE`, nullable main lane, 선택적 다섯 lane MMR을 upsert한다. MMR을
+전달했는데 활성 season이 없으면 `409 active_season_required`다. DELETE는 보존할 workflow/MMR/audit
+이력이 없을 때만 허용하며, 이력이 있으면 `409 dummy_membership_has_history`이므로 PUT으로 INACTIVE를
+기록한다.
+
+### PUT /api/dev/dummy-users/{userId}/champion-preferences/{lane}
+
+`{ championIds: [] }`로 lane 하나를 순서대로 전체 교체한다. 0..10개의 중복 없는 Data Dragon ID를
+허용하며 빈 배열은 해당 lane을 비운다.
+
+### PUT/DELETE /api/dev/dummy-users/{userId}/riot-account
+
+PUT은 `platform`, `routingRegion`, `gameName`, `tagLine`과 선택적 `profileIconId`, `mainPosition`을 받아
+`origin=DUMMY` projection을 저장한다. Riot provider를 호출하지 않는다. DELETE도 합성 계정만 제거한다.
+DB는 `DISCORD` user가 `origin=RIOT`, `DUMMY` user가 `origin=DUMMY` 계정만 소유하도록 composite FK로
+강제한다. 합성 계정은 public Riot search, autocomplete, refresh와 실제 PUUID 소유권 흐름에서 제외한다.
+
+### GET/POST /api/dev/dummy-groups
+
+Group은 길드에 종속되지 않는 재사용 가능한 순서 있는 더미 사용자 집합이다. POST body는 name(1..100),
+nullable description(최대 500), 선택적 `memberIds`(최대 100)다. Group 이름은 case-insensitive unique이고
+활성 더미 사용자만 포함한다.
+
+### PATCH/DELETE /api/dev/dummy-groups/{groupId}
+
+PATCH는 `expectedRevision`과 선택적 name/description을 받는다. DELETE는 group과 membership만 삭제하고
+사용자는 삭제하지 않는다.
+
+### PUT /api/dev/dummy-groups/{groupId}/members
+
+`{ expectedRevision, memberIds }`로 최대 100명의 중복 없는 활성 더미 사용자를 요청 순서대로 전체
+교체한다.
+
+### GET /api/dev/guilds/{guildId}/recruitments/{recruitmentId}/participants
+
+Service admin이면서 해당 active guild의 active operator여야 한다. 모집의 status/count/revision과 해당
+guild에 배치된 모든 더미 후보의 profile state, membership status, `AVAILABLE|JOINED|WITHDRAWN` 상태를
+반환한다.
+
+### POST /api/dev/guilds/{guildId}/recruitments/{recruitmentId}/participants/preview
+
+```json
+{
+	"action": "ADD",
+	"userIds": ["dmy_01900000-0000-7000-8000-000000000001"]
+}
+```
+
+DB를 변경하지 않는 read 성격의 POST라 CSRF와 idempotency key를 요구하지 않는다. 선택 개수/중복,
+편집 가능 상태(`OPEN|CLOSED`), 길드 배치, archive/inactive, 기존 참가 상태, 정원 문제를 `issues[]`로
+모두 반환하고 문제가 없을 때만 `canApply=true`다. HTTP 성공과 실제 적용 가능 여부를 혼동하지 않는다.
+
+### POST/DELETE /api/dev/guilds/{guildId}/recruitments/{recruitmentId}/participants
+
+POST는 ADD, DELETE는 REMOVE다. Body는 1..10개의 중복 없는 `userIds`와 preview에서 받은
+`expectedRevision`이다. Server는 모집 row를 잠근 뒤 권한, 편집 가능 상태, revision, 더미/길드 상태,
+기존 참가, 정원을 다시 검증한다. Discord 모집 중인 `OPEN`뿐 아니라 series 전환 전 entry 편성 상태인
+`CLOSED`에서도 허용하되 `CONVERTED|CANCELLED`에서는 차단한다.
+
+성공 transaction은 participant/preferred lane, recruitment revision, entry draft revision, guild audit,
+outbox invalidate를 함께 확정한다. ADD는 더미 회원의 main lane이 있으면 첫 선호 lane으로 복사한다.
+REMOVE는 entry assignment와 preferred lanes를 지우고 participant를 `WITHDRAWN`으로 보존한다.
+
+### 더미 경로 오류 계약
+
+| HTTP | code                                        | 의미/안전한 조치                                                 |
+| ---- | ------------------------------------------- | ---------------------------------------------------------------- |
+| 400  | `invalid_idempotency_key`                   | Header 누락, 중복, 0 byte, 128 byte 초과 또는 visible ASCII 아님 |
+| 401  | session 인증 오류                           | Discord OAuth session 재인증                                     |
+| 403  | `service_admin_required`                    | 로그인 사용자가 service admin이 아님                             |
+| 403  | `operator_required`                         | 모집 대상 guild의 active operator가 아님                         |
+| 404  | `dummy_user_not_found`                      | 더미 사용자가 없거나 해당 guild 후보가 아님                      |
+| 404  | `dummy_group_not_found`                     | Group이 없음                                                     |
+| 404  | `guild_not_found`                           | 배치할 guild가 없음                                              |
+| 404  | `dummy_membership_not_found`                | 제거할 길드 소속이 없음                                          |
+| 404  | `dummy_riot_account_not_found`              | 제거할 합성 Riot account가 없음                                  |
+| 404  | `recruitment_not_found`                     | `(guildId, recruitmentId)` 모집이 없음                           |
+| 409  | `dummy_user_archived`                       | Restore 후 수정/배치/참가                                        |
+| 409  | `dummy_membership_has_history`              | 소속 삭제 대신 INACTIVE                                          |
+| 409  | `dummy_user_deletion_blocked`               | `details.impact` 확인 후 archive                                 |
+| 409  | `dummy_user_archive_blocked_by_recruitment` | 일반/경매 JOINED 참가를 취소한 뒤 archive                        |
+| 409  | `active_season_required`                    | 초기 MMR 없이 배치하거나 활성 season을 먼저 생성                 |
+| 409  | `dummy_stable_key_conflict`                 | 다른 stable key 사용                                             |
+| 409  | `dummy_group_name_conflict`                 | 다른 group 이름 사용                                             |
+| 409  | `dummy_group_member_unavailable`            | 누락/보관 사용자를 group에서 제거                                |
+| 409  | `revision_conflict`                         | `details.currentRevision` snapshot을 다시 읽고 재시도            |
+| 409  | `idempotency_conflict`                      | 새 key로 사용자의 새 의도를 제출                                 |
+| 409  | `idempotency_in_progress`                   | 같은 요청 완료를 기다린 뒤 동일 key로 재조회                     |
+| 409  | `recruitment_not_editable`                  | `OPEN/CLOSED` 외 상태에서는 참가 변경 차단                       |
+| 409  | `dummy_membership_inactive`                 | 길드 소속을 명시적으로 ACTIVE로 전환                             |
+| 409  | `already_participant`                       | 이미 JOINED인 사용자를 ADD함                                     |
+| 409  | `not_participant`                           | JOINED가 아닌 사용자를 REMOVE함                                  |
+| 422  | `invalid_dummy_user_input`                  | `details.field`의 validation 실패                                |
+| 422  | `invalid_expected_revision`                 | 음수 revision                                                    |
+| 422  | `invalid_dummy_participant_selection`       | Apply는 중복 없는 1..10명만 허용                                 |
+| 422  | `recruitment_capacity_exceeded`             | `details`의 joined/requested/target count 확인                   |
+| 503  | `database_unavailable`                      | PostgreSQL readiness 복구 후 재시도                              |
+
+모든 오류는 `error.code`, 안전한 `error.message`, `error.requestId`를 보존한다. SQL, 내부 URL, token,
+provider 원문은 사용자에게 노출하지 않는다. Preview의 business issue code는 같은 apply 오류 code를 사용해
+적용 전에 원인을 그대로 보여준다.
 
 ## Operations queue
 
@@ -236,7 +512,8 @@ Bot service principal과 `Idempotency-Key`가 필요하며 body의 actor role sn
 {
 	"actor": {
 		"id": "100000000000000001",
-		"displayName": "Longcat",
+		"globalDisplayName": "Longcat",
+		"displayName": "MSM Longcat",
 		"avatarHash": null,
 		"roleIds": ["300000000000000001"]
 	}
@@ -622,7 +899,8 @@ q=Longcat
 
 `q`는 trim 후 Unicode scalar 기준 1..100자다. 다음 세 식별자를 exact match한다.
 
-- 올바른 Discord snowflake면 `guild_members.user_id`와 정확히 일치하는 대상만 찾는다.
+- 올바른 Discord snowflake 또는 `dmy_<UUIDv7>` opaque UserId면 `guild_members.user_id`와 정확히
+  일치하는 대상만 찾는다.
 - 그 외 값은 guild display name을 대소문자 구분 없이 정확히 일치시킨다.
 - `GameName#TagLine`은 `normalize_riot_id_v1`과 같은 NFKC, trim, Unicode case-fold를 적용해 정확히
   일치시킨다. 이 조회 분기는 대상의 `show_riot_ids=true`인 연결 계정에만 접근한다.
@@ -1007,9 +1285,10 @@ guard나 client가 보낸 role은 권한 근거가 아니다.
 ```text
 revision       guild_admin_state[MEMBERS].revision
 updatedAt      RFC 3339 timestamp
-updatedBy      Discord user snowflake | null
+updatedBy      opaque UserId | null
 members[]
-  id            Discord user snowflake
+  id            opaque UserId (Discord snowflake | dmy_<UUIDv7>)
+  identityKind  DISCORD | DUMMY
   discordName   guild display name
   riotId        main Riot ID의 GameName#TagLine | null
   role          OPERATOR | MEMBER
@@ -1021,10 +1300,11 @@ members[]
 ```
 
 `registered`는 `registered_at IS NOT NULL` projection이고 `role`은 저장된 boolean이 아니라 현재 guild의
-operator role과 동기화된 Discord role membership으로 계산한다. `mainLane`과 `lastActiveAt`은 실제 값이
-없으면 null이며 임의 lane이나 상대 시간 문자열을 합성하지 않는다. 현재 ACTIVE season에 아직 생성되지
-않은 lane MMR은 1500으로 projection한다. Member 정렬은 ACTIVE 우선, `lower(displayName)`, Discord ID
-순서로 고정하며 lane object는 항상 canonical 다섯 key를 모두 포함한다. ACTIVE season 자체가 없는
+operator role과 동기화된 Discord role membership으로 계산한다. DUMMY identity는 Discord role row를
+가질 수 없으므로 항상 MEMBER다. `mainLane`과 `lastActiveAt`은 실제 값이 없으면 null이며 임의 lane이나
+상대 시간 문자열을 합성하지 않는다. 현재 ACTIVE season에 아직 생성되지 않은 lane MMR은 1500으로
+projection한다. Member 정렬은 ACTIVE 우선, `lower(displayName)`, opaque UserId 순서로 고정하며 lane
+object는 항상 canonical 다섯 key를 모두 포함한다. ACTIVE season 자체가 없는
 setup 미완료 guild의 GET도 다섯 lane을 1500으로 표시하지만 MMR mutation은 409로 거부한다.
 
 아직 MEMBERS state row가 없는 guild의 GET은 row를 생성하지 않고 revision 0, `guild_config`의

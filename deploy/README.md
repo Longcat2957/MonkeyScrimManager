@@ -153,6 +153,29 @@ docker compose \
   --profile migration run --rm migrate-dev
 ```
 
+`0012_user_identity_kinds.sql`은 실행 중인 API가 사용하는 `users.discord_id`를 rename하므로 일반적인
+rolling migration으로 적용할 수 없다. 이 migration이 아직 적용되지 않은 database의 최초 전환은
+아래 maintenance 순서를 사용한다. 구 API를 실행한 채 migration만 먼저 적용하거나, migration 전에
+새 API를 먼저 기동하는 순서는 둘 다 금지한다.
+
+```sh
+# 새 API/migration image는 기존 API가 서비스 중일 때 미리 빌드한다.
+docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.dev.yml \
+  --profile migration build api-dev migrate-dev
+
+# backup/restore rehearsal 성공을 확인한 다음 API 전체를 내린다.
+docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.dev.yml stop api-dev
+
+docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.dev.yml \
+  --profile migration run --rm migrate-dev
+```
+
 6. 모든 migration이 끝난 뒤 migration role로 runtime grant template을 실행한다.
 
 ```sh
@@ -161,6 +184,18 @@ docker compose -f deploy/postgres/docker-compose.remote.yml exec -T postgres \
   -v runtime_role=monkeybot_runtime_dev \
   < deploy/postgres/runtime-grants.sql
 ```
+
+`0012` maintenance 전환에서는 grant가 성공한 뒤에만 같은 release image의 API를 다시 기동한다.
+
+```sh
+docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.dev.yml up -d --no-deps api-dev
+```
+
+기동 후 `/readyz`가 migration checksum까지 `available`로 확인되기 전에는 nginx upstream을 정상으로
+간주하지 않는다. migration 또는 grant가 실패하면 구 binary를 재기동하지 말고 maintenance 상태를
+유지한 채 backup 복구 또는 forward fix를 수행한다.
 
 `runtime-grants.sql`은 runtime에 일반 DML만 부여하고 schema CREATE, table TRUNCATE,
 `_sqlx_migrations` 변경, append-only ledger의 UPDATE/DELETE를 금지한다. 새 append-only table을 만드는

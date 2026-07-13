@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
 	import { SvelteSet } from 'svelte/reactivity';
 	import GuildAuditLogPanel from '$lib/components/workflow/GuildAuditLogPanel.svelte';
 	import GuildMemberManagementPanel from '$lib/components/workflow/GuildMemberManagementPanel.svelte';
@@ -168,6 +169,9 @@
 			members={memberSnapshot.members}
 			revision={memberSnapshot.revision}
 			currentUserId={data.user.discordId}
+			dummyUsersHref={data.user.serviceAdmin
+				? `${resolve('/dev/users')}?guildId=${encodeURIComponent(data.guildId)}`
+				: null}
 			onAdjustMmr={handleMmrAdjustment}
 			onSetStatus={handleMemberStatus}
 		/>

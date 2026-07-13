@@ -77,7 +77,7 @@ async fn run_riot_account_flow() -> TestResult {
     let auth_repository = Arc::new(AuthRepository::new(pool.clone()));
     auth_repository
         .complete_login(&NewLogin {
-            user_id: DiscordUserId::parse(USER_ID)?,
+            discord_user_id: DiscordUserId::parse(USER_ID)?,
             display_name: "Longcat".to_owned(),
             avatar_hash: None,
             previous_session_token_hash: None,

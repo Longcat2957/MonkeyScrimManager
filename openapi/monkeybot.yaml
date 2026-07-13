@@ -341,11 +341,14 @@ paths:
   /internal/guilds/{guildId}/setup:
     post:
       operationId: setupGuildFromDiscord
-      summary: Set up or restore a guild from a Discord interaction
+      summary: Set up a guild from its first Discord interaction
       description: >-
-        Bot-only idempotent command. Upserts the Discord actor and guild, configures the operator
-        role, and creates the first active season when required. Replaying the same interaction
-        key and request returns the stored response.
+        Bot-only first-run command. It is accepted only while the installed guild is
+        INSTALLED or SETUP_REQUIRED and has no guild_config row. It creates the Discord actor,
+        guild membership, operator configuration, first active season, and counters in one
+        transaction. Replaying the same interaction key and request returns the stored response;
+        a new interaction after setup returns 409 guild_already_configured and does not rename or
+        otherwise update the existing guild.
       security:
         - BotBearer: []
       parameters:
@@ -377,6 +380,56 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/guilds/{guildId}/registrations:
+    post:
+      operationId: registerGuildMemberFromDiscord
+      summary: Register the current Discord user and Riot account in a guild
+      description: >-
+        Bot-only /등록 command for the interaction actor. The backend first performs an
+        idempotency and guild-eligibility preflight, resolves the supplied Riot ID through Riot,
+        and then atomically creates or reuses the global Discord user, guild membership, and
+        PUUID-owned Riot account link. Display names are snapshots, never identity keys. A
+        repeated registration can return EXISTING independently for the membership and account
+        link; an INACTIVE membership is never reactivated implicitly.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterGuildMemberRequest'
+      responses:
+        '200':
+          description: Guild membership and Riot account link were atomically created or reused.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterGuildMemberResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/BadGateway'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -1812,6 +1865,999 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users:
+    get:
+      operationId: listDummyUsers
+      summary: List persistent development dummy users
+      description: >-
+        Service-admin-only development route. It is mounted only when
+        MONKEYBOT_DUMMY_USERS_ENABLED=true; a disabled or production deployment returns 404.
+        Filters are combined and offset pagination returns the authoritative total.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: query
+          in: query
+          required: false
+          description: Case-insensitive display-name or stable-key substring.
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/DummyUserState'
+        - name: guildId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/DiscordSnowflake'
+        - name: groupId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Filtered dummy-user page.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUsersPageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createDummyUser
+      summary: Create one persistent dummy user
+      description: >-
+        Creates a DUMMY identity and optional privacy, guild membership/MMR, and synthetic Riot
+        account projection in one transaction. The safe privacy default is fully private.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDummyUserRequest'
+      responses:
+        '201':
+          description: Authoritative created dummy user.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/catalog:
+    get:
+      operationId: getDummyUserGuildCatalog
+      summary: List guilds available to the dummy-user workspace
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: Guild status and active-season catalog.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyGuildCatalogResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/bulk:
+    post:
+      operationId: createDummyUsersBulk
+      summary: Create up to 100 persistent dummy users atomically
+      description: >-
+        Applies the same creation contract as the single-user route to every item. Duplicate
+        stable keys, invalid memberships, or any other failure rolls back the complete batch.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDummyUsersBulkRequest'
+      responses:
+        '201':
+          description: Created users in request order.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUsersBulkResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/{userId}:
+    get:
+      operationId: getDummyUser
+      summary: Get one persistent dummy user
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+      responses:
+        '200':
+          description: Authoritative dummy-user aggregate projection.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateDummyUser
+      summary: Update dummy-user profile and privacy fields
+      description: >-
+        Requires the current profile revision and at least one changed field. Feature-owned state
+        such as guild MMR, champion preferences, and Riot projection uses its dedicated route.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDummyUserRequest'
+      responses:
+        '200':
+          description: Authoritative updated dummy user.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteDummyUser
+      summary: Delete a dummy user with no retained domain references
+      description: >-
+        Deletes only when deletion-impact has no blocking references. Group memberships,
+        champion preferences, and a synthetic Riot account are removable children. A user with
+        guild/workflow/session/Discord/real-Riot references returns 409
+        dummy_user_deletion_blocked and must be archived instead.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      responses:
+        '200':
+          description: User deleted with the pre-delete impact snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserDeleteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/{userId}/deletion-impact:
+    get:
+      operationId: getDummyUserDeletionImpact
+      summary: Inspect whether a dummy user can be deleted
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+      responses:
+        '200':
+          description: Blocking and automatically removable reference counts.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyDeletionImpactResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/{userId}/archive:
+    post:
+      operationId: archiveDummyUser
+      summary: Archive a dummy user
+      description: >-
+        Archive is a profile lifecycle state, not account deletion, so users.deleted_at remains
+        null and historical projections remain readable. The command is rejected while the user
+        is JOINED to any OPEN or CLOSED general or auction recruitment. On success, every ACTIVE
+        guild membership is changed to INACTIVE and each affected guild's MEMBERS revision and
+        MEMBER_STATUS_CHANGED audit entry are committed in the same transaction. The admin
+        members resource has no WebSocket topic, so this command does not create an invalidate
+        outbox event.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpectedRevisionRequest'
+      responses:
+        '200':
+          description: Authoritative archived dummy user.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Revision or idempotency conflict, or an active recruitment still contains the dummy
+            user as a JOINED participant.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                activeRecruitmentParticipation:
+                  summary: General and auction participation must be withdrawn first
+                  value:
+                    error:
+                      code: dummy_user_archive_blocked_by_recruitment
+                      message: 진행 중인 일반 또는 경매 모집에 참가 중이라 보관할 수 없습니다. 먼저 참가를 취소해 주세요.
+                      requestId: 01900000-0000-7000-8000-000000000001
+                      details:
+                        joinedRecruitments: 1
+                        joinedAuctionRecruitments: 1
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/{userId}/restore:
+    post:
+      operationId: restoreDummyUser
+      summary: Restore an archived dummy user
+      description: >-
+        Restores only the dummy profile to ACTIVE. Guild memberships made INACTIVE by archive are
+        not reactivated automatically; an administrator must explicitly activate the required
+        memberships so pre-existing inactive memberships are not restored by mistake.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpectedRevisionRequest'
+      responses:
+        '200':
+          description: Authoritative active dummy user.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/{userId}/guilds/{guildId}:
+    put:
+      operationId: upsertDummyUserGuildMembership
+      summary: Create or replace a dummy user's guild membership
+      description: >-
+        Stores guild nickname, status, and main lane. When laneMmr is present, all five values are
+        written to the guild's active season; a guild without an active season returns 409.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertDummyGuildMembershipRequest'
+      responses:
+        '200':
+          description: Authoritative dummy user with the updated membership.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: removeDummyUserGuildMembership
+      summary: Remove a history-free dummy guild membership
+      description: >-
+        A membership referenced by retained recruitment, auction, series, game, MMR, or audit
+        history returns 409 dummy_membership_has_history and must be set INACTIVE instead.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      responses:
+        '200':
+          description: Authoritative dummy user without the removed membership.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/{userId}/champion-preferences/{lane}:
+    put:
+      operationId: replaceDummyUserChampionPreferences
+      summary: Replace one dummy user's ordered champion preferences for a lane
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/ChampionPreferenceLane'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceChampionPreferencesRequest'
+      responses:
+        '200':
+          description: Authoritative dummy user with all five preference lanes.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-users/{userId}/riot-account:
+    put:
+      operationId: upsertDummyUserSyntheticRiotAccount
+      summary: Create or replace a synthetic Riot account projection
+      description: >-
+        Stores origin=DUMMY data without contacting Riot. Synthetic accounts are excluded from
+        public Riot lookup, refresh, autocomplete, and real-account ownership flows.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertDummyRiotAccountRequest'
+      responses:
+        '200':
+          description: Authoritative dummy user with the synthetic account.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: removeDummyUserSyntheticRiotAccount
+      summary: Remove a synthetic Riot account projection
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyUserId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      responses:
+        '200':
+          description: Authoritative dummy user without the synthetic account.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-groups:
+    get:
+      operationId: listDummyUserGroups
+      summary: List reusable persistent dummy-user groups
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: All groups and their ordered active dummy-user members.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyGroupsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createDummyUserGroup
+      summary: Create a reusable dummy-user group
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDummyGroupRequest'
+      responses:
+        '201':
+          description: Authoritative created group.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyGroupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-groups/{groupId}:
+    patch:
+      operationId: updateDummyUserGroup
+      summary: Update dummy-user group metadata
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyGroupId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDummyGroupRequest'
+      responses:
+        '200':
+          description: Authoritative updated group.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyGroupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteDummyUserGroup
+      summary: Delete a dummy-user group without deleting its users
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyGroupId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      responses:
+        '200':
+          description: Group deleted; member users remain unchanged.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/dummy-groups/{groupId}/members:
+    put:
+      operationId: replaceDummyUserGroupMembers
+      summary: Replace a group's ordered dummy-user membership
+      description: Accepts at most 100 unique, active dummy-user IDs and increments group revision.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DummyGroupId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceDummyGroupMembersRequest'
+      responses:
+        '200':
+          description: Authoritative group with members in request order.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyGroupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/guilds/{guildId}/recruitments/{recruitmentId}/participants:
+    get:
+      operationId: getDummyRecruitmentParticipants
+      summary: Get a recruitment and its guild-scoped dummy candidates
+      description: >-
+        Requires both service-admin status and an active operator membership in the requested
+        guild. Candidates include every dummy user assigned to that guild, including archived,
+        inactive, joined, and withdrawn states needed for a transparent preview.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+      responses:
+        '200':
+          description: Recruitment summary and dummy candidate states.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyRecruitmentOverviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: addDummyRecruitmentParticipants
+      summary: Add selected dummy users to an editable recruitment atomically
+      description: >-
+        Accepts 1..10 unique users for an OPEN recruitment or a CLOSED recruitment that is still
+        in entry editing, checks the exact recruitment revision, guild membership, archive/active
+        state, duplicates, and capacity under lock, then updates participants, preferred main
+        lanes, recruitment and entry-draft revisions, audit, and outbox in one transaction.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyDummyRecruitmentParticipantsRequest'
+      responses:
+        '200':
+          description: Changed IDs and authoritative post-commit overview.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyRecruitmentApplyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: removeDummyRecruitmentParticipants
+      summary: Withdraw selected dummy users from an editable recruitment atomically
+      description: >-
+        Accepts 1..10 unique joined dummy users and an exact revision while the recruitment is
+        OPEN or CLOSED before series conversion. It removes their entry assignments and preferred
+        lanes, marks participation WITHDRAWN, and updates recruitment, draft, audit, and outbox in
+        the same transaction.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyDummyRecruitmentParticipantsRequest'
+      responses:
+        '200':
+          description: Changed IDs and authoritative post-commit overview.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyRecruitmentApplyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/dev/guilds/{guildId}/recruitments/{recruitmentId}/participants/preview:
+    post:
+      operationId: previewDummyRecruitmentParticipants
+      summary: Preview a dummy-participant add or remove without mutating
+      description: >-
+        Session-authenticated read operation. Business problems are returned as issue objects with
+        canApply=false rather than as HTTP errors, so the operator can inspect every selected
+        problem before applying. It does not require CSRF or Idempotency-Key.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviewDummyRecruitmentParticipantsRequest'
+      responses:
+        '200':
+          description: Non-mutating projected roster and all validation issues.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DummyRecruitmentPreviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /healthz:
     get:
       operationId: getLiveness
@@ -1890,16 +2936,31 @@ components:
       name: userId
       in: path
       required: true
-      description: Discord user snowflake targeted by the recruitment interaction.
+      description: Opaque stored user identifier. It can identify a Discord or development dummy user.
       schema:
-        $ref: '#/components/schemas/DiscordSnowflake'
+        $ref: '#/components/schemas/UserIdentifier'
     MemberId:
       name: memberId
       in: path
       required: true
-      description: Discord user snowflake identifying the guild member being administered.
+      description: Opaque stored user identifier for the guild member being administered.
       schema:
-        $ref: '#/components/schemas/DiscordSnowflake'
+        $ref: '#/components/schemas/UserIdentifier'
+    DummyUserId:
+      name: userId
+      in: path
+      required: true
+      description: Development dummy user identifier generated by the backend.
+      schema:
+        $ref: '#/components/schemas/DummyUserIdentifier'
+    DummyGroupId:
+      name: groupId
+      in: path
+      required: true
+      description: Persistent dummy-user group UUID.
+      schema:
+        type: string
+        format: uuid
     ChampionPreferenceLane:
       name: lane
       in: path
@@ -1990,9 +3051,9 @@ components:
       in: query
       required: true
       description: >-
-        Exact Discord user ID, guild display name, or full GameName#TagLine. Leading and trailing
-        whitespace is removed. Display names are matched case-insensitively; Riot IDs use the
-        canonical NFKC, trim, and Unicode case-fold normalization.
+        Exact stored UserIdentifier, guild display name, or full GameName#TagLine. Leading and
+        trailing whitespace is removed. Display names are matched case-insensitively; Riot IDs use
+        the canonical NFKC, trim, and Unicode case-fold normalization.
       schema:
         type: string
         minLength: 1
@@ -2004,6 +3065,8 @@ components:
           value: Longcat#KR1
         discordId:
           value: '1525847677542207548'
+        dummyUserId:
+          value: dmy_01900000-0000-7000-8000-000000000001
     GuildRecordsSeasonId:
       name: seasonId
       in: query
@@ -2166,6 +3229,15 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    BadGateway:
+      description: An authenticated upstream provider timed out, rejected the request, or returned invalid data.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     RateLimited:
       description: >-
         A local route limit or upstream provider limit was exceeded. When supplied by the provider,
@@ -2193,16 +3265,33 @@ components:
       maxLength: 20
       description: Canonical unsigned decimal value not greater than 18446744073709551615.
       example: '123456789012345678'
+    DummyUserIdentifier:
+      type: string
+      pattern: '^dmy_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      description: Backend-generated development dummy identity using a lowercase RFC 4122 UUIDv7.
+      example: dmy_01900000-0000-7000-8000-000000000001
+    UserIdentifier:
+      description: Opaque stored user ID. Clients must not infer permissions or provider behavior from it.
+      oneOf:
+        - $ref: '#/components/schemas/DiscordSnowflake'
+        - $ref: '#/components/schemas/DummyUserIdentifier'
+    UserIdentityKind:
+      type: string
+      enum: [DISCORD, DUMMY]
     Lane:
       type: string
       enum: [TOP, JUNGLE, MID, BOTTOM, SUPPORT]
     DiscordActor:
       type: object
       additionalProperties: false
-      required: [id, displayName, avatarHash, roleIds]
+      required: [id, globalDisplayName, displayName, avatarHash, roleIds]
       properties:
         id:
           $ref: '#/components/schemas/DiscordSnowflake'
+        globalDisplayName:
+          type: string
+          minLength: 1
+          maxLength: 100
         displayName:
           type: string
           minLength: 1
@@ -2281,6 +3370,73 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/SetupGuildData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    RegisterGuildMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, gameName, tagLine, platform]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        gameName:
+          $ref: '#/components/schemas/RiotGameName'
+        tagLine:
+          $ref: '#/components/schemas/RiotTagLine'
+        platform:
+          $ref: '#/components/schemas/RiotPlatform'
+    RegistrationState:
+      type: string
+      enum: [CREATED, EXISTING]
+    RegisteredGuildMember:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, status]
+      properties:
+        id:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          type: string
+          const: ACTIVE
+    RegisteredRiotAccount:
+      type: object
+      additionalProperties: false
+      required: [puuid, gameName, tagLine, platform, isMain]
+      properties:
+        puuid:
+          $ref: '#/components/schemas/RiotPuuidValue'
+        gameName:
+          $ref: '#/components/schemas/RiotGameName'
+        tagLine:
+          $ref: '#/components/schemas/RiotTagLine'
+        platform:
+          $ref: '#/components/schemas/RiotPlatform'
+        isMain:
+          type: boolean
+    RegisterGuildMemberData:
+      type: object
+      additionalProperties: false
+      required: [member, riotAccount, registration, accountLink]
+      properties:
+        member:
+          $ref: '#/components/schemas/RegisteredGuildMember'
+        riotAccount:
+          $ref: '#/components/schemas/RegisteredRiotAccount'
+        registration:
+          $ref: '#/components/schemas/RegistrationState'
+        accountLink:
+          $ref: '#/components/schemas/RegistrationState'
+    RegisterGuildMemberResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/RegisterGuildMemberData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     DiscordCatalogRoleInput:
@@ -2416,7 +3572,7 @@ components:
       required: [id, displayName, preferredLanes]
       properties:
         id:
-          $ref: '#/components/schemas/DiscordSnowflake'
+          $ref: '#/components/schemas/UserIdentifier'
         displayName:
           type: string
           minLength: 1
@@ -3343,7 +4499,7 @@ components:
       required: [id, name, tag, profileIconId, compositeMmr, mainRole, isMe, stats]
       properties:
         id:
-          $ref: '#/components/schemas/DiscordSnowflake'
+          $ref: '#/components/schemas/UserIdentifier'
         name:
           type: string
           minLength: 1
@@ -4123,6 +5279,7 @@ components:
       additionalProperties: false
       required:
         - id
+        - identityKind
         - discordName
         - riotId
         - role
@@ -4133,10 +5290,13 @@ components:
         - lastActiveAt
       properties:
         id:
-          $ref: '#/components/schemas/DiscordSnowflake'
+          $ref: '#/components/schemas/UserIdentifier'
+        identityKind:
+          $ref: '#/components/schemas/UserIdentityKind'
         discordName:
           type: string
           minLength: 1
+          description: Guild display name for either a Discord or dummy identity.
         riotId:
           oneOf:
             - type: string
@@ -4173,7 +5333,7 @@ components:
           format: date-time
         updatedBy:
           oneOf:
-            - $ref: '#/components/schemas/DiscordSnowflake'
+            - $ref: '#/components/schemas/UserIdentifier'
             - type: 'null'
         members:
           type: array
@@ -4270,7 +5430,7 @@ components:
           format: date-time
         updatedBy:
           oneOf:
-            - $ref: '#/components/schemas/DiscordSnowflake'
+            - $ref: '#/components/schemas/UserIdentifier'
             - type: 'null'
         catalogUpdatedAt:
           oneOf:
@@ -5027,6 +6187,868 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/AuctionTournamentListData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyUserState:
+      type: string
+      enum: [ACTIVE, ARCHIVED]
+    DummyPrivacySettings:
+      type: object
+      additionalProperties: false
+      required: [publicProfileEnabled, showRiotIds, allowExternalRecordSearch]
+      properties:
+        publicProfileEnabled:
+          type: boolean
+          default: false
+        showRiotIds:
+          type: boolean
+          default: false
+        allowExternalRecordSearch:
+          type: boolean
+          default: false
+    DummyLaneMmr:
+      type: object
+      additionalProperties: false
+      required: [top, jungle, mid, bottom, support]
+      properties:
+        top:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 10000
+        jungle:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 10000
+        mid:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 10000
+        bottom:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 10000
+        support:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 10000
+    DummyGuildMembership:
+      type: object
+      additionalProperties: false
+      required: [guildId, guildName, displayName, status, mainLane, laneMmr]
+      properties:
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        guildName:
+          type: string
+          minLength: 1
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          $ref: '#/components/schemas/GuildMemberStatus'
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        laneMmr:
+          oneOf:
+            - $ref: '#/components/schemas/DummyLaneMmr'
+            - type: 'null'
+    DummyRiotAccountPosition:
+      type: string
+      enum: [TOP, JUNGLE, MID, BOTTOM, SUPPORT, FLEX]
+    DummyRiotAccount:
+      type: object
+      additionalProperties: false
+      required:
+        - platform
+        - routingRegion
+        - gameName
+        - tagLine
+        - profileIconId
+        - mainPosition
+      properties:
+        platform:
+          type: string
+          minLength: 1
+          maxLength: 16
+        routingRegion:
+          type: string
+          minLength: 1
+          maxLength: 16
+        gameName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        tagLine:
+          type: string
+          minLength: 1
+          maxLength: 16
+        profileIconId:
+          oneOf:
+            - type: integer
+              format: int32
+              minimum: 0
+            - type: 'null'
+        mainPosition:
+          oneOf:
+            - $ref: '#/components/schemas/DummyRiotAccountPosition'
+            - type: 'null'
+    DummyUser:
+      type: object
+      additionalProperties: false
+      required:
+        - userId
+        - identityKind
+        - stableKey
+        - displayName
+        - avatarSeed
+        - notes
+        - state
+        - revision
+        - privacy
+        - riotAccount
+        - championPreferences
+        - guildMemberships
+        - groupIds
+        - createdAt
+        - updatedAt
+      properties:
+        userId:
+          $ref: '#/components/schemas/DummyUserIdentifier'
+        identityKind:
+          type: string
+          const: DUMMY
+        stableKey:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[a-z0-9][a-z0-9_-]*$'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        avatarSeed:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 128
+            - type: 'null'
+        notes:
+          oneOf:
+            - type: string
+              maxLength: 1000
+            - type: 'null'
+        state:
+          $ref: '#/components/schemas/DummyUserState'
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        privacy:
+          $ref: '#/components/schemas/DummyPrivacySettings'
+        riotAccount:
+          oneOf:
+            - $ref: '#/components/schemas/DummyRiotAccount'
+            - type: 'null'
+        championPreferences:
+          $ref: '#/components/schemas/ChampionPreferences'
+        guildMemberships:
+          type: array
+          items:
+            $ref: '#/components/schemas/DummyGuildMembership'
+        groupIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    UpsertDummyGuildMembershipRequest:
+      type: object
+      additionalProperties: false
+      required: [displayName, status]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          $ref: '#/components/schemas/GuildMemberStatus'
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        laneMmr:
+          $ref: '#/components/schemas/DummyLaneMmr'
+    CreateDummyGuildMembership:
+      type: object
+      additionalProperties: false
+      required: [guildId, displayName, status]
+      properties:
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          $ref: '#/components/schemas/GuildMemberStatus'
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        laneMmr:
+          $ref: '#/components/schemas/DummyLaneMmr'
+    UpsertDummyRiotAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [platform, routingRegion, gameName, tagLine]
+      properties:
+        platform:
+          type: string
+          minLength: 1
+          maxLength: 16
+        routingRegion:
+          type: string
+          minLength: 1
+          maxLength: 16
+        gameName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        tagLine:
+          type: string
+          minLength: 1
+          maxLength: 16
+        profileIconId:
+          type: integer
+          format: int32
+          minimum: 0
+        mainPosition:
+          $ref: '#/components/schemas/DummyRiotAccountPosition'
+    CreateDummyUserRequest:
+      type: object
+      additionalProperties: false
+      required: [stableKey, displayName]
+      properties:
+        stableKey:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[a-z0-9][a-z0-9_-]*$'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        avatarSeed:
+          type: string
+          minLength: 1
+          maxLength: 128
+        notes:
+          type: string
+          maxLength: 1000
+        privacy:
+          $ref: '#/components/schemas/DummyPrivacySettings'
+        guildMemberships:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/CreateDummyGuildMembership'
+        riotAccount:
+          $ref: '#/components/schemas/UpsertDummyRiotAccountRequest'
+    CreateDummyUsersBulkRequest:
+      type: object
+      additionalProperties: false
+      required: [users]
+      properties:
+        users:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CreateDummyUserRequest'
+    UpdateDummyUserRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      minProperties: 2
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        avatarSeed:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 128
+            - type: 'null'
+        notes:
+          oneOf:
+            - type: string
+              maxLength: 1000
+            - type: 'null'
+        privacy:
+          $ref: '#/components/schemas/DummyPrivacySettings'
+    ExpectedRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    DummyUsersPageData:
+      type: object
+      additionalProperties: false
+      required: [users, total]
+      properties:
+        users:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/DummyUser'
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+    DummyUsersPageResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyUsersPageData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyUsersBulkData:
+      type: object
+      additionalProperties: false
+      required: [total, users]
+      properties:
+        total:
+          type: integer
+          minimum: 1
+          maximum: 100
+        users:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/DummyUser'
+    DummyUsersBulkResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyUsersBulkData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyUserResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyUser'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyGuildStatus:
+      type: string
+      enum: [INSTALLED, SETUP_REQUIRED, ACTIVE, DISABLED, LEFT]
+    DummyGuildCatalogItem:
+      type: object
+      additionalProperties: false
+      required: [guildId, displayName, status, activeSeasonId]
+      properties:
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/DummyGuildStatus'
+        activeSeasonId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+    DummyGuildCatalogData:
+      type: object
+      additionalProperties: false
+      required: [guilds]
+      properties:
+        guilds:
+          type: array
+          items:
+            $ref: '#/components/schemas/DummyGuildCatalogItem'
+    DummyGuildCatalogResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyGuildCatalogData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyDeletionBlockingReferences:
+      type: object
+      additionalProperties: false
+      required:
+        - guildMemberships
+        - recruitmentParticipants
+        - auctionParticipants
+        - gameParticipants
+        - userSessions
+        - discordIdentities
+        - realRiotAccounts
+      properties:
+        guildMemberships:
+          type: integer
+          format: int64
+          minimum: 0
+        recruitmentParticipants:
+          type: integer
+          format: int64
+          minimum: 0
+        auctionParticipants:
+          type: integer
+          format: int64
+          minimum: 0
+        gameParticipants:
+          type: integer
+          format: int64
+          minimum: 0
+        userSessions:
+          type: integer
+          format: int64
+          minimum: 0
+        discordIdentities:
+          type: integer
+          format: int64
+          minimum: 0
+        realRiotAccounts:
+          type: integer
+          format: int64
+          minimum: 0
+    DummyDeletionRemovableReferences:
+      type: object
+      additionalProperties: false
+      required: [groupMemberships, championPreferences, syntheticRiotAccounts]
+      properties:
+        groupMemberships:
+          type: integer
+          format: int64
+          minimum: 0
+        championPreferences:
+          type: integer
+          format: int64
+          minimum: 0
+        syntheticRiotAccounts:
+          type: integer
+          format: int64
+          minimum: 0
+    DummyDeletionImpact:
+      type: object
+      additionalProperties: false
+      required: [canDelete, blockingReferences, removableReferences]
+      properties:
+        canDelete:
+          type: boolean
+        blockingReferences:
+          $ref: '#/components/schemas/DummyDeletionBlockingReferences'
+        removableReferences:
+          $ref: '#/components/schemas/DummyDeletionRemovableReferences'
+    DummyDeletionImpactResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyDeletionImpact'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyUserDeleteData:
+      type: object
+      additionalProperties: false
+      required: [deleted, impact]
+      properties:
+        deleted:
+          type: boolean
+          const: true
+        impact:
+          $ref: '#/components/schemas/DummyDeletionImpact'
+    DummyUserDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyUserDeleteData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyGroupMember:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, position]
+      properties:
+        userId:
+          $ref: '#/components/schemas/DummyUserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        position:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+    DummyGroup:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, revision, memberCount, members, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          oneOf:
+            - type: string
+              maxLength: 500
+            - type: 'null'
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        memberCount:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 100
+        members:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/DummyGroupMember'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateDummyGroupRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        memberIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/DummyUserIdentifier'
+    UpdateDummyGroupRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          oneOf:
+            - type: string
+              maxLength: 500
+            - type: 'null'
+    ReplaceDummyGroupMembersRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, memberIds]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        memberIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/DummyUserIdentifier'
+    DummyGroupsData:
+      type: object
+      additionalProperties: false
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/DummyGroup'
+    DummyGroupResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyGroup'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyGroupsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyGroupsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DeletedData:
+      type: object
+      additionalProperties: false
+      required: [deleted]
+      properties:
+        deleted:
+          type: boolean
+          const: true
+    DeletedResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DeletedData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyParticipationState:
+      type: string
+      enum: [AVAILABLE, JOINED, WITHDRAWN]
+    DummyRecruitmentStatus:
+      type: string
+      enum: [OPEN, CLOSED, CONVERTED, CANCELLED]
+    DummyRecruitmentSummary:
+      type: object
+      additionalProperties: false
+      required: [id, title, status, targetCount, joinedCount, remainingSlots, revision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/DummyRecruitmentStatus'
+        targetCount:
+          type: integer
+          format: int32
+          minimum: 1
+        joinedCount:
+          type: integer
+          format: int64
+          minimum: 0
+        remainingSlots:
+          type: integer
+          format: int64
+          minimum: 0
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+    DummyRecruitmentCandidate:
+      type: object
+      additionalProperties: false
+      required:
+        - userId
+        - displayName
+        - mainLane
+        - profileState
+        - membershipStatus
+        - participationState
+      properties:
+        userId:
+          $ref: '#/components/schemas/DummyUserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        profileState:
+          $ref: '#/components/schemas/DummyUserState'
+        membershipStatus:
+          $ref: '#/components/schemas/GuildMemberStatus'
+        participationState:
+          $ref: '#/components/schemas/DummyParticipationState'
+    DummyRecruitmentOverview:
+      type: object
+      additionalProperties: false
+      required: [recruitment, candidates]
+      properties:
+        recruitment:
+          $ref: '#/components/schemas/DummyRecruitmentSummary'
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/DummyRecruitmentCandidate'
+    DummyRecruitmentAction:
+      type: string
+      enum: [ADD, REMOVE]
+    PreviewDummyRecruitmentParticipantsRequest:
+      type: object
+      additionalProperties: false
+      required: [action, userIds]
+      properties:
+        action:
+          $ref: '#/components/schemas/DummyRecruitmentAction'
+        userIds:
+          type: array
+          description: Invalid size or duplicates are reported in the preview issues.
+          items:
+            $ref: '#/components/schemas/DummyUserIdentifier'
+    ApplyDummyRecruitmentParticipantsRequest:
+      type: object
+      additionalProperties: false
+      required: [userIds, expectedRevision]
+      properties:
+        userIds:
+          type: array
+          minItems: 1
+          maxItems: 10
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/DummyUserIdentifier'
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    DummyRecruitmentPreviewIssue:
+      type: object
+      additionalProperties: false
+      required: [userId, code, message]
+      properties:
+        userId:
+          oneOf:
+            - $ref: '#/components/schemas/DummyUserIdentifier'
+            - type: 'null'
+        code:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          minLength: 1
+    DummyRecruitmentPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - action
+        - canApply
+        - currentRevision
+        - projectedJoinedCount
+        - remainingSlots
+        - selected
+        - issues
+      properties:
+        action:
+          $ref: '#/components/schemas/DummyRecruitmentAction'
+        canApply:
+          type: boolean
+        currentRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        projectedJoinedCount:
+          type: integer
+          format: int64
+          minimum: 0
+        remainingSlots:
+          type: integer
+          format: int64
+          minimum: 0
+        selected:
+          type: array
+          items:
+            $ref: '#/components/schemas/DummyRecruitmentCandidate'
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/DummyRecruitmentPreviewIssue'
+    DummyRecruitmentApplyData:
+      type: object
+      additionalProperties: false
+      required: [action, changedUserIds, overview]
+      properties:
+        action:
+          $ref: '#/components/schemas/DummyRecruitmentAction'
+        changedUserIds:
+          type: array
+          minItems: 1
+          maxItems: 10
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/DummyUserIdentifier'
+        overview:
+          $ref: '#/components/schemas/DummyRecruitmentOverview'
+    DummyRecruitmentOverviewResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyRecruitmentOverview'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyRecruitmentPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyRecruitmentPreview'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    DummyRecruitmentApplyResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/DummyRecruitmentApplyData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     LivenessData:

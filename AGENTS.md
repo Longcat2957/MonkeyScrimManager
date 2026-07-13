@@ -11,6 +11,7 @@
 ## Backend Runtime
 
 - A backend route change is not complete while the local Axum process still serves the previous binary.
+- A migration that renames or removes a column used by the running API is a maintenance migration, not a rolling migration. Stop every API instance before applying it, then start only the matching binary after migration and runtime grants succeed.
 - After backend route work passes its tests, run `scripts/local-api-reload.sh '/api/<changed-route>'`.
 - The reload script must pass readiness plus direct `30020` and same-origin `5173` proxy smoke checks. A `401`, `403`, or other route-level response is acceptable for an unauthenticated smoke request; `404`, connection failure, and `5xx` are failures.
 - Do not report a backend endpoint as integrated before both smoke paths prove that the running router contains it.
@@ -27,6 +28,14 @@
 - Integration fixtures must exercise documented branches, but reuse shared builders and the minimum rows needed. Do not grow a route test into a second reference implementation of the product.
 - Update OpenAPI and narrative docs once the implementation contract is stable, not repeatedly during exploratory edits.
 - For backend routes, runtime reload and direct/proxy smoke are part of the same delivery step; use the existing reload script instead of diagnosing a predictable stale-binary 404 afterward.
+
+## Error Transparency
+
+- Every user-visible failure must include a safe, concrete reason. Do not replace a known validation, permission, conflict, dependency, or transport failure with a generic failure sentence.
+- Preserve the backend's public error message, stable error code, and request ID across frontend and Bot boundaries whenever they are available. The user should be able to understand what failed and provide a correlation ID for support.
+- Unknown internal failures must still state the safe failure category and provide a request or interaction ID while the full diagnostic detail is recorded in server logs.
+- Never expose stack traces, raw SQL or database errors, credentials, tokens, secrets, internal URLs, or unfiltered upstream response bodies in a user-facing error.
+- Error-path tests must assert both the machine-readable reason and the user-visible explanation for important workflow failures.
 
 ## Requirement Discipline
 

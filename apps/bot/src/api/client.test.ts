@@ -10,12 +10,14 @@ import type {
 
 const guildId = '200000000000000001';
 const userId = '100000000000000001';
+const dummyUserId = 'dmy_01900000-0000-7000-8000-000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const serviceToken = 's'.repeat(32);
 
 const actor: Actor = {
 	id: userId,
+	globalDisplayName: 'Longcat',
 	displayName: 'Longcat',
 	avatarHash: null,
 	roleIds: ['300000000000000001']
@@ -33,7 +35,10 @@ const snapshot: RecruitmentSnapshot = {
 		messageId: null,
 		updatedAt: '2026-07-13T10:00:00Z'
 	},
-	participants: [{ id: userId, displayName: 'Longcat', preferredLanes: ['MID'] }],
+	participants: [
+		{ id: userId, displayName: 'Longcat', preferredLanes: ['MID'] },
+		{ id: dummyUserId, displayName: 'Dummy Jungle', preferredLanes: ['JUNGLE'] }
+	],
 	links: { entry: `/g/${guildId}/recruitments/${recruitmentId}/entry` }
 };
 
@@ -45,6 +50,19 @@ const setupData: SetupGuildData = {
 		currentSeason: { id: '01900000-0000-7000-8000-000000000201', name: '시즌 1' },
 		dashboardHref: `/g/${guildId}`
 	}
+};
+
+const registrationData = {
+	member: { id: userId, displayName: 'MSM Longcat', status: 'ACTIVE' as const },
+	riotAccount: {
+		puuid: 'riot-puuid',
+		gameName: 'Longcat',
+		tagLine: 'KR1',
+		platform: 'KR' as const,
+		isMain: true
+	},
+	registration: 'CREATED' as const,
+	accountLink: 'CREATED' as const
 };
 
 const catalog: DiscordCatalogSyncRequest = {
@@ -91,9 +109,10 @@ describe('MonkeyBotApiClient', () => {
 	it('uses canonical paths, service bearer, and interaction idempotency keys', async () => {
 		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			void init;
-			return String(input).endsWith('/internal/guilds/200000000000000001/setup')
-				? envelope(setupData)
-				: envelope(snapshot);
+			const path = new URL(String(input)).pathname;
+			if (path.endsWith('/setup')) return envelope(setupData);
+			if (path.endsWith('/registrations')) return envelope(registrationData);
+			return envelope(snapshot);
 		});
 		const client = createClient(fetchMock);
 		const context = { idempotencyKey: '400000000000000001' };
@@ -107,6 +126,11 @@ describe('MonkeyBotApiClient', () => {
 				operatorRoleId: '300000000000000001',
 				seasonName: '시즌 1'
 			},
+			context
+		);
+		await client.registerGuildMember(
+			guildId,
+			{ actor, gameName: 'Longcat', tagLine: 'KR1', platform: 'KR' },
 			context
 		);
 		await client.createRecruitment(guildId, { actor }, context);
@@ -131,6 +155,7 @@ describe('MonkeyBotApiClient', () => {
 			fetchMock.mock.calls.map(([input, init]) => [String(input), (init as RequestInit).method])
 		).toEqual([
 			[`http://api.local:8080/internal/guilds/${guildId}/setup`, 'POST'],
+			[`http://api.local:8080/internal/guilds/${guildId}/registrations`, 'POST'],
 			[`http://api.local:8080/api/guilds/${guildId}/recruitments`, 'POST'],
 			[`http://api.local:8080/api/guilds/${guildId}/recruitments/${recruitmentId}/message`, 'PUT'],
 			[`http://api.local:8080/api/guilds/${guildId}/recruitments/${recruitmentId}/members`, 'POST'],
@@ -161,6 +186,27 @@ describe('MonkeyBotApiClient', () => {
 
 		await expect(
 			client.createRecruitment(guildId, { actor }, { idempotencyKey: '400000000000000002' })
+		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
+	});
+
+	it('accepts canonical dummy participant IDs but rejects malformed internal IDs', async () => {
+		const validFetch = vi.fn(async () => envelope(snapshot));
+		const client = createClient(validFetch);
+
+		await expect(
+			client.createRecruitment(guildId, { actor }, { idempotencyKey: '400000000000000005' })
+		).resolves.toMatchObject({
+			participants: [
+				{ id: userId, displayName: 'Longcat' },
+				{ id: dummyUserId, displayName: 'Dummy Jungle' }
+			]
+		});
+
+		const invalidSnapshot = structuredClone(snapshot);
+		invalidSnapshot.participants[1]!.id = 'dmy_not-a-uuid';
+		const invalidClient = createClient(vi.fn(async () => envelope(invalidSnapshot)));
+		await expect(
+			invalidClient.createRecruitment(guildId, { actor }, { idempotencyKey: '400000000000000006' })
 		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
 	});
 

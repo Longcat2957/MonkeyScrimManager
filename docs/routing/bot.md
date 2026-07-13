@@ -29,7 +29,8 @@ Bot route의 비책임:
 
 - Bot은 별도 앱 회원가입을 만들지 않는다.
 - 사용자는 Discord interaction의 Discord user id로 식별한다.
-- `/등록`은 앱 회원가입이 아니라, Discord user id에 Riot ID를 연결하는 명령이다.
+- `/등록`은 앱 회원가입이 아니다. 현재 Discord guild에 `(guild_id, Discord user id)` 소속을 등록하고,
+  같은 Discord user id에 Riot 계정을 연결하는 명령이다.
 - 웹 콘솔 인증은 Discord OAuth2만 사용한다.
 
 ## 사용자 Slash Commands
@@ -52,6 +53,9 @@ Backend:
 - 선택한 Discord role ID를 관리 권한의 source로 저장한다.
 - 길드 이름을 생략하면 현재 Discord guild 이름을 사용한다.
 - 설정 완료 후 guild dashboard link를 제공한다.
+- 최초 활성화에만 사용한다. 설정이 끝난 길드에서 새 interaction으로 다시 실행하면
+  `guild_already_configured`를 반환하며 기존 설정을 덮어쓰지 않는다.
+- 동일 interaction ID 재전송은 idempotent success replay로 처리한다.
 
 Backend:
 
@@ -69,12 +73,35 @@ Web link:
 
 목적:
 
-- Discord user id 기준 사용자 record 확인/upsert 및 Riot ID 연결.
-- 앱 회원가입이 아니라 Riot 프로필 연결이다.
+- Discord user id(snowflake) 기준 전역 사용자 record를 확인/upsert한다.
+- interaction이 발생한 현재 guild에 `(guild_id, user_id)` 소속을 등록한다.
+- 사용자가 입력한 `GameName#TagLine`을 검증하고, backend가 확인한 PUUID 기준으로 Riot 계정을
+  전역 사용자에게 연결한다.
+- 앱 회원가입이 아니라 길드 소속 등록과 Riot 프로필 연결이다.
+
+Context:
+
+- Discord guild 전용이다. DM에서는 실행할 수 없다.
+- 실행자 본인만 등록하며 다른 Discord 사용자를 대신 등록하는 option은 두지 않는다.
+- 처리 결과와 오류는 실행자에게만 보이는 ephemeral 응답으로 표시한다. 성공 시 canonical Riot ID와
+  길드 소속/Riot 연결 상태를 embed로 요약하고 `${webOrigin}/me`로 이동하는 Link button을 제공한다.
+  사용자는 해당 화면에서 선호 챔피언, 대표 길드, privacy와 Riot 계정을 이어서 관리한다.
+
+처리 원칙:
+
+- Discord interaction ID를 idempotency key로 사용한다.
+- 같은 guild에서 반복 실행해도 `guild_members`나 같은 Riot 계정 연결을 중복 생성하지 않는다.
+- 이미 다른 guild에 등록된 사용자라면 전역 사용자/Riot 계정은 재사용하고 현재 guild 소속만 추가한다.
+- 기존 `guild_members.status=INACTIVE`는 자동으로 ACTIVE로 바꾸지 않는다. 운영자가 명시적으로
+  재활성화하기 전까지 명령을 거절한다.
+- 성공 응답은 현재 guild 소속 등록과 Riot 계정 연결이 함께 확정되었음을 뜻한다.
 
 Backend:
 
-- user/Riot account 등록 API 또는 core service.
+- `POST /internal/guilds/{guildId}/registrations`.
+- Bot은 `riot_id`를 GameName과 TagLine으로 분리하고 actor의 Discord user id, 전역 표시명, 현재 서버
+  닉네임, avatar/role snapshot과 `gameName`, `tagLine`, `platform=KR`을 service principal 인증 및
+  idempotency key와 함께 전달한다.
 
 ### `/내정보 [user]`
 

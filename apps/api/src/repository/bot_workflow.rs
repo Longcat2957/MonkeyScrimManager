@@ -12,7 +12,10 @@ use super::{
     idempotency::{
         self, AcquireIdempotency, AcquireIdempotencyOutcome, CompleteIdempotency,
         CompleteIdempotencyOutcome, IdempotencyPrincipalType, IdempotencyRepositoryError,
-        IdempotentResponse,
+        IdempotentResponse, PreflightIdempotency, PreflightIdempotencyOutcome,
+    },
+    riot::{
+        self, CanonicalRiotAccount, RiotAccountLinkState, RiotAccountRecord, RiotRepositoryError,
     },
 };
 use crate::{
@@ -20,7 +23,7 @@ use crate::{
     domain::{
         DiscordChannelId, DiscordInteractionId, DiscordMessageId, DiscordRoleId, DiscordUserId,
         GuildId, GuildMemberStatus, GuildStatus, IdempotencyRecordId, Lane, OutboxEventId,
-        RecruitmentId, RecruitmentStatus, SeasonId,
+        RecruitmentId, RecruitmentStatus, SeasonId, UserId,
     },
     infrastructure::postgres::{
         DatabaseTransaction, DeadlockRetryPolicy, TransactionAttemptError, TransactionRetryError,
@@ -35,11 +38,14 @@ const RECRUITMENT_TARGET_COUNT: i16 = 10;
 const MAX_PREFERRED_LANES: usize = 5;
 const SETUP_METHOD: &str = "POST";
 const SETUP_ROUTE: &str = "/internal/guilds/{guildId}/setup";
+const REGISTRATION_METHOD: &str = "POST";
+const REGISTRATION_ROUTE: &str = "/internal/guilds/{guildId}/registrations";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BotActor {
     pub id: DiscordUserId,
+    pub global_display_name: String,
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub role_ids: Vec<DiscordRoleId>,
@@ -74,6 +80,55 @@ pub struct SetupGuildResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterGuildMemberInput {
+    pub actor: BotActor,
+    pub requested_game_name: String,
+    pub requested_tag_line: String,
+    pub requested_platform: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisterGuildMemberCommand {
+    pub input: RegisterGuildMemberInput,
+    pub account: CanonicalRiotAccount,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RegistrationState {
+    Created,
+    Existing,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredGuildMemberSnapshot {
+    pub id: DiscordUserId,
+    pub display_name: String,
+    pub status: GuildMemberStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredRiotAccountSnapshot {
+    pub puuid: String,
+    pub game_name: String,
+    pub tag_line: String,
+    pub platform: String,
+    pub is_main: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterGuildMemberResult {
+    pub member: RegisteredGuildMemberSnapshot,
+    pub riot_account: RegisteredRiotAccountSnapshot,
+    pub registration: RegistrationState,
+    pub account_link: RegistrationState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BotRecruitmentCommand {
     Create {
@@ -93,12 +148,12 @@ pub enum BotRecruitmentCommand {
     Leave {
         actor: BotActor,
         recruitment_id: RecruitmentId,
-        user_id: DiscordUserId,
+        user_id: UserId,
     },
     SetPreferredLanes {
         actor: BotActor,
         recruitment_id: RecruitmentId,
-        user_id: DiscordUserId,
+        user_id: UserId,
         lanes: Vec<Lane>,
     },
     Close {
@@ -125,7 +180,7 @@ pub struct RecruitmentSummarySnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecruitmentParticipantSnapshot {
-    pub id: DiscordUserId,
+    pub id: UserId,
     pub display_name: String,
     pub preferred_lanes: Vec<Lane>,
 }
@@ -186,6 +241,122 @@ pub async fn setup_guild(
     )
     .await
     .map_err(map_transaction_error)
+}
+
+pub async fn register_guild_member(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    idempotency_key: &DiscordInteractionId,
+    command: RegisterGuildMemberCommand,
+) -> Result<RegisterGuildMemberResult, BotWorkflowError> {
+    validate_registration_input(&command.input)?;
+
+    let request_hash = request_hash(guild_id, &command.input)?;
+    let guild_id = guild_id.clone();
+    let idempotency_key = idempotency_key.clone();
+    let prepared = RegistrationPrepared::new();
+
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let command = command.clone();
+            let request_hash = request_hash.clone();
+
+            Box::pin(async move {
+                register_guild_member_attempt(
+                    transaction,
+                    &guild_id,
+                    &idempotency_key,
+                    &request_hash,
+                    &command,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
+}
+
+pub async fn preflight_guild_registration(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    idempotency_key: &DiscordInteractionId,
+    input: &RegisterGuildMemberInput,
+) -> Result<Option<RegisterGuildMemberResult>, BotWorkflowError> {
+    validate_registration_input(input)?;
+    let request_hash = request_hash(guild_id, input)?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let outcome = idempotency::preflight(
+        pool,
+        &PreflightIdempotency {
+            scope: &scope,
+            principal_type: IdempotencyPrincipalType::Bot,
+            principal_id: BOT_PRINCIPAL_ID,
+            method: REGISTRATION_METHOD,
+            route_template: REGISTRATION_ROUTE,
+            idempotency_key: idempotency_key.as_str(),
+            request_hash: &request_hash,
+            inspected_at: OffsetDateTime::now_utc(),
+        },
+    )
+    .await
+    .map_err(map_preflight_error)?;
+
+    match outcome {
+        PreflightIdempotencyOutcome::Missing => {
+            let actor_user_id = UserId::from(&input.actor.id);
+            require_registration_eligibility(pool, guild_id, &actor_user_id).await?;
+            Ok(None)
+        }
+        PreflightIdempotencyOutcome::Replay { response } => {
+            if response.status_code != 200 {
+                return Err(BotWorkflowError::InvariantViolation);
+            }
+            let body = response.body.ok_or(BotWorkflowError::InvariantViolation)?;
+            Ok(Some(serde_json::from_value(body)?))
+        }
+        PreflightIdempotencyOutcome::Conflict => Err(BotWorkflowError::IdempotencyConflict),
+        PreflightIdempotencyOutcome::InProgress => Err(BotWorkflowError::IdempotencyInProgress),
+    }
+}
+
+async fn require_registration_eligibility(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    user_id: &UserId,
+) -> Result<(), BotWorkflowError> {
+    let eligibility = sqlx::query_as::<_, (GuildStatus, bool, Option<GuildMemberStatus>)>(
+        "SELECT guild.status,
+                config.guild_id IS NOT NULL AS configured,
+                member.status
+         FROM guilds AS guild
+         LEFT JOIN guild_config AS config ON config.guild_id = guild.guild_id
+         LEFT JOIN guild_members AS member
+           ON member.guild_id = guild.guild_id AND member.user_id = $2
+         WHERE guild.guild_id = $1",
+    )
+    .bind(guild_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(BotWorkflowError::Database)?
+    .ok_or(BotWorkflowError::GuildNotFound)?;
+    if eligibility.0 != GuildStatus::Active {
+        return Err(BotWorkflowError::GuildInactive(eligibility.0));
+    }
+    if !eligibility.1 {
+        return Err(BotWorkflowError::GuildNotConfigured);
+    }
+    if eligibility.2 == Some(GuildMemberStatus::Inactive) {
+        return Err(BotWorkflowError::MemberInactive);
+    }
+    Ok(())
 }
 
 pub async fn execute_recruitment_command(
@@ -260,36 +431,38 @@ async fn setup_guild_attempt(
         IdempotencyDecision::Replay(result) => return Ok(result),
     };
 
-    upsert_user(transaction, &command.actor, prepared.now).await?;
-    sqlx::query(
-        "INSERT INTO guilds (
-             guild_id, discord_name, icon_hash, status, installed_by,
-             installed_at, activated_at, left_at, updated_at
-         ) VALUES ($1, $2, $3, 'ACTIVE', $4, $5, $5, NULL, $5)
-         ON CONFLICT (guild_id) DO UPDATE
-         SET discord_name = EXCLUDED.discord_name,
-             icon_hash = EXCLUDED.icon_hash,
-             status = 'ACTIVE',
-             installed_by = EXCLUDED.installed_by,
-             activated_at = COALESCE(guilds.activated_at, EXCLUDED.activated_at),
-             left_at = NULL,
-             updated_at = EXCLUDED.updated_at",
-    )
-    .bind(guild_id)
-    .bind(command.guild_name.trim())
-    .bind(command.guild_icon_hash.as_deref())
-    .bind(&command.actor.id)
-    .bind(prepared.now)
-    .execute(&mut **transaction)
-    .await?;
+    let existing_status = lock_guild_for_setup(transaction, guild_id).await?;
+    if let Some(status) = existing_status {
+        require_guild_setup_available(transaction, guild_id, status).await?;
+    }
 
-    sqlx::query_scalar::<_, GuildStatus>(
-        "SELECT status FROM guilds WHERE guild_id = $1 FOR UPDATE",
-    )
-    .bind(guild_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AttemptError::GuildNotFound)?;
+    upsert_user(transaction, &command.actor, prepared.now).await?;
+    if existing_status.is_some() {
+        activate_guild(transaction, guild_id, command, prepared.now).await?;
+    } else {
+        let inserted = sqlx::query(
+            "INSERT INTO guilds (
+                 guild_id, discord_name, icon_hash, status, installed_by,
+                 installed_at, activated_at, left_at, updated_at
+             ) VALUES ($1, $2, $3, 'ACTIVE', $4, $5, $5, NULL, $5)
+             ON CONFLICT (guild_id) DO NOTHING",
+        )
+        .bind(guild_id)
+        .bind(command.guild_name.trim())
+        .bind(command.guild_icon_hash.as_deref())
+        .bind(&command.actor.id)
+        .bind(prepared.now)
+        .execute(&mut **transaction)
+        .await?;
+
+        if inserted.rows_affected() == 0 {
+            let status = lock_guild_for_setup(transaction, guild_id)
+                .await?
+                .ok_or(AttemptError::GuildNotFound)?;
+            require_guild_setup_available(transaction, guild_id, status).await?;
+            activate_guild(transaction, guild_id, command, prepared.now).await?;
+        }
+    }
 
     sync_guild_actor(transaction, guild_id, &command.actor, prepared.now).await?;
 
@@ -298,12 +471,6 @@ async fn setup_guild_attempt(
              guild_id, display_name, operator_role_id, recruitment_channel_id,
              entry_channel_id, log_channel_id, is_externally_public, revision, updated_by, updated_at
          ) VALUES ($1, $2, $3, NULL, NULL, NULL, false, 0, $4, $5)
-         ON CONFLICT (guild_id) DO UPDATE
-         SET display_name = EXCLUDED.display_name,
-             operator_role_id = EXCLUDED.operator_role_id,
-             revision = guild_config.revision + 1,
-             updated_by = EXCLUDED.updated_by,
-             updated_at = EXCLUDED.updated_at
          RETURNING revision",
     )
     .bind(guild_id)
@@ -393,6 +560,143 @@ async fn setup_guild_attempt(
     Ok(result)
 }
 
+async fn lock_guild_for_setup(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+) -> Result<Option<GuildStatus>, AttemptError> {
+    Ok(sqlx::query_scalar::<_, GuildStatus>(
+        "SELECT status FROM guilds WHERE guild_id = $1 FOR UPDATE",
+    )
+    .bind(guild_id)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
+async fn require_guild_setup_available(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    status: GuildStatus,
+) -> Result<(), AttemptError> {
+    let has_config = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM guild_config WHERE guild_id = $1)",
+    )
+    .bind(guild_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+
+    if status == GuildStatus::Active || has_config {
+        return Err(AttemptError::GuildAlreadyConfigured);
+    }
+    match status {
+        GuildStatus::Installed | GuildStatus::SetupRequired => Ok(()),
+        GuildStatus::Disabled | GuildStatus::Left => {
+            Err(AttemptError::GuildSetupUnavailable(status))
+        }
+        GuildStatus::Active => unreachable!("ACTIVE guilds are rejected above"),
+    }
+}
+
+async fn activate_guild(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    command: &SetupGuildCommand,
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    sqlx::query(
+        "UPDATE guilds
+         SET discord_name = $2,
+             icon_hash = $3,
+             status = 'ACTIVE',
+             installed_by = $4,
+             activated_at = COALESCE(activated_at, $5),
+             left_at = NULL,
+             updated_at = $5
+         WHERE guild_id = $1",
+    )
+    .bind(guild_id)
+    .bind(command.guild_name.trim())
+    .bind(command.guild_icon_hash.as_deref())
+    .bind(&command.actor.id)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn register_guild_member_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    idempotency_key: &DiscordInteractionId,
+    request_hash: &[u8],
+    command: &RegisterGuildMemberCommand,
+    prepared: RegistrationPrepared,
+) -> Result<RegisterGuildMemberResult, AttemptError> {
+    let _operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let record_id = match acquire_idempotency::<RegisterGuildMemberResult>(
+        transaction,
+        IdempotencyAcquire {
+            scope: &scope,
+            record_id: prepared.idempotency_record_id,
+            method: REGISTRATION_METHOD,
+            route_template: REGISTRATION_ROUTE,
+            key: idempotency_key.as_str(),
+            request_hash,
+            now: prepared.now,
+        },
+    )
+    .await?
+    {
+        IdempotencyDecision::Acquired(record_id) => record_id,
+        IdempotencyDecision::Replay(result) => return Ok(result),
+    };
+
+    let existing_status = sqlx::query_scalar::<_, GuildMemberStatus>(
+        "SELECT status
+         FROM guild_members
+         WHERE guild_id = $1 AND user_id = $2
+         FOR UPDATE",
+    )
+    .bind(guild_id)
+    .bind(&command.input.actor.id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if existing_status == Some(GuildMemberStatus::Inactive) {
+        return Err(AttemptError::MemberInactive);
+    }
+    let registration = if existing_status.is_some() {
+        RegistrationState::Existing
+    } else {
+        RegistrationState::Created
+    };
+
+    sync_guild_actor(transaction, guild_id, &command.input.actor, prepared.now).await?;
+    let actor_user_id = UserId::from(&command.input.actor.id);
+    let linked =
+        riot::link_account_in_transaction(transaction, &actor_user_id, &command.account).await?;
+    let account = linked
+        .accounts
+        .into_iter()
+        .find(|account| account.puuid == command.account.puuid)
+        .ok_or(AttemptError::InvariantViolation)?;
+    let result = RegisterGuildMemberResult {
+        member: RegisteredGuildMemberSnapshot {
+            id: command.input.actor.id.clone(),
+            display_name: command.input.actor.display_name.clone(),
+            status: GuildMemberStatus::Active,
+        },
+        riot_account: registered_riot_account(account),
+        registration,
+        account_link: match linked.state {
+            RiotAccountLinkState::Created => RegistrationState::Created,
+            RiotAccountLinkState::Existing => RegistrationState::Existing,
+        },
+    };
+
+    complete_idempotency(transaction, &scope, record_id, 200, &result, prepared.now).await?;
+    Ok(result)
+}
+
 async fn execute_recruitment_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -475,7 +779,8 @@ async fn execute_recruitment_attempt(
             participant,
             ..
         } => {
-            require_self_or_operator(actor, &participant.id, &operator_role_id)?;
+            let participant_user_id = UserId::from(&participant.id);
+            require_self_or_operator(actor, &participant_user_id, &operator_role_id)?;
             let locked = lock_recruitment(transaction, guild_id, *recruitment_id).await?;
             ensure_open(locked.status)?;
             lock_entry_draft(transaction, guild_id, *recruitment_id).await?;
@@ -746,7 +1051,7 @@ async fn leave_recruitment(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
     recruitment_id: RecruitmentId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     now: OffsetDateTime,
 ) -> Result<(), AttemptError> {
     let updated = sqlx::query(
@@ -784,7 +1089,7 @@ async fn set_preferred_lanes(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
     recruitment_id: RecruitmentId,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     lanes: &[Lane],
 ) -> Result<(), AttemptError> {
     let participant_status = sqlx::query_scalar::<_, String>(
@@ -879,7 +1184,7 @@ async fn recruitment_snapshot(
     .bind(recruitment_id.as_uuid())
     .fetch_all(&mut **transaction)
     .await?;
-    let mut lanes_by_user: HashMap<DiscordUserId, Vec<Lane>> = HashMap::new();
+    let mut lanes_by_user: HashMap<UserId, Vec<Lane>> = HashMap::new();
     for row in lane_rows {
         lanes_by_user.entry(row.user_id).or_default().push(row.lane);
     }
@@ -901,27 +1206,61 @@ async fn recruitment_snapshot(
     })
 }
 
+fn registered_riot_account(account: RiotAccountRecord) -> RegisteredRiotAccountSnapshot {
+    RegisteredRiotAccountSnapshot {
+        puuid: account.puuid,
+        game_name: account.game_name,
+        tag_line: account.tag_line,
+        platform: account.platform,
+        is_main: account.is_main,
+    }
+}
+
 async fn upsert_user(
     transaction: &mut DatabaseTransaction,
     actor: &BotActor,
     now: OffsetDateTime,
 ) -> Result<(), AttemptError> {
-    sqlx::query(
+    let user_id = UserId::from(&actor.id);
+    let persisted_user_id = sqlx::query_scalar::<_, String>(
         "INSERT INTO users (
-             discord_id, display_name, avatar_hash, created_at, updated_at, deleted_at
-         ) VALUES ($1, $2, $3, $4, $4, NULL)
-         ON CONFLICT (discord_id) DO UPDATE
+             user_id, identity_kind, display_name, avatar_hash,
+             created_at, updated_at, deleted_at
+         ) VALUES ($1, 'DISCORD', $2, $3, $4, $4, NULL)
+         ON CONFLICT (user_id) DO UPDATE
          SET display_name = EXCLUDED.display_name,
              avatar_hash = EXCLUDED.avatar_hash,
              updated_at = EXCLUDED.updated_at,
-             deleted_at = NULL",
+             deleted_at = NULL
+         WHERE users.identity_kind = 'DISCORD'
+         RETURNING user_id",
     )
-    .bind(&actor.id)
-    .bind(actor.display_name.trim())
+    .bind(&user_id)
+    .bind(actor.global_display_name.trim())
     .bind(actor.avatar_hash.as_deref())
     .bind(now)
-    .execute(&mut **transaction)
-    .await?;
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::IdentityConflict)?;
+
+    let identity_user_id = sqlx::query_scalar::<_, String>(
+        "INSERT INTO user_discord_identities (
+             user_id, discord_id, created_at, updated_at
+         ) VALUES ($1, $2, $3, $3)
+         ON CONFLICT (discord_id) DO UPDATE
+         SET updated_at = EXCLUDED.updated_at
+         WHERE user_discord_identities.user_id = EXCLUDED.user_id
+         RETURNING user_id",
+    )
+    .bind(&user_id)
+    .bind(&actor.id)
+    .bind(now)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::IdentityConflict)?;
+    if identity_user_id != persisted_user_id {
+        return Err(AttemptError::IdentityConflict);
+    }
 
     Ok(())
 }
@@ -1248,6 +1587,19 @@ fn validate_setup_command(command: &SetupGuildCommand) -> Result<(), BotWorkflow
     Ok(())
 }
 
+fn validate_registration_input(input: &RegisterGuildMemberInput) -> Result<(), BotWorkflowError> {
+    validate_actor(&input.actor)?;
+    if input.requested_game_name.trim().is_empty()
+        || input.requested_tag_line.trim().is_empty()
+        || input.requested_platform.trim().is_empty()
+    {
+        return Err(BotWorkflowError::InvalidCommand(
+            "Riot account request is empty",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_recruitment_command(command: &BotRecruitmentCommand) -> Result<(), BotWorkflowError> {
     validate_actor(command.actor())?;
     if let BotRecruitmentCommand::Join { participant, .. } = command {
@@ -1260,7 +1612,7 @@ fn validate_recruitment_command(command: &BotRecruitmentCommand) -> Result<(), B
 }
 
 fn validate_actor(actor: &BotActor) -> Result<(), BotWorkflowError> {
-    if actor.display_name.trim().is_empty() {
+    if actor.global_display_name.trim().is_empty() || actor.display_name.trim().is_empty() {
         return Err(BotWorkflowError::InvalidCommand(
             "actor display name is empty",
         ));
@@ -1292,10 +1644,10 @@ fn require_operator(
 
 fn require_self_or_operator(
     actor: &BotActor,
-    target_user_id: &DiscordUserId,
+    target_user_id: &UserId,
     operator_role_id: &DiscordRoleId,
 ) -> Result<(), AttemptError> {
-    if &actor.id == target_user_id {
+    if UserId::from(&actor.id) == *target_user_id {
         Ok(())
     } else {
         require_operator(actor, operator_role_id)
@@ -1331,7 +1683,15 @@ fn attempt_sql_error(error: &AttemptError) -> Option<&sqlx::Error> {
     match error {
         AttemptError::Sql(error) => Some(error),
         AttemptError::Idempotency(IdempotencyRepositoryError::Sql(error)) => Some(error),
+        AttemptError::Riot(RiotRepositoryError::Sql(error)) => Some(error),
         _ => None,
+    }
+}
+
+fn map_preflight_error(error: IdempotencyRepositoryError) -> BotWorkflowError {
+    match error {
+        IdempotencyRepositoryError::Sql(error) => BotWorkflowError::Database(error),
+        _ => BotWorkflowError::InvariantViolation,
     }
 }
 
@@ -1375,6 +1735,21 @@ struct SetupPrepared {
     idempotency_record_id: IdempotencyRecordId,
     season_id: SeasonId,
     audit_id: Uuid,
+}
+
+#[derive(Clone, Copy)]
+struct RegistrationPrepared {
+    now: OffsetDateTime,
+    idempotency_record_id: IdempotencyRecordId,
+}
+
+impl RegistrationPrepared {
+    fn new() -> Self {
+        Self {
+            now: OffsetDateTime::now_utc(),
+            idempotency_record_id: IdempotencyRecordId::new(),
+        }
+    }
 }
 
 impl SetupPrepared {
@@ -1535,13 +1910,13 @@ impl RecruitmentProjectionRow {
 
 #[derive(Debug, FromRow)]
 struct RecruitmentParticipantRow {
-    id: DiscordUserId,
+    id: UserId,
     display_name: String,
 }
 
 #[derive(Debug, FromRow)]
 struct RecruitmentLaneRow {
-    user_id: DiscordUserId,
+    user_id: UserId,
     lane: Lane,
 }
 
@@ -1551,6 +1926,10 @@ enum AttemptError {
     Sql(#[from] sqlx::Error),
     #[error("idempotency repository operation failed")]
     Idempotency(#[from] IdempotencyRepositoryError),
+    #[error("Riot account repository operation failed")]
+    Riot(#[from] RiotRepositoryError),
+    #[error("Discord identity conflicts with a non-Discord user")]
+    IdentityConflict,
     #[error("bot workflow JSON serialization failed")]
     Serialization(#[from] serde_json::Error),
     #[error("guild was not found")]
@@ -1559,6 +1938,10 @@ enum AttemptError {
     GuildInactive(GuildStatus),
     #[error("guild setup has not created a configuration")]
     GuildNotConfigured,
+    #[error("guild setup was already completed")]
+    GuildAlreadyConfigured,
+    #[error("guild cannot be configured while its status is {0}")]
+    GuildSetupUnavailable(GuildStatus),
     #[error("the actor does not hold the configured operator role")]
     OperatorRequired,
     #[error("the guild member is inactive")]
@@ -1593,6 +1976,8 @@ enum AttemptError {
     CorruptIdempotentResponse,
     #[error("idempotency completion row was not in progress")]
     IdempotencyCompletionLost,
+    #[error("bot workflow storage invariant was violated")]
+    InvariantViolation,
 }
 
 impl AttemptError {
@@ -1603,10 +1988,25 @@ impl AttemptError {
                 BotWorkflowError::Database(error)
             }
             Self::Idempotency(_) => BotWorkflowError::InvariantViolation,
+            Self::Riot(RiotRepositoryError::Sql(error)) => BotWorkflowError::Database(error),
+            Self::Riot(RiotRepositoryError::AlreadyLinked) => {
+                BotWorkflowError::RiotAccountAlreadyLinked
+            }
+            Self::Riot(RiotRepositoryError::IdentityConflict) => {
+                BotWorkflowError::RiotIdentityConflict
+            }
+            Self::Riot(
+                RiotRepositoryError::UserNotFound
+                | RiotRepositoryError::NotFound
+                | RiotRepositoryError::InvalidCanonicalAccount
+                | RiotRepositoryError::InvariantViolation,
+            ) => BotWorkflowError::InvariantViolation,
             Self::Serialization(error) => BotWorkflowError::Serialization(error),
             Self::GuildNotFound => BotWorkflowError::GuildNotFound,
             Self::GuildInactive(status) => BotWorkflowError::GuildInactive(status),
             Self::GuildNotConfigured => BotWorkflowError::GuildNotConfigured,
+            Self::GuildAlreadyConfigured => BotWorkflowError::GuildAlreadyConfigured,
+            Self::GuildSetupUnavailable(status) => BotWorkflowError::GuildSetupUnavailable(status),
             Self::OperatorRequired => BotWorkflowError::OperatorRequired,
             Self::MemberInactive => BotWorkflowError::MemberInactive,
             Self::NoActiveSeason => BotWorkflowError::NoActiveSeason,
@@ -1626,9 +2026,10 @@ impl AttemptError {
             }
             Self::IdempotencyConflict => BotWorkflowError::IdempotencyConflict,
             Self::IdempotencyInProgress => BotWorkflowError::IdempotencyInProgress,
-            Self::CorruptIdempotentResponse | Self::IdempotencyCompletionLost => {
-                BotWorkflowError::InvariantViolation
-            }
+            Self::IdentityConflict => BotWorkflowError::UserIdentityConflict,
+            Self::CorruptIdempotentResponse
+            | Self::IdempotencyCompletionLost
+            | Self::InvariantViolation => BotWorkflowError::InvariantViolation,
         }
     }
 }
@@ -1643,10 +2044,20 @@ pub enum BotWorkflowError {
     GuildInactive(GuildStatus),
     #[error("guild setup is incomplete")]
     GuildNotConfigured,
+    #[error("guild setup was already completed")]
+    GuildAlreadyConfigured,
+    #[error("guild cannot be configured while its status is {0}")]
+    GuildSetupUnavailable(GuildStatus),
     #[error("the configured operator role is required")]
     OperatorRequired,
     #[error("the guild member is inactive")]
     MemberInactive,
+    #[error("the Riot account is already linked to another user")]
+    RiotAccountAlreadyLinked,
+    #[error("the canonical Riot ID conflicts with another account")]
+    RiotIdentityConflict,
+    #[error("the Discord identity conflicts with a non-Discord user")]
+    UserIdentityConflict,
     #[error("the guild has no active season")]
     NoActiveSeason,
     #[error("recruitment was not found")]
@@ -1694,6 +2105,7 @@ mod tests {
     fn actor(role_ids: Vec<DiscordRoleId>) -> BotActor {
         BotActor {
             id: user_id("100000000000000001"),
+            global_display_name: "Operator Global".to_owned(),
             display_name: "Operator".to_owned(),
             avatar_hash: None,
             role_ids,
@@ -1722,12 +2134,12 @@ mod tests {
             BotRecruitmentCommand::Leave {
                 actor: operator.clone(),
                 recruitment_id,
-                user_id: operator.id.clone(),
+                user_id: UserId::from(&operator.id),
             },
             BotRecruitmentCommand::SetPreferredLanes {
                 actor: operator.clone(),
                 recruitment_id,
-                user_id: operator.id.clone(),
+                user_id: UserId::from(&operator.id),
                 lanes: vec![Lane::Mid],
             },
             BotRecruitmentCommand::Close {
@@ -1761,10 +2173,17 @@ mod tests {
         let operator_role = role_id("300000000000000001");
         let target = user_id("100000000000000002");
         let self_actor = actor(vec![]);
-        assert!(require_self_or_operator(&self_actor, &self_actor.id, &operator_role).is_ok());
-        assert!(require_self_or_operator(&self_actor, &target, &operator_role).is_err());
+        assert!(
+            require_self_or_operator(&self_actor, &UserId::from(&self_actor.id), &operator_role)
+                .is_ok()
+        );
+        assert!(
+            require_self_or_operator(&self_actor, &UserId::from(&target), &operator_role).is_err()
+        );
 
         let operator = actor(vec![operator_role.clone()]);
-        assert!(require_self_or_operator(&operator, &target, &operator_role).is_ok());
+        assert!(
+            require_self_or_operator(&operator, &UserId::from(&target), &operator_role).is_ok()
+        );
     }
 }

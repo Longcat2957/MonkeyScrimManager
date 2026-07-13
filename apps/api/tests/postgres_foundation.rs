@@ -80,6 +80,7 @@ async fn run_postgres_foundation_contract() -> TestResult {
     assert_runtime_connection_settings(&full).await?;
     assert_latest_schema(&full).await?;
     assert_snowflake_constraints(&full).await?;
+    assert_riot_origin_identity_constraint(&full).await?;
     assert_fk_indexes_cover_child_columns(&full).await?;
     assert_constraints_and_tenant_isolation(&full).await?;
     assert_idempotency_contract(&full).await?;
@@ -110,6 +111,8 @@ async fn run_postgres_foundation_contract() -> TestResult {
         .await;
     assert_eq!(snapshot.postgres, ComponentStatus::Available);
     assert_eq!(snapshot.migration, ComponentStatus::Unavailable);
+
+    assert_riot_origin_identity_upgrade(&admin, &server).await?;
 
     create_database(&admin, "monkeybot_empty").await?;
     let empty = PgPoolOptions::new()
@@ -309,7 +312,7 @@ async fn assert_latest_schema(pool: &PgPool) -> TestResult {
     )
     .fetch_one(pool)
     .await?;
-    assert_eq!(table_count, 58, "unexpected public table count");
+    assert_eq!(table_count, 63, "unexpected public table count");
     Ok(())
 }
 
@@ -530,16 +533,58 @@ async fn assert_snowflake_constraints(pool: &PgPool) -> TestResult {
         assert!(!accepted, "accepted invalid snowflake {invalid}");
     }
 
+    sqlx::query(
+        "INSERT INTO users (user_id, identity_kind, display_name, created_at, updated_at)
+         VALUES ('dmy_01900000-0000-7000-8000-000000000001', 'DUMMY',
+                 'Dummy User', clock_timestamp(), clock_timestamp())",
+    )
+    .execute(pool)
+    .await?;
+
     let invalid_user = sqlx::query(
-        "INSERT INTO users (discord_id, display_name, created_at, updated_at)
-         VALUES ('01', 'invalid', clock_timestamp(), clock_timestamp())",
+        "INSERT INTO users (user_id, display_name, created_at, updated_at)
+         VALUES (' invalid', 'invalid', clock_timestamp(), clock_timestamp())",
     )
     .execute(pool)
     .await
-    .expect_err("users.discord_id must enforce the snowflake constraint");
+    .expect_err("users.user_id must reject untrimmed identifiers");
+    assert_eq!(constraint_name(&invalid_user), Some("users_user_id_check"));
+
+    for (user_id, identity_kind) in [
+        ("100000000000000098", "DUMMY"),
+        ("dmy_01900000-0000-7000-8000-000000000002", "DISCORD"),
+        ("dmy_01900000-0000-6000-8000-000000000003", "DUMMY"),
+    ] {
+        let invalid_identity = sqlx::query(
+            "INSERT INTO users (
+                 user_id, identity_kind, display_name, created_at, updated_at
+             ) VALUES ($1, $2, 'invalid identity', clock_timestamp(), clock_timestamp())",
+        )
+        .bind(user_id)
+        .bind(identity_kind)
+        .execute(pool)
+        .await
+        .expect_err("users.user_id must match its identity kind");
+        assert_eq!(
+            constraint_name(&invalid_identity),
+            Some("users_user_id_check")
+        );
+    }
+
+    let invalid_dummy_discord_identity = sqlx::query(
+        "INSERT INTO user_discord_identities (
+             user_id, discord_id, created_at, updated_at
+         ) VALUES (
+             'dmy_01900000-0000-7000-8000-000000000001',
+             '100000000000000099', clock_timestamp(), clock_timestamp()
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect_err("DUMMY users must not own Discord identities");
     assert_eq!(
-        constraint_name(&invalid_user),
-        Some("users_discord_id_check")
+        constraint_name(&invalid_dummy_discord_identity),
+        Some("user_discord_identities_user_fk")
     );
 
     let invalid_guild = sqlx::query(
@@ -555,6 +600,129 @@ async fn assert_snowflake_constraints(pool: &PgPool) -> TestResult {
         constraint_name(&invalid_guild),
         Some("guilds_guild_id_check")
     );
+    Ok(())
+}
+
+async fn assert_riot_origin_identity_constraint(pool: &PgPool) -> TestResult {
+    let discord_user_id = "100000000000000097";
+    let dummy_user_id = "dmy_01900000-0000-7000-8000-000000000001";
+    sqlx::query(
+        "INSERT INTO users (user_id, display_name, created_at, updated_at)
+         VALUES ($1, 'Riot Owner', clock_timestamp(), clock_timestamp())",
+    )
+    .bind(discord_user_id)
+    .execute(pool)
+    .await?;
+
+    for (puuid, user_id, origin, synced) in [
+        ("riot:valid-owner", discord_user_id, "RIOT", true),
+        ("dummy:valid-owner", dummy_user_id, "DUMMY", false),
+    ] {
+        insert_riot_account(pool, puuid, user_id, origin, synced).await?;
+    }
+    let valid_pairs = sqlx::query_as::<_, (String, String)>(
+        "SELECT origin, owner_identity_kind
+         FROM riot_accounts
+         WHERE puuid IN ('riot:valid-owner', 'dummy:valid-owner')
+         ORDER BY origin",
+    )
+    .fetch_all(pool)
+    .await?;
+    assert_eq!(
+        valid_pairs,
+        vec![
+            ("DUMMY".to_owned(), "DUMMY".to_owned()),
+            ("RIOT".to_owned(), "DISCORD".to_owned()),
+        ]
+    );
+
+    for (puuid, user_id, origin, synced) in [
+        ("riot:dummy-owner", dummy_user_id, "RIOT", true),
+        ("dummy:discord-owner", discord_user_id, "DUMMY", false),
+    ] {
+        let mismatch = insert_riot_account(pool, puuid, user_id, origin, synced)
+            .await
+            .expect_err("Riot account origin must match the owner's identity kind");
+        assert_eq!(
+            constraint_name(&mismatch),
+            Some("riot_accounts_owner_identity_fk")
+        );
+    }
+    Ok(())
+}
+
+async fn insert_riot_account(
+    pool: &PgPool,
+    puuid: &str,
+    user_id: &str,
+    origin: &str,
+    synced: bool,
+) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO riot_accounts (
+             puuid, user_id, platform, routing_region,
+             game_name, tag_line, normalized_game_name, normalized_tag_line,
+             profile_icon_id, is_main, main_position, main_position_updated_at,
+             last_synced_at, created_at, updated_at, origin
+         ) VALUES (
+             $1, $2, 'KR', 'ASIA',
+             $1, 'TEST', $1, 'test',
+             NULL, false, NULL, NULL,
+             CASE WHEN $4 THEN clock_timestamp() ELSE NULL END,
+             clock_timestamp(), clock_timestamp(), $3
+         )",
+    )
+    .bind(puuid)
+    .bind(user_id)
+    .bind(origin)
+    .bind(synced)
+    .execute(pool)
+    .await
+}
+
+async fn assert_riot_origin_identity_upgrade(admin: &PgPool, server: &TestPostgres) -> TestResult {
+    create_database(admin, "monkeybot_identity_upgrade").await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&server.database_url("monkeybot_identity_upgrade"))
+        .await?;
+    MIGRATOR.run_to(12, &pool).await?;
+    sqlx::query(
+        "INSERT INTO users (user_id, display_name, created_at, updated_at)
+         VALUES ('100000000000000096', 'Legacy Riot Owner', clock_timestamp(), clock_timestamp())",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO riot_accounts (
+             puuid, user_id, platform, routing_region,
+             game_name, tag_line, normalized_game_name, normalized_tag_line,
+             profile_icon_id, is_main, main_position, main_position_updated_at,
+             last_synced_at, created_at, updated_at
+         ) VALUES (
+             'legacy-puuid', '100000000000000096', 'KR', 'ASIA',
+             'Legacy', 'KR1', 'legacy', 'kr1',
+             NULL, true, NULL, NULL,
+             clock_timestamp(), clock_timestamp(), clock_timestamp()
+         )",
+    )
+    .execute(&pool)
+    .await?;
+
+    MIGRATOR.run(&pool).await?;
+    let upgraded = sqlx::query_as::<_, (String, String)>(
+        "SELECT origin, owner_identity_kind
+         FROM riot_accounts
+         WHERE puuid = 'legacy-puuid'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        upgraded,
+        ("RIOT".to_owned(), "DISCORD".to_owned()),
+        "migrations 0013/0014 must classify existing Riot accounts without rewriting ownership"
+    );
+    pool.close().await;
     Ok(())
 }
 
@@ -602,7 +770,7 @@ async fn assert_constraints_and_tenant_isolation(pool: &PgPool) -> TestResult {
     let season_b = Uuid::now_v7();
 
     sqlx::query(
-        "INSERT INTO users (discord_id, display_name, created_at, updated_at)
+        "INSERT INTO users (user_id, display_name, created_at, updated_at)
          VALUES ($1, 'Longcat', $2, $2)",
     )
     .bind(user_id)
@@ -1395,7 +1563,7 @@ async fn assert_concurrent_mmr_initialization(pool: &PgPool) -> TestResult {
     );
     let user_id = DiscordUserId::parse("100000000000000001")?;
     let key = MmrLaneKey {
-        user_id,
+        user_id: user_id.into(),
         lane: Lane::Mid,
     };
     let barrier = std::sync::Arc::new(Barrier::new(3));

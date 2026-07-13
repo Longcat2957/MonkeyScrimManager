@@ -1,6 +1,10 @@
 import { z, type ZodType } from 'zod';
 
 export const discordSnowflakeSchema = z.string().regex(/^[1-9][0-9]{0,19}$/);
+export const dummyUserIdSchema = z
+	.string()
+	.regex(/^dmy_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+export const recruitmentParticipantIdSchema = z.union([discordSnowflakeSchema, dummyUserIdSchema]);
 export const uuidSchema = z.uuid();
 export const timestampSchema = z.iso.datetime({ offset: true });
 export const laneSchema = z.enum(['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT']);
@@ -8,6 +12,7 @@ export const laneSchema = z.enum(['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT']);
 export const actorSchema = z
 	.object({
 		id: discordSnowflakeSchema,
+		globalDisplayName: z.string().min(1).max(100),
 		displayName: z.string().min(1).max(100),
 		avatarHash: z.string().min(1).nullable(),
 		roleIds: z.array(discordSnowflakeSchema)
@@ -47,6 +52,38 @@ export const setupGuildDataSchema = z
 	})
 	.strict();
 
+export const registerGuildMemberRequestSchema = z
+	.object({
+		actor: actorSchema,
+		gameName: z.string().min(1).max(64),
+		tagLine: z.string().min(1).max(16),
+		platform: z.literal('KR')
+	})
+	.strict();
+
+export const registerGuildMemberDataSchema = z
+	.object({
+		member: z
+			.object({
+				id: discordSnowflakeSchema,
+				displayName: z.string().min(1).max(100),
+				status: z.literal('ACTIVE')
+			})
+			.strict(),
+		riotAccount: z
+			.object({
+				puuid: z.string().min(1).max(256),
+				gameName: z.string().min(1).max(64),
+				tagLine: z.string().min(1).max(16),
+				platform: z.literal('KR'),
+				isMain: z.boolean()
+			})
+			.strict(),
+		registration: z.enum(['CREATED', 'EXISTING']),
+		accountLink: z.enum(['CREATED', 'EXISTING'])
+	})
+	.strict();
+
 export const discordCatalogRoleSchema = z
 	.object({
 		id: discordSnowflakeSchema,
@@ -81,7 +118,7 @@ export const discordCatalogSyncDataSchema = z
 
 export const recruitmentParticipantSchema = z
 	.object({
-		id: discordSnowflakeSchema,
+		id: recruitmentParticipantIdSchema,
 		displayName: z.string().min(1),
 		preferredLanes: z.array(laneSchema).max(5)
 	})
@@ -197,6 +234,8 @@ export type Lane = z.infer<typeof laneSchema>;
 export type Actor = z.infer<typeof actorSchema>;
 export type SetupGuildRequest = z.infer<typeof setupGuildRequestSchema>;
 export type SetupGuildData = z.infer<typeof setupGuildDataSchema>;
+export type RegisterGuildMemberRequest = z.infer<typeof registerGuildMemberRequestSchema>;
+export type RegisterGuildMemberData = z.infer<typeof registerGuildMemberDataSchema>;
 export type DiscordCatalogRole = z.infer<typeof discordCatalogRoleSchema>;
 export type DiscordCatalogChannel = z.infer<typeof discordCatalogChannelSchema>;
 export type DiscordCatalogSyncRequest = z.infer<typeof discordCatalogSyncRequestSchema>;

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use thiserror::Error;
 
-use crate::domain::{DiscordUserId, Lane};
+use crate::domain::{Lane, UserId};
 
 pub const MAX_CHAMPIONS_PER_LANE: usize = 10;
 const MAX_CHAMPION_ID_BYTES: usize = 64;
@@ -19,7 +19,7 @@ pub struct ChampionPreferencesSnapshot {
 
 pub async fn get(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<ChampionPreferencesSnapshot, ChampionPreferencesRepositoryError> {
     let rows = fetch_rows(pool, user_id).await?;
     snapshot_from_rows(rows)
@@ -27,7 +27,7 @@ pub async fn get(
 
 pub async fn replace_lane(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     lane: Lane,
     champion_ids: Vec<String>,
 ) -> Result<ChampionPreferencesSnapshot, ChampionPreferencesRepositoryError> {
@@ -87,12 +87,12 @@ fn validate_champion_ids(
 
 async fn lock_user(
     transaction: &mut Transaction<'_, Postgres>,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<(), ChampionPreferencesRepositoryError> {
     let exists = sqlx::query_scalar::<_, String>(
-        "SELECT discord_id
+        "SELECT user_id
          FROM users
-         WHERE discord_id = $1 AND deleted_at IS NULL
+         WHERE user_id = $1 AND deleted_at IS NULL
          FOR UPDATE",
     )
     .bind(user_id)
@@ -107,7 +107,7 @@ async fn lock_user(
 
 async fn fetch_rows<'e, E>(
     executor: E,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
 ) -> Result<Vec<ChampionPreferenceRow>, sqlx::Error>
 where
     E: sqlx::Executor<'e, Database = Postgres>,

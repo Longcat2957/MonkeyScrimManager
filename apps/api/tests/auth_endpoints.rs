@@ -13,7 +13,7 @@ use monkeybot_api::{
     domain::DiscordUserId,
     infrastructure::postgres::{MIGRATOR, PostgresReadinessProbe},
     integrations::discord::{DiscordClient, DiscordClientError, DiscordUser},
-    repository::auth::{AuthRepository, NewLogin},
+    repository::auth::{AuthRepository, AuthRepositoryError, NewLogin},
     state::{AppState, AuthRuntime},
 };
 use reqwest::Url;
@@ -37,6 +37,8 @@ const DATABASE: &str = "monkeybot_auth_endpoints";
 const USER_ID: &str = "100000000000000001";
 const MEMBER_ID: &str = "100000000000000002";
 const OUTSIDER_ID: &str = "100000000000000003";
+const COLLIDING_DISCORD_ID: &str = "100000000000000099";
+const EXISTING_IDENTITY_OWNER_ID: &str = "100000000000000098";
 const GUILD_A: &str = "200000000000000001";
 const GUILD_B: &str = "200000000000000002";
 const OPERATOR_ROLE_A: &str = "300000000000000001";
@@ -197,7 +199,10 @@ async fn run_auth_and_guild_context_vertical_flow() -> TestResult {
     assert!(cleared_state.contains("Max-Age=0"));
 
     let user = sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT discord_id, display_name, avatar_hash FROM users WHERE discord_id = $1",
+        "SELECT identity.discord_id, app_user.display_name, app_user.avatar_hash
+         FROM users AS app_user
+         JOIN user_discord_identities AS identity ON identity.user_id = app_user.user_id
+         WHERE identity.discord_id = $1",
     )
     .bind(USER_ID)
     .fetch_one(&pool)
@@ -317,7 +322,7 @@ async fn run_auth_and_guild_context_vertical_flow() -> TestResult {
     let member_session = auth_service.new_session()?;
     AuthRepository::new(pool.clone())
         .complete_login(&NewLogin {
-            user_id: DiscordUserId::parse(MEMBER_ID)?,
+            discord_user_id: DiscordUserId::parse(MEMBER_ID)?,
             display_name: "Second Member".to_owned(),
             avatar_hash: None,
             previous_session_token_hash: None,
@@ -456,6 +461,69 @@ async fn run_auth_and_guild_context_vertical_flow() -> TestResult {
         "invalid_oauth_state"
     );
 
+    sqlx::query(
+        "INSERT INTO users (
+             user_id, identity_kind, display_name, created_at, updated_at
+         ) VALUES ($1, 'DISCORD', 'Protected Identity Owner', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    )
+    .bind(EXISTING_IDENTITY_OWNER_ID)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO user_discord_identities (
+             user_id, discord_id, created_at, updated_at
+         ) VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    )
+    .bind(EXISTING_IDENTITY_OWNER_ID)
+    .bind(COLLIDING_DISCORD_ID)
+    .execute(&pool)
+    .await?;
+    let collision_session = auth_service.new_session()?;
+    let collision = AuthRepository::new(pool.clone())
+        .complete_login(&NewLogin {
+            discord_user_id: DiscordUserId::parse(COLLIDING_DISCORD_ID)?,
+            display_name: "Discord Collision".to_owned(),
+            avatar_hash: None,
+            previous_session_token_hash: None,
+            session_id: Uuid::now_v7(),
+            token_hash: collision_session.token_hash,
+            csrf_secret_hash: collision_session.csrf_secret_hash,
+            expires_at: OffsetDateTime::now_utc() + time::Duration::hours(1),
+        })
+        .await;
+    assert!(matches!(
+        collision,
+        Err(AuthRepositoryError::IdentityConflict)
+    ));
+    let preserved = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT app_user.identity_kind,
+                app_user.display_name,
+                (SELECT count(*) FROM user_discord_identities WHERE discord_id = $1)
+         FROM users AS app_user
+         JOIN user_discord_identities AS identity ON identity.user_id = app_user.user_id
+         WHERE identity.discord_id = $1",
+    )
+    .bind(COLLIDING_DISCORD_ID)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        preserved,
+        (
+            "DISCORD".to_owned(),
+            "Protected Identity Owner".to_owned(),
+            1
+        )
+    );
+    let colliding_user_created =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM users WHERE user_id = $1)")
+            .bind(COLLIDING_DISCORD_ID)
+            .fetch_one(&pool)
+            .await?;
+    assert!(
+        !colliding_user_created,
+        "failed login must roll back the new user"
+    );
+
     pool.close().await;
     drop(server);
     Ok(())
@@ -504,7 +572,7 @@ fn test_config(database_url: String) -> Result<Config, Box<dyn Error + Send + Sy
 
 async fn seed_guild_context(pool: &PgPool) -> TestResult<(Uuid, Uuid)> {
     sqlx::query(
-        "INSERT INTO users (discord_id, display_name, created_at, updated_at)
+        "INSERT INTO users (user_id, display_name, created_at, updated_at)
          VALUES
            ($1, 'Second Member', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
            ($2, 'Outsider', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",

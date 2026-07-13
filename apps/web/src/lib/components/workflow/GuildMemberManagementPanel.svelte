@@ -1,6 +1,16 @@
 <script lang="ts">
 	import { Dialog } from 'bits-ui';
-	import { Check, Gauge, Search, UserCheck, UserRound, UsersRound, UserX, X } from 'lucide-svelte';
+	import {
+		Check,
+		Gauge,
+		Search,
+		UserCheck,
+		UserPlus,
+		UserRound,
+		UsersRound,
+		UserX,
+		X
+	} from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
 	import type { GuildAdminMember, GuildMemberStatus } from '$lib/contracts/workflow';
 	import { LANES, laneLabel, type Lane } from '$lib/fixtures/workflow';
@@ -8,6 +18,7 @@
 	import { formatRelativeTime } from '$lib/workflow/presentation';
 
 	type StatusFilter = 'ALL' | GuildMemberStatus;
+	type IdentityFilter = 'ALL' | GuildAdminMember['identityKind'];
 
 	interface Props {
 		members: GuildAdminMember[];
@@ -15,11 +26,20 @@
 		currentUserId: string;
 		onAdjustMmr: (command: GuildMmrAdjustmentCommand) => void | Promise<void>;
 		onSetStatus: (command: GuildMemberStatusCommand) => void | Promise<void>;
+		dummyUsersHref?: string | null;
 	}
 
-	let { members, revision, currentUserId, onAdjustMmr, onSetStatus }: Props = $props();
+	let {
+		members,
+		revision,
+		currentUserId,
+		onAdjustMmr,
+		onSetStatus,
+		dummyUsersHref = null
+	}: Props = $props();
 	let query = $state('');
 	let statusFilter = $state<StatusFilter>('ALL');
+	let identityFilter = $state<IdentityFilter>('ALL');
 	let adjustmentOpen = $state(false);
 	let selectedMemberId = $state<string | null>(null);
 	let selectedLane = $state<Lane | ''>('');
@@ -41,7 +61,8 @@
 				member.discordName.toLocaleLowerCase().includes(normalizedQuery) ||
 				member.riotId?.toLocaleLowerCase().includes(normalizedQuery);
 			const matchesStatus = statusFilter === 'ALL' || member.status === statusFilter;
-			return matchesQuery && matchesStatus;
+			const matchesIdentity = identityFilter === 'ALL' || member.identityKind === identityFilter;
+			return matchesQuery && matchesStatus && matchesIdentity;
 		})
 	);
 	const canAdjust = $derived(
@@ -158,12 +179,24 @@
 				<p class="text-xs text-slate-500">등록 상태와 길드 MMR 관리</p>
 			</div>
 		</div>
-		{#if notice}
-			<span class="hidden items-center gap-1 text-xs font-semibold text-emerald-300 lg:inline-flex">
-				<Check size={14} aria-hidden="true" />
-				{notice}
-			</span>
-		{/if}
+		<div class="flex items-center gap-2">
+			{#if notice}
+				<span
+					class="hidden items-center gap-1 text-xs font-semibold text-emerald-300 lg:inline-flex"
+				>
+					<Check size={14} aria-hidden="true" />
+					{notice}
+				</span>
+			{/if}
+			{#if dummyUsersHref}
+				<a
+					href={dummyUsersHref}
+					class="inline-flex h-9 items-center gap-1.5 border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
+				>
+					<UserPlus size={14} aria-hidden="true" /> 더미 회원
+				</a>
+			{/if}
+		</div>
 	</header>
 	{#if errorMessage && !adjustmentOpen}
 		<div
@@ -175,7 +208,7 @@
 	{/if}
 
 	<div
-		class="grid gap-2 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-3 sm:grid-cols-[minmax(0,1fr)_150px]"
+		class="grid gap-2 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-3 sm:grid-cols-[minmax(0,1fr)_140px_140px]"
 	>
 		<label
 			class="flex h-10 min-w-0 items-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3"
@@ -183,7 +216,7 @@
 			<Search size={15} class="shrink-0 text-slate-500" aria-hidden="true" />
 			<input
 				bind:value={query}
-				placeholder="Discord 이름 또는 Riot ID"
+				placeholder="멤버 이름 또는 Riot ID"
 				aria-label="길드 멤버 검색"
 				class="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
 			/>
@@ -196,6 +229,15 @@
 			<option value="ALL">전체 상태</option>
 			<option value="ACTIVE">활성</option>
 			<option value="INACTIVE">비활성</option>
+		</select>
+		<select
+			bind:value={identityFilter}
+			aria-label="멤버 유형 필터"
+			class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-semibold text-slate-300 outline-none"
+		>
+			<option value="ALL">전체 유형</option>
+			<option value="DISCORD">Discord</option>
+			<option value="DUMMY">더미</option>
 		</select>
 	</div>
 
@@ -210,7 +252,12 @@
 							<UserRound size={15} aria-hidden="true" />
 						</span>
 						<span class="min-w-0">
-							<strong class="block truncate text-xs text-slate-100">{member.discordName}</strong>
+							<span class="flex min-w-0 items-center gap-1.5">
+								<strong class="truncate text-xs text-slate-100">{member.discordName}</strong>
+								{#if member.identityKind === 'DUMMY'}
+									<small class="shrink-0 text-[9px] font-semibold text-cyan-300">더미</small>
+								{/if}
+							</span>
 							<small class="block truncate text-[10px] text-slate-600">
 								{member.riotId ?? 'Riot 계정 미연결'}
 							</small>
@@ -306,7 +353,12 @@
 								<UserRound size={15} aria-hidden="true" />
 							</span>
 							<span class="min-w-0">
-								<strong class="block truncate text-xs text-slate-100">{member.discordName}</strong>
+								<span class="flex min-w-0 items-center gap-1.5">
+									<strong class="truncate text-xs text-slate-100">{member.discordName}</strong>
+									{#if member.identityKind === 'DUMMY'}
+										<small class="shrink-0 text-[9px] font-semibold text-cyan-300">더미</small>
+									{/if}
+								</span>
 								<small class="block truncate text-[10px] text-slate-600">
 									{member.riotId ?? 'Riot 계정 미연결'}
 								</small>

@@ -112,6 +112,10 @@ admin_audit_log
 - bot 재설치 시 기존 `guild_id` 데이터는 복구 가능해야 한다.
 - `/초기설정`은 회원가입이 아니라 guild 운영 공간 활성화다.
 - `/초기설정`은 선택적 guild 표시 이름과 Discord 관리 role을 받는다.
+- `/초기설정`은 `INSTALLED` 또는 `SETUP_REQUIRED` 상태에서 설정 row가 없을 때 한 번만 실행한다.
+- 동일 Discord interaction의 재전송은 저장된 성공 응답을 재생하지만, 설정 완료 뒤 새 interaction으로
+  다시 실행하면 `guild_already_configured`로 거절하고 guild, member, config, season을 변경하지 않는다.
+- 활성화 이후 이름과 role 변경은 guild 관리 화면의 revision 기반 설정 API를 사용한다.
 
 ## 2. 웹 로그인 / 권한 확인
 
@@ -297,11 +301,13 @@ Web /me
 
 ```txt
 /등록 riot_id
-  -> Discord user 확인
-  -> users upsert
+  -> 현재 Discord guild와 실행자 Discord user id(snowflake) 확인
+  -> users를 Discord user id 기준으로 upsert
   -> GameName, TagLine, platform 입력 검증
   -> Riot Account-v1에서 PUUID/canonical Riot ID 확인
-  -> riot_accounts 연결
+  -> (guild_id, Discord user id) guild_members 소속 등록
+  -> PUUID 기준 riot_accounts를 global user에 연결
+  -> 길드 소속과 Riot 계정 연결이 모두 반영된 경우에만 성공 응답
 
 Web Riot 계정 관리
   -> Discord OAuth2 session 확인
@@ -313,10 +319,23 @@ Web Riot 계정 관리
 원칙:
 
 - `/등록`은 회원가입이 아니다.
-- Riot 계정은 global user에 연결된다.
+- `/등록`은 DM에서 실행할 수 없으며 interaction이 발생한 현재 Discord guild에만 소속을 등록한다.
+- Discord user의 canonical identity는 닉네임이 아니라 Discord user id(snowflake)다. `guild_members`의
+  identity는 `(guild_id, user_id)`이고 guild nickname은 갱신 가능한 표시 속성이다.
+- Riot 계정의 canonical identity는 PUUID이며 global user에 연결된다. GameName과 TagLine 변경으로
+  새로운 사용자나 길드 소속을 만들지 않는다.
+- Riot resolver가 성공한 뒤 길드 소속 등록과 Riot 계정 연결을 하나의 짧은 transaction으로 확정한다.
+  어느 한쪽만 반영된 상태로 `/등록` 성공을 응답하지 않는다.
+- 같은 Discord interaction 재처리나 같은 사용자의 반복 실행은 멱등적이어야 한다. 이미 ACTIVE인
+  길드 소속과 같은 Riot 계정 연결을 중복 생성하지 않는다.
+- 관리자가 해당 guild에서 INACTIVE로 전환한 기존 member는 `/등록`으로 ACTIVE로 되돌리지 않는다.
+  명령을 거절하고 운영자의 명시적 재활성화를 요구한다.
+- 같은 Discord user가 다른 guild에서 `/등록`하면 전역 user/Riot 계정은 재사용하고 새
+  `(guild_id, user_id)` 소속만 등록한다. 전적과 MMR은 계속 guild별로 분리한다.
 - Bot과 Web은 같은 Riot ID resolver와 account linking application service를 사용한다.
 - 사용자나 frontend는 PUUID와 regional routing을 입력하지 않는다. Backend가 Riot 응답에서 확정한다.
 - guild별 전적과 MMR은 Riot account가 아니라 `guild_id + user_id` 기준으로 분리된다.
+- Web `/me`의 Riot 계정 관리는 guild context가 없으므로 새로운 `guild_members` 소속을 만들지 않는다.
 - 사용자는 `/me`에서 외부 프로필, Discord 사용자와 Riot ID의 연결 관계, 길드 밖 custom match 전적
   접근 범위를 설정한다.
 - 같은 guild 내부의 경기 기록과 MMR은 guild 원장이므로 개인 공개 설정으로 숨기지 않는다.

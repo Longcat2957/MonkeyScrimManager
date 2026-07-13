@@ -29,7 +29,8 @@ REVOKE UPDATE, DELETE, TRUNCATE
     ON TABLE public.auction_actions,
              public.auction_point_ledger,
              public.mmr_ledger_entries,
-             public.admin_audit_log
+             public.admin_audit_log,
+             public.dummy_user_audit_log
     FROM :"runtime_role";
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public

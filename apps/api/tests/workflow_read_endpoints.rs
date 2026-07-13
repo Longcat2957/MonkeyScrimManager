@@ -355,7 +355,7 @@ async fn seed_identity_and_guilds(pool: &PgPool) -> TestResult {
         (OUTSIDER_ID, "Outsider"),
     ] {
         sqlx::query(
-            "INSERT INTO users (discord_id, display_name, created_at, updated_at)
+            "INSERT INTO users (user_id, display_name, created_at, updated_at)
              VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         )
         .bind(id)

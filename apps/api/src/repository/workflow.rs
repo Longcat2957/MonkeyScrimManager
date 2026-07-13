@@ -4,8 +4,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::domain::{
-    AuctionMatchId, AuctionRecruitmentId, AuctionTournamentId, AuctionTournamentStatus,
-    DiscordUserId, GuildId, RecruitmentId, SeriesId, SeriesStatus,
+    AuctionMatchId, AuctionRecruitmentId, AuctionTournamentId, AuctionTournamentStatus, GuildId,
+    RecruitmentId, SeriesId, SeriesStatus, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -199,7 +199,7 @@ pub struct AuctionTournamentRecord {
 
 pub async fn has_guild_access(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
 ) -> Result<bool, WorkflowRepositoryError> {
     let accessible = sqlx::query_scalar::<_, bool>(
@@ -224,7 +224,7 @@ pub async fn has_guild_access(
 
 pub async fn list_operations(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
 ) -> Result<Vec<OperationRecord>, WorkflowRepositoryError> {
     let rows = sqlx::query_as::<_, OperationRow>(
@@ -423,7 +423,7 @@ pub async fn list_operations(
 
 pub async fn list_actionable_recruitments(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
     cursor: Option<PageCursor>,
     limit: i64,
@@ -511,7 +511,7 @@ pub async fn list_actionable_recruitments(
 
 pub async fn list_series(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
     state: ListState,
     cursor: Option<PageCursor>,
@@ -593,7 +593,7 @@ pub async fn list_series(
 
 pub async fn list_actionable_auction_recruitments(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
     cursor: Option<PageCursor>,
     limit: i64,
@@ -671,7 +671,7 @@ pub async fn list_actionable_auction_recruitments(
 
 pub async fn list_auction_tournaments(
     pool: &PgPool,
-    user_id: &DiscordUserId,
+    user_id: &UserId,
     guild_id: &GuildId,
     state: ListState,
     cursor: Option<PageCursor>,

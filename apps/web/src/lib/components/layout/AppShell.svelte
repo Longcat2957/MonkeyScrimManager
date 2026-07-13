@@ -14,7 +14,8 @@
 		ShieldCheck,
 		Swords,
 		Trophy,
-		UserCircle
+		UserCircle,
+		UsersRound
 	} from 'lucide-svelte';
 	import { Avatar, DropdownMenu, Tabs } from 'bits-ui';
 	import { cubicOut } from 'svelte/easing';
@@ -41,6 +42,7 @@
 	interface ShellUser {
 		displayName: string;
 		defaultGuildId: string | null;
+		serviceAdmin?: boolean;
 	}
 
 	interface ShellPageData {
@@ -374,6 +376,15 @@
 								<UserCircle size={15} class="text-slate-500" />
 								내 정보
 							</DropdownMenu.Item>
+							{#if shellData.user?.serviceAdmin}
+								<DropdownMenu.Item
+									class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold outline-none data-[highlighted]:bg-[var(--color-app-hover)] data-[highlighted]:text-slate-50"
+									onclick={() => goto(resolve('/dev/users'))}
+								>
+									<UsersRound size={15} class="text-slate-500" />
+									더미 사용자
+								</DropdownMenu.Item>
+							{/if}
 							<DropdownMenu.Separator class="my-1 h-px bg-[var(--color-app-border-muted)]" />
 							<DropdownMenu.Item
 								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold text-red-100 outline-none data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-50"

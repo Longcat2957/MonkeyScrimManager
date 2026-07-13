@@ -3,7 +3,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{DiscordUserId, GuildId, SnowflakeError};
+use crate::domain::{DiscordUserId, GuildId, SnowflakeError, UserId, UserIdError};
 
 #[derive(Clone)]
 pub struct AuthRepository {
@@ -67,22 +67,44 @@ impl AuthRepository {
     pub async fn complete_login(&self, login: &NewLogin) -> Result<(), AuthRepositoryError> {
         let mut transaction = self.pool.begin().await?;
 
-        sqlx::query(
+        let user_id = sqlx::query_scalar::<_, String>(
             "INSERT INTO users (
-                discord_id, display_name, avatar_hash, created_at, updated_at, deleted_at
+                user_id, identity_kind, display_name, avatar_hash,
+                created_at, updated_at, deleted_at
              )
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
-             ON CONFLICT (discord_id) DO UPDATE
+             VALUES ($1, 'DISCORD', $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
+             ON CONFLICT (user_id) DO UPDATE
              SET display_name = EXCLUDED.display_name,
                  avatar_hash = EXCLUDED.avatar_hash,
                  updated_at = CURRENT_TIMESTAMP,
-                 deleted_at = NULL",
+                 deleted_at = NULL
+             WHERE users.identity_kind = 'DISCORD'
+             RETURNING user_id",
         )
-        .bind(login.user_id.as_str())
+        .bind(login.discord_user_id.as_str())
         .bind(&login.display_name)
         .bind(&login.avatar_hash)
-        .execute(&mut *transaction)
-        .await?;
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AuthRepositoryError::IdentityConflict)?;
+
+        let mapped_user_id = sqlx::query_scalar::<_, String>(
+            "INSERT INTO user_discord_identities (
+                 user_id, discord_id, created_at, updated_at
+             ) VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             ON CONFLICT (discord_id) DO UPDATE
+             SET updated_at = CURRENT_TIMESTAMP
+             WHERE user_discord_identities.user_id = EXCLUDED.user_id
+             RETURNING user_id",
+        )
+        .bind(&user_id)
+        .bind(login.discord_user_id.as_str())
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AuthRepositoryError::IdentityConflict)?;
+        if mapped_user_id != user_id {
+            return Err(AuthRepositoryError::IdentityConflict);
+        }
 
         sqlx::query(
             "INSERT INTO user_privacy_settings (
@@ -92,7 +114,7 @@ impl AuthRepository {
              VALUES ($1, true, true, false, CURRENT_TIMESTAMP)
              ON CONFLICT (user_id) DO NOTHING",
         )
-        .bind(login.user_id.as_str())
+        .bind(&user_id)
         .execute(&mut *transaction)
         .await?;
 
@@ -101,7 +123,7 @@ impl AuthRepository {
              VALUES ($1, NULL, CURRENT_TIMESTAMP)
              ON CONFLICT (user_id) DO NOTHING",
         )
-        .bind(login.user_id.as_str())
+        .bind(&user_id)
         .execute(&mut *transaction)
         .await?;
 
@@ -128,7 +150,7 @@ impl AuthRepository {
                 .execute(&mut *transaction)
                 .await?;
 
-                (previous.user_id == login.user_id.as_str()).then_some(previous.id)
+                (previous.user_id == user_id).then_some(previous.id)
             } else {
                 None
             }
@@ -147,7 +169,7 @@ impl AuthRepository {
              )",
         )
         .bind(login.session_id)
-        .bind(login.user_id.as_str())
+        .bind(&user_id)
         .bind(&login.token_hash)
         .bind(&login.csrf_secret_hash)
         .bind(rotated_from_id)
@@ -166,6 +188,7 @@ impl AuthRepository {
         let row = sqlx::query_as::<_, ResolvedSessionRow>(
             "SELECT session.id AS session_id,
                     session.user_id,
+                    identity.discord_id,
                     users.display_name,
                     users.avatar_hash,
                     CASE
@@ -177,7 +200,10 @@ impl AuthRepository {
                     session.csrf_secret_hash,
                     session.last_seen_at
              FROM user_sessions AS session
-             JOIN users ON users.discord_id = session.user_id
+             JOIN users ON users.user_id = session.user_id
+                       AND users.identity_kind = 'DISCORD'
+             JOIN user_discord_identities AS identity
+               ON identity.user_id = session.user_id
              LEFT JOIN user_guild_preferences AS preferences
                ON preferences.user_id = session.user_id
              LEFT JOIN guild_members AS default_member
@@ -242,7 +268,7 @@ pub struct ConsumedOAuthAttempt {
 }
 
 pub struct NewLogin {
-    pub user_id: DiscordUserId,
+    pub discord_user_id: DiscordUserId,
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub previous_session_token_hash: Option<Vec<u8>>,
@@ -255,7 +281,8 @@ pub struct NewLogin {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedSession {
     pub session_id: Uuid,
-    pub user_id: DiscordUserId,
+    pub user_id: UserId,
+    pub discord_id: DiscordUserId,
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub default_guild_id: Option<GuildId>,
@@ -273,6 +300,7 @@ struct PreviousSessionRow {
 struct ResolvedSessionRow {
     session_id: Uuid,
     user_id: String,
+    discord_id: String,
     display_name: String,
     avatar_hash: Option<String>,
     default_guild_id: Option<String>,
@@ -286,7 +314,9 @@ impl TryFrom<ResolvedSessionRow> for ResolvedSession {
     fn try_from(row: ResolvedSessionRow) -> Result<Self, Self::Error> {
         Ok(Self {
             session_id: row.session_id,
-            user_id: DiscordUserId::parse(row.user_id)
+            user_id: UserId::parse(row.user_id)
+                .map_err(AuthRepositoryError::InvalidStoredUserId)?,
+            discord_id: DiscordUserId::parse(row.discord_id)
                 .map_err(AuthRepositoryError::InvalidStoredSnowflake)?,
             display_name: row.display_name,
             avatar_hash: row.avatar_hash,
@@ -307,6 +337,10 @@ pub enum AuthRepositoryError {
     Database(#[from] sqlx::Error),
     #[error("PostgreSQL contains an invalid Discord snowflake")]
     InvalidStoredSnowflake(#[source] SnowflakeError),
+    #[error("PostgreSQL contains an invalid user ID")]
+    InvalidStoredUserId(#[source] UserIdError),
+    #[error("Discord identity is already owned by a different internal user")]
+    IdentityConflict,
 }
 
 #[cfg(test)]
@@ -318,6 +352,7 @@ mod tests {
         let valid = ResolvedSession::try_from(ResolvedSessionRow {
             session_id: Uuid::now_v7(),
             user_id: "123456789012345678".to_owned(),
+            discord_id: "123456789012345678".to_owned(),
             display_name: "Longcat".to_owned(),
             avatar_hash: None,
             default_guild_id: Some("223456789012345678".to_owned()),
@@ -333,7 +368,8 @@ mod tests {
 
         let invalid = ResolvedSession::try_from(ResolvedSessionRow {
             session_id: Uuid::now_v7(),
-            user_id: "invalid".to_owned(),
+            user_id: "123456789012345678".to_owned(),
+            discord_id: "invalid".to_owned(),
             display_name: "Longcat".to_owned(),
             avatar_hash: None,
             default_guild_id: None,
