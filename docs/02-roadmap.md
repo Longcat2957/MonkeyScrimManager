@@ -55,7 +55,8 @@ lineup, game, MMR 원장은 PostgreSQL에만 둔다.
 - lane wire enum은 TOP/JUNGLE/MID/BOTTOM/SUPPORT다.
 - 일반 내전과 경매 내전 모두 guild MMR에 반영한다.
 - 경매는 TEN_PERSON 2팀과 TWENTY_PERSON 4팀을 지원한다.
-- bestOf storage는 1, 3, 5를 지원하되 현재 UI가 새로 만드는 series/match는 BO3다.
+- bestOf storage는 1, 3, 5를 지원한다. 일반 내전 모집은 생성 시 BO1/BO3/BO5와 하드 피어리스를
+  선택하고, series는 그 설정을 immutable snapshot으로 복사한다. 경매 match는 현재 BO3다.
 - series/recruitment와 tournament/auction recruitment는 별도 ID와 unique FK다.
 - custom match 결과에서 KDA/CS는 필수 입력이 아니다.
 - 중요한 mutation은 expectedRevision과 PostgreSQL transaction을 사용한다.
@@ -121,7 +122,7 @@ operations/actionable/active/completed projection을 먼저 연결한다. 화면
 Bot은 Node 22와 discord.js로 구성하고 PostgreSQL에 직접 접근하지 않는다.
 Discord interaction은 Bot service principal로 Axum command API만 호출한다.
 
-- `/초기설정`: 길드, 운영자 역할, 모집 채널 설정.
+- `/초기설정`: 길드, 운영자 역할, 필수 모집 채널과 선택적 엔트리/결과/운영 로그 채널 설정.
 - `/내전모집`: 일반 모집 생성과 Discord 메시지 연결.
 - 모집 component: 참가, 취소, 선호 라인, 엔트리 시작.
 - Discord interaction ID 기반 idempotency와 API readiness 확인.
@@ -147,7 +148,7 @@ Discord interaction은 Bot service principal로 Axum command API만 호출한다
 
 완료 기준:
 
-- 신규 BO3 시리즈 완료와 imported BO1/BO3 조회.
+- 신규 BO1/BO3/BO5 시리즈 완료와 imported BO1/BO3 조회.
 - game/MMR/audit/checkpoint가 한 transaction.
 - revert 후 MMR/score/status가 일치.
 - Bot 모집부터 결과 알림까지 Axum command 경계를 재사용한다.

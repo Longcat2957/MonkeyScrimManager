@@ -21,6 +21,10 @@ pub const RECRUITMENT_MESSAGE_CREATE_TYPE: &str = "RECRUITMENT_MESSAGE_CREATE";
 pub const RECRUITMENT_MESSAGE_UPDATE_TYPE: &str = "RECRUITMENT_MESSAGE_UPDATE";
 pub const RECRUITMENT_MESSAGE_DELETE_TYPE: &str = "RECRUITMENT_MESSAGE_DELETE";
 pub const RECRUITMENT_MESSAGE_SCHEMA_VERSION: u16 = 1;
+pub const ENTRY_CONFIRMATION_CREATE_TYPE: &str = "ENTRY_CONFIRMATION_CREATE";
+pub const ENTRY_CONFIRMATION_SCHEMA_VERSION: u16 = 1;
+pub const SERIES_RESULT_CREATE_TYPE: &str = "SERIES_RESULT_CREATE";
+pub const SERIES_RESULT_SCHEMA_VERSION: u16 = 2;
 
 const MAX_LEASE_OWNER_BYTES: usize = 128;
 const MAX_DEDUPLICATION_KEY_BYTES: usize = 255;
@@ -57,6 +61,22 @@ pub enum EnqueueNotificationOutcome {
 pub struct RecruitmentMessageNotificationPayload {
     pub schema_version: u16,
     pub recruitment_id: crate::domain::RecruitmentId,
+    pub snapshot: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntryConfirmationNotificationPayload {
+    pub schema_version: u16,
+    pub series_id: crate::domain::SeriesId,
+    pub snapshot: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SeriesResultNotificationPayload {
+    pub schema_version: u16,
+    pub series_id: crate::domain::SeriesId,
     pub snapshot: Value,
 }
 

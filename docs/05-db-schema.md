@@ -35,8 +35,8 @@ transaction, delete, legacy import 정책을 정의한다.
 - Discord snowflake는 `text`, 신규 domain ID는 application이 생성한 UUIDv7 `uuid`다.
 - timestamp는 전부 UTC `timestamptz`다.
 - canonical lane은 `TOP | JUNGLE | MID | BOTTOM | SUPPORT`다.
-- `best_of` storage는 `1 | 3 | 5`를 허용한다. 현재 UI에서 새로 만드는 일반 series와 경매
-  match는 BO3로 고정하며, 1/5는 legacy import와 추후 format control 추가를 위해 보존한다.
+- `best_of` storage는 `1 | 3 | 5`를 허용한다. 일반 내전은 모집 생성 시 BO1/BO3/BO5를 선택하고,
+  선택값을 series에 immutable snapshot으로 복사한다. 경매 match는 별도 workflow이며 현재 BO3로 고정한다.
 - MMR은 v3의 소수 ELO를 보존하기 위해 `double precision`이다. 반올림은 UI에서만 한다.
 - 경매 point와 count는 `integer`, revision과 순번은 `bigint`다.
 - 상태값은 초기에는 PostgreSQL enum 대신 `text + CHECK`를 사용한다.
@@ -496,6 +496,7 @@ display_name           text        NOT NULL
 operator_role_id       text        NOT NULL
 recruitment_channel_id text        NULL
 entry_channel_id       text        NULL
+result_channel_id      text        NULL
 log_channel_id         text        NULL
 is_externally_public   boolean     NOT NULL
 revision               bigint      NOT NULL CHECK >= 0
@@ -509,7 +510,12 @@ FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 - `current_season_id`를 두지 않는다. 현재 시즌의 source of truth는 `seasons.status=ACTIVE`다.
 - admin settings의 `settingsRevision`은 이 row의 `revision`이다.
 - `recruitment_channel_id`는 모집 메시지, `entry_channel_id`는 밸런스 결과와 확정 엔트리,
-  `log_channel_id`는 운영 알림의 목적지다. 세 channel은 모두 미설정을 허용한다.
+  `result_channel_id`는 일반 시리즈 최종 결과, `log_channel_id`는 운영 알림의 목적지다.
+  physical column은 legacy row 보존을 위해 nullable이다. 그러나 신규 `/초기설정`과 Browser settings PUT은
+  `recruitment_channel_id`를 반드시 요구한다. legacy `NULL` row는 GET으로 읽어 복구할 수 있지만 다음 저장에는
+  모집 채널을 선택해야 한다. `entry_channel_id`, `result_channel_id`, `log_channel_id`는 미설정을 허용한다.
+  `result_channel_id=NULL`이면 최종 결과 notification을 생략하며, `entry_channel_id`를 결과 알림 fallback으로
+  사용하지 않는다.
 - Browser settings PUT은 이 row를 lock하고 현재 `operator_role_id`로 요청자를 먼저 권한 검사한 뒤
   `expectedRevision`을 비교한다. 성공하면 설정, revision, `updated_by`, `updated_at`과
   `GUILD_SETTINGS_UPDATED` audit를 한 transaction에서 갱신한다.
@@ -645,6 +651,8 @@ season_id      uuid        NOT NULL
 display_number bigint      NOT NULL CHECK > 0
 title          text        NOT NULL
 target_count   smallint    NOT NULL DEFAULT 10 CHECK = 10
+best_of        smallint    NOT NULL DEFAULT 3 CHECK IN (1,3,5)
+hard_fearless  boolean     NOT NULL DEFAULT false
 status         text        NOT NULL CHECK OPEN|CLOSED|CONVERTED|CANCELLED
 revision       bigint      NOT NULL CHECK >= 0
 channel_id     text        NULL
@@ -668,6 +676,10 @@ FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 현재 production route, records DTO, MMR workflow는 5v5 일반 내전만 지원한다. 재사용 component의
 가변 `targetCount` prop은 제품 계약이 아니다. 다른 인원 모드는 records와 MMR 계약까지 실제로
 추가할 때 별도 migration으로 확장한다.
+
+모집 생성 command가 `best_of`와 `hard_fearless`를 함께 기록한다. `CLOSED -> CONVERTED` 전환은 이 값을
+새 `series` row에 복사하며, 이후 모집이나 픽밴 workspace에서 값을 수정하지 않는다. 모집과 series에
+동일 필드를 두는 것은 source 설정과 경기 기록 snapshot의 역할을 분리하기 위한 의도적인 중복이다.
 
 ### `recruitment_participants`
 
@@ -756,6 +768,7 @@ source_recruitment_id uuid       NOT NULL
 display_number       bigint      NOT NULL CHECK > 0
 title                text        NOT NULL
 best_of              smallint    NOT NULL CHECK IN (1,3,5)
+hard_fearless        boolean     NOT NULL DEFAULT false
 status               text        NOT NULL CHECK IN_PROGRESS|COMPLETED|CANCELLED
 winning_team         text        NULL CHECK TEAM_1|TEAM_2
 terminal_reason      text        NULL CHECK SCORE_REACHED|EARLY_WIN|EARLY_DRAW|CANCELLED
@@ -797,9 +810,21 @@ source recruitment를 `CLOSED`로 되돌린다. confirmed game이 있으면 마�
 검증해 `VOIDED`/MMR reversal을 역순으로 완료한 뒤 같은 lifecycle revert를 수행한다. 새 전환
 command는 기존 entry draft에서 새 series ID를 만들며, 기존 row를 재사용하거나 물리 삭제하지 않는다.
 신규 series는 created_by가 필수이며 nullable은 v3의 actor 미기록 row만 허용한다.
-Bot 조기 종료의 동률 결과는 `COMPLETED + EARLY_DRAW + winning_team=NULL`로 보존한다. 일반 score
+운영자 조기 종료의 동률 결과는 `COMPLETED + EARLY_DRAW + winning_team=NULL`로 보존한다. 일반 score
 달성 완료와 운영자 지정 조기 승리를 같은 nullable winner로 추측하지 않고 terminal_reason으로
 구분한다.
+
+완료 시 configured `result_channel_id`에만 outbox 기반 one-shot 결과 카드가 비동기로 발행된다. 현재
+`end_card_channel_id`와 `end_card_message_id`는 이후 결과 정정 시 기존 카드 edit/delete를 위한 예약
+필드이며, 첫 결과 발행의 generic acknowledgement는 이 두 field를 bind하지 않는다.
+신규 `SERIES_RESULT_CREATE` payload는 `schemaVersion=2`이며 roster와 confirmed set별 pick/ban을 고정한다.
+기존 `schemaVersion=1` 대기 row는 payload를 변환하지 않고 legacy renderer로 그대로 delivery하여 outbox
+deduplication/replay 의미를 바꾸지 않는다.
+
+`hard_fearless`는 모집 생성 시 선택되어 series로 복사되는 immutable 규칙 snapshot이며 기본값은
+`false`다. `true`이면 이전 confirmed set에서 **픽된** 챔피언을 후속 set에서 다시 픽할 수 없다. 이전
+ban은 막지 않는다. 설정과 관계없이 같은 set 안에서는 pick과 ban을 합쳐 같은 챔피언을 두 번 사용할 수
+없다.
 
 ### `series_participants`
 
@@ -1673,10 +1698,12 @@ Rules:
   equality를 임의 rounding한 SQL CHECK로 강제하지 않는다.
 - runtime role에는 ledger UPDATE/DELETE 권한을 주지 않는다.
 
-MMR revert는 모든 참가자의 해당 season/lane에서 `lane_revision=user_lane_mmr.revision`인 row가
-대상 game entry일 때만
-허용한다. 이후 game 또는 manual adjustment가 하나라도 있으면 `dependency_conflict`로 거부한다.
-과거 중간 ELO를 단순 반대 delta로 보정하는 기능은 MVP에 만들지 않는다.
+MMR revert는 마지막 confirmed game만 대상으로 한다. 모든 참가자 lane의 현재 summary가 대상 game의
+`mmr_after`/count를 그대로 가리키고, 이후 ledger가 있다면 이미 `GAME_REVERSAL`로 상쇄된 후속 game 결과만
+허용한다. 따라서 여러 confirmed set을 마지막 set부터 역순으로 void하는 series lifecycle cascade는
+가능하지만, 아직 상쇄되지 않은 후속 game, manual adjustment/reversal, migration seed가 하나라도 있으면
+`series_game_reversal_not_safe`로 거부한다. 과거 중간 ELO를 단순 반대 delta로 보정하는 기능은 MVP에
+만들지 않는다.
 
 ## Safety와 전달 원장
 
@@ -2260,6 +2287,12 @@ FK dependency가 성립하는 순서로 migration을 고정한다.
 
 0014_riot_account_owner_identity.sql
   Riot account origin and owner identity kind composite FK
+
+0015_series_hard_fearless.sql
+  recruitment/series hard fearless rule snapshot
+
+0016_guild_result_channel.sql
+  guild_config explicit series-result channel without entry-channel fallback
 ```
 
 `games.auction_match_id`가 참조할 table보다 먼저 games를 생성하지 않는다. migration file은

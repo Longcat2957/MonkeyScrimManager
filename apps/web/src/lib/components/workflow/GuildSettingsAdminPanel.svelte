@@ -8,7 +8,8 @@
 	} from '$lib/contracts/workflow';
 	import type { GuildSettingsUpdateCommand } from '$lib/realtime/admin';
 
-	type ChannelSettingKey = 'recruitmentChannelId' | 'entryChannelId' | 'logChannelId';
+	type ChannelSettingKey =
+		'recruitmentChannelId' | 'entryChannelId' | 'resultChannelId' | 'logChannelId';
 
 	interface Props {
 		snapshot: GuildAdminSettingsSnapshot;
@@ -25,6 +26,7 @@
 	let saveError = $state<string | null>(null);
 
 	const dirty = $derived(!settingsEqual(savedSettings, draftSettings));
+	const missingRecruitmentChannel = $derived(draftSettings.recruitmentChannelId === null);
 	const missingOperatorRole = $derived(
 		!snapshot.roles.some((role) => role.id === draftSettings.operatorRoleId)
 	);
@@ -43,6 +45,7 @@
 			left.operatorRoleId === right.operatorRoleId &&
 			left.recruitmentChannelId === right.recruitmentChannelId &&
 			left.entryChannelId === right.entryChannelId &&
+			left.resultChannelId === right.resultChannelId &&
 			left.logChannelId === right.logChannelId &&
 			left.isExternallyPublic === right.isExternallyPublic
 		);
@@ -60,6 +63,10 @@
 
 	async function save() {
 		if (!dirty || submitting) return;
+		if (missingRecruitmentChannel) {
+			saveError = '모집 채널을 선택해야 길드 설정을 저장할 수 있습니다.';
+			return;
+		}
 		submitting = true;
 		clearFeedback();
 		try {
@@ -137,7 +144,7 @@
 				</button>
 				<button
 					type="button"
-					disabled={!dirty || submitting}
+					disabled={!dirty || missingRecruitmentChannel || submitting}
 					onclick={save}
 					class="inline-flex h-8 items-center gap-1.5 border border-cyan-400/40 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-35"
 				>
@@ -201,15 +208,28 @@
 			>
 				<div>
 					<strong class="block text-sm text-slate-100">모집 채널</strong>
-					<p class="mt-1 text-xs text-slate-500">내전과 경매 모집 메시지를 게시할 채널</p>
+					<p class="mt-1 text-xs text-slate-500">내전과 경매 모집 메시지를 게시할 필수 채널</p>
+					{#if missingRecruitmentChannel}
+						<p
+							id="recruitment-channel-required"
+							class="mt-1 text-xs font-semibold text-rose-300"
+							aria-live="polite"
+						>
+							모집 채널을 선택해야 길드 설정을 저장할 수 있습니다.
+						</p>
+					{/if}
 				</div>
 				<select
 					value={draftSettings.recruitmentChannelId ?? ''}
+					required
+					aria-describedby={missingRecruitmentChannel ? 'recruitment-channel-required' : undefined}
 					disabled={submitting}
 					onchange={(event) => updateChannel('recruitmentChannelId', event.currentTarget.value)}
 					class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm text-slate-100 outline-none disabled:opacity-55"
 				>
-					<option value="">설정 안 함</option>
+					{#if missingRecruitmentChannel}
+						<option value="" disabled>모집 채널을 선택해 주세요</option>
+					{/if}
 					{#if isMissingChannel(draftSettings.recruitmentChannelId)}
 						<option value={draftSettings.recruitmentChannelId}>
 							현재 설정 · Discord에서 확인 불가 ({draftSettings.recruitmentChannelId})
@@ -238,6 +258,33 @@
 					{#if isMissingChannel(draftSettings.entryChannelId)}
 						<option value={draftSettings.entryChannelId}>
 							현재 설정 · Discord에서 확인 불가 ({draftSettings.entryChannelId})
+						</option>
+					{/if}
+					{#each snapshot.channels as channel (channel.id)}
+						<option value={channel.id}>{channelLabel(channel)}</option>
+					{/each}
+				</select>
+			</div>
+
+			<div
+				class="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)] sm:items-center"
+			>
+				<div>
+					<strong class="block text-sm text-slate-100">결과 알림 채널</strong>
+					<p class="mt-1 text-xs text-slate-500">
+						시리즈 확정 결과를 게시할 채널 · 설정하지 않으면 Discord 알림을 보내지 않음
+					</p>
+				</div>
+				<select
+					value={draftSettings.resultChannelId ?? ''}
+					disabled={submitting}
+					onchange={(event) => updateChannel('resultChannelId', event.currentTarget.value)}
+					class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm text-slate-100 outline-none disabled:opacity-55"
+				>
+					<option value="">설정 안 함</option>
+					{#if isMissingChannel(draftSettings.resultChannelId)}
+						<option value={draftSettings.resultChannelId}>
+							현재 설정 · Discord에서 확인 불가 ({draftSettings.resultChannelId})
 						</option>
 					{/if}
 					{#each snapshot.channels as channel (channel.id)}

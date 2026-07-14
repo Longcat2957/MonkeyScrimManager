@@ -24,6 +24,8 @@ function snapshot(status: 'OPEN' | 'CLOSED', participantCount = 2) {
 			title: '금요 일반 내전 모집',
 			status,
 			targetCount: 10,
+			bestOf: 3,
+			hardFearless: false,
 			revision: 3,
 			createdById: creatorId,
 			channelId: '1525900000000000001',

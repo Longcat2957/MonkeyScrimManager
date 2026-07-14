@@ -14,10 +14,12 @@ const championIdSchema = z
 	.max(64)
 	.regex(/^[A-Za-z0-9]+$/);
 const laneOrder = ['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT'] as const;
+const seriesBestOfSchema = z.union([z.literal(1), z.literal(3), z.literal(5)]);
 
 export const seriesPickBanSideSchema = z.enum(['BLUE', 'RED']);
 export const seriesPickBanSidePresetSchema = z.enum(['DEFAULT', 'SWAPPED']);
 export const seriesPickBanTeamIdSchema = z.enum(['TEAM_1', 'TEAM_2']);
+export const seriesEarlyCompletionOutcomeSchema = z.enum(['TEAM_1', 'TEAM_2', 'DRAW']);
 
 export const seriesPickBanPlayerSchema = z
 	.object({
@@ -74,6 +76,65 @@ export const seriesPickBanCurrentGameSchema = z
 	})
 	.strict();
 
+export const seriesPickBanConfirmedGameSchema = seriesPickBanCurrentGameSchema.extend({
+	winner: seriesPickBanSideSchema
+});
+
+const setPickOperationSchema = z
+	.object({
+		type: z.literal('SET_PICK'),
+		playerId: userIdSchema,
+		championId: championIdSchema
+	})
+	.strict();
+const setBanOperationSchema = z
+	.object({
+		type: z.literal('SET_BAN'),
+		side: seriesPickBanSideSchema,
+		slot: z.number().int().min(1).max(5),
+		championId: championIdSchema
+	})
+	.strict();
+
+export const seriesPickBanBulkItemSchema = z.discriminatedUnion('type', [
+	setPickOperationSchema,
+	setBanOperationSchema
+]);
+
+export const seriesPickBanDraftOperationSchema = z.discriminatedUnion('type', [
+	z.object({ type: z.literal('SET_SIDE'), sidePreset: seriesPickBanSidePresetSchema }).strict(),
+	setPickOperationSchema,
+	z.object({ type: z.literal('CLEAR_PICK'), playerId: userIdSchema }).strict(),
+	setBanOperationSchema,
+	z
+		.object({
+			type: z.literal('CLEAR_BAN'),
+			side: seriesPickBanSideSchema,
+			slot: z.number().int().min(1).max(5)
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal('APPLY_BULK'),
+			items: z.array(seriesPickBanBulkItemSchema).min(1).max(20)
+		})
+		.strict()
+]);
+
+export const seriesGameMutationResultSchema = z
+	.object({
+		series: z
+			.object({
+				id: uuidSchema,
+				status: z.enum(['IN_PROGRESS', 'COMPLETED']),
+				revision: nonnegativeIntegerSchema
+			})
+			.strict(),
+		confirmedGameCount: nonnegativeIntegerSchema,
+		nextHref: z.string().startsWith('/g/')
+	})
+	.strict();
+
 export const seriesPickBanSnapshotSchema = z
 	.object({
 		series: z
@@ -81,7 +142,8 @@ export const seriesPickBanSnapshotSchema = z
 				id: uuidSchema,
 				displayNumber: z.number().int().positive(),
 				title: z.string().min(1).max(100),
-				bestOf: z.number().int().min(1).max(5),
+				bestOf: seriesBestOfSchema,
+				hardFearless: z.boolean(),
 				status: z.literal('IN_PROGRESS'),
 				revision: nonnegativeIntegerSchema,
 				sourceRecruitmentId: uuidSchema,
@@ -90,9 +152,13 @@ export const seriesPickBanSnapshotSchema = z
 			.strict(),
 		teams: z.array(seriesPickBanTeamSchema).length(2),
 		currentGame: seriesPickBanCurrentGameSchema,
-		games: z.array(z.never()).max(0),
+		games: z.array(seriesPickBanConfirmedGameSchema).max(5),
 		capabilities: z
 			.object({
+				canEdit: z.boolean(),
+				canSubmit: z.boolean(),
+				canEarlyComplete: z.boolean(),
+				canRevertLastGame: z.boolean(),
 				canRevert: z.boolean(),
 				canDelete: z.boolean()
 			})
@@ -139,6 +205,25 @@ export const seriesPickBanSnapshotSchema = z
 				message: 'Current game picks must contain every frozen roster player exactly once'
 			});
 		}
+
+		for (const [index, game] of snapshot.games.entries()) {
+			const gamePickIds = Object.keys(game.picks);
+			if (
+				gamePickIds.length !== rosterIds.length ||
+				gamePickIds.some((playerId) => !rosterIds.includes(playerId)) ||
+				rosterIds.some((playerId) => !(playerId in game.picks))
+			) {
+				context.addIssue({
+					code: 'custom',
+					path: ['games', index, 'picks'],
+					message: 'Confirmed game picks must contain every frozen roster player exactly once'
+				});
+			}
+		}
 	});
 
 export type SeriesPickBanSnapshot = z.infer<typeof seriesPickBanSnapshotSchema>;
+export type SeriesPickBanDraftOperation = z.infer<typeof seriesPickBanDraftOperationSchema>;
+export type SeriesPickBanBulkItem = z.infer<typeof seriesPickBanBulkItemSchema>;
+export type SeriesEarlyCompletionOutcome = z.infer<typeof seriesEarlyCompletionOutcomeSchema>;
+export type SeriesGameMutationResult = z.infer<typeof seriesGameMutationResultSchema>;

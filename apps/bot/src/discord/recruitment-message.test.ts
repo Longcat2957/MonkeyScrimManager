@@ -8,7 +8,7 @@ const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const webOrigin = new URL('https://dev.monkeybot.lol');
 
 function snapshot(
-	status: 'OPEN' | 'CLOSED' | 'CANCELLED',
+	status: 'OPEN' | 'CLOSED' | 'CONVERTED' | 'CANCELLED',
 	participantCount: number
 ): RecruitmentSnapshot {
 	return {
@@ -18,6 +18,8 @@ function snapshot(
 			title: '금요 정기 내전',
 			status,
 			targetCount: 10,
+			bestOf: 3,
+			hardFearless: false,
 			revision: 3,
 			channelId: null,
 			messageId: null,
@@ -45,9 +47,20 @@ describe('renderRecruitmentMessage', () => {
 		expect(serialized).toContain('5v5 내전 모집 #214');
 		expect(serialized).toContain('참가자 1');
 		expect(serialized).toContain('미드 / 정글');
+		expect(serialized).toContain('BO3 · 일반');
 		expect(serialized).toContain(`recruit:join:${recruitmentId}`);
 		expect(serialized).toContain(`recruit:leave:${recruitmentId}`);
 		expect(serialized).toContain(`recruit:roles:${recruitmentId}`);
+	});
+
+	it('renders hard fearless as a concise rule', () => {
+		const current = snapshot('OPEN', 1);
+		current.recruitment.bestOf = 5;
+		current.recruitment.hardFearless = true;
+
+		expect(JSON.stringify(json(renderRecruitmentMessage(current, webOrigin)))).toContain(
+			'BO5 · 하드 피어리스'
+		);
 	});
 
 	it('renders a dummy participant by display name without treating its ID as a Discord mention', () => {
@@ -84,6 +97,14 @@ describe('renderRecruitmentMessage', () => {
 			`https://dev.monkeybot.lol/g/${guildId}/recruitments/${recruitmentId}/entry`
 		);
 		expect(serialized).not.toContain('custom_id');
+	});
+
+	it('renders a converted recruitment as an in-progress series without stale entry controls', () => {
+		const rendered = json(renderRecruitmentMessage(snapshot('CONVERTED', 10), webOrigin));
+		const serialized = JSON.stringify(rendered);
+
+		expect(serialized).toContain('시리즈 진행 중');
+		expect(serialized).not.toContain('엔트리 편성 열기');
 	});
 
 	it('does not render controls for a cancelled recruitment', () => {

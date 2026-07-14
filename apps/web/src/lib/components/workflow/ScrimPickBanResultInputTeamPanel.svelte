@@ -5,7 +5,11 @@
 		type ScrimPickBanResultInputTeam
 	} from '$lib/fixtures/scrimPickBanResultInputFixtures';
 	import PositionIcon from './PositionIcon.svelte';
-	import type { ScrimPickBanResultInputActiveCell } from './scrimPickBanResultInputHelpers';
+	import {
+		scrimPickBanResultInputBanKey,
+		scrimPickBanResultInputCellId,
+		type ScrimPickBanResultInputActiveCell
+	} from './scrimPickBanResultInputHelpers';
 	import ScrimPickBanResultInputChampionCell from './ScrimPickBanResultInputChampionCell.svelte';
 	import ScrimPickBanResultInputChampionHints from './ScrimPickBanResultInputChampionHints.svelte';
 
@@ -19,14 +23,21 @@
 		onActiveCell: (cell: ScrimPickBanResultInputActiveCell) => void;
 		onBan: (side: ScrimPickBanResultInputSide, index: number, championId: string | null) => void;
 		onPick: (playerId: string, championId: string | null) => void;
+		onNavigate?: (cell: ScrimPickBanResultInputActiveCell, direction: -1 | 1) => void;
 	}
 
-	let { team, bans, picks, activeCell, champions, version, onActiveCell, onBan, onPick }: Props =
-		$props();
-
-	function banKey(index: number): string {
-		return `${team.side}-ban-${index}`;
-	}
+	let {
+		team,
+		bans,
+		picks,
+		activeCell,
+		champions,
+		version,
+		onActiveCell,
+		onBan,
+		onPick,
+		onNavigate
+	}: Props = $props();
 
 	function isActive(kind: ScrimPickBanResultInputActiveCell['kind'], key: string): boolean {
 		return activeCell.kind === kind && activeCell.key === key;
@@ -62,7 +73,7 @@
 				밴
 			</div>
 			{#each bans as ban, index (`${team.side}-ban-${index}`)}
-				{@const key = banKey(index)}
+				{@const key = scrimPickBanResultInputBanKey(team.side, index)}
 				<ScrimPickBanResultInputChampionCell
 					value={ban}
 					{champions}
@@ -70,8 +81,13 @@
 					compact
 					embedded
 					active={isActive('BAN', key)}
+					inputId={scrimPickBanResultInputCellId({ kind: 'BAN', key })}
+					inputLabel={`${team.name} ${team.side} 밴 ${index + 1}`}
 					onFocus={() => onActiveCell({ kind: 'BAN', key })}
 					onCommit={(championId) => onBan(team.side, index, championId)}
+					onNavigate={onNavigate
+						? (direction) => onNavigate({ kind: 'BAN', key }, direction)
+						: undefined}
 				/>
 			{/each}
 		</div>
@@ -100,8 +116,13 @@
 						{version}
 						embedded
 						active={isActive('PICK', player.id)}
+						inputId={scrimPickBanResultInputCellId({ kind: 'PICK', key: player.id })}
+						inputLabel={`${team.name} ${player.name} 픽`}
 						onFocus={() => onActiveCell({ kind: 'PICK', key: player.id })}
 						onCommit={(championId) => onPick(player.id, championId)}
+						onNavigate={onNavigate
+							? (direction) => onNavigate({ kind: 'PICK', key: player.id }, direction)
+							: undefined}
 					/>
 
 					<div class="grid min-w-0 content-center gap-1 bg-slate-950/20 px-1.5">

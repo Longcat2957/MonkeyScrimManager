@@ -118,15 +118,29 @@ impl RealtimeRuntime {
         }
     }
 
-    pub async fn authorize_entry_topic(
+    pub async fn authorize_topic(
         &self,
         pool: &sqlx::PgPool,
         user_id: &UserId,
         topic: &RealtimeTopic,
     ) -> Result<(), TopicAuthorizationError> {
-        if !topic.is_entry_related() {
-            return Err(TopicAuthorizationError::Unsupported);
+        match topic.kind() {
+            RealtimeTopicKind::Recruitment | RealtimeTopicKind::RecruitmentEntryDraft => {
+                self.authorize_entry_topic(pool, user_id, topic).await
+            }
+            RealtimeTopicKind::Series => self.authorize_series_topic(pool, user_id, topic).await,
+            RealtimeTopicKind::AuctionRecruitment
+            | RealtimeTopicKind::AuctionTournament
+            | RealtimeTopicKind::AuctionMatch => Err(TopicAuthorizationError::Unsupported),
         }
+    }
+
+    async fn authorize_entry_topic(
+        &self,
+        pool: &sqlx::PgPool,
+        user_id: &UserId,
+        topic: &RealtimeTopic,
+    ) -> Result<(), TopicAuthorizationError> {
         if !workflow::has_guild_access(pool, user_id, topic.guild_id())
             .await
             .map_err(TopicAuthorizationError::Membership)?
@@ -156,6 +170,49 @@ impl RealtimeRuntime {
             Ok(())
         } else {
             Err(TopicAuthorizationError::NotFound)
+        }
+    }
+
+    async fn authorize_series_topic(
+        &self,
+        pool: &sqlx::PgPool,
+        user_id: &UserId,
+        topic: &RealtimeTopic,
+    ) -> Result<(), TopicAuthorizationError> {
+        let authorized = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM series AS series
+                 JOIN guilds AS guild
+                   ON guild.guild_id = series.guild_id
+                  AND guild.status = 'ACTIVE'
+                 JOIN guild_members AS member
+                   ON member.guild_id = series.guild_id
+                  AND member.user_id = $2
+                  AND member.status = 'ACTIVE'
+                 JOIN guild_config AS config
+                   ON config.guild_id = series.guild_id
+                 JOIN guild_member_discord_roles AS role
+                   ON role.guild_id = member.guild_id
+                  AND role.user_id = member.user_id
+                  AND role.role_id = config.operator_role_id
+                 WHERE series.guild_id = $1
+                   AND series.id = $3
+                   AND series.status = 'IN_PROGRESS'
+                   AND series.deleted_at IS NULL
+             )",
+        )
+        .bind(topic.guild_id())
+        .bind(user_id)
+        .bind(topic.resource_id())
+        .fetch_one(pool)
+        .await
+        .map_err(TopicAuthorizationError::Database)?;
+
+        if authorized {
+            Ok(())
+        } else {
+            Err(TopicAuthorizationError::Forbidden)
         }
     }
 

@@ -16,8 +16,6 @@
 		id: string;
 		name: string;
 		lane: ScrimPickBanResultSetSummaryLane;
-		mmr?: number;
-		riotTier?: string | null;
 	}
 
 	interface ScrimPickBanResultSetSummaryTeam {
@@ -58,10 +56,6 @@
 		if (!winner) return base;
 		if (winner !== side) return `${base} opacity-60`;
 		return base;
-	}
-
-	function playerMeta(player: ScrimPickBanResultSetSummaryPlayer): string {
-		return `MMR ${player.mmr ?? '-'} · ${player.riotTier ?? '-'}`;
 	}
 </script>
 
@@ -139,20 +133,14 @@
 										class="size-12 object-cover"
 										loading="lazy"
 									/>
-									<div class="min-w-0">
-										<p class="truncate text-base font-semibold text-slate-100">{player.name}</p>
-										<p class="mt-0.5 truncate text-sm font-semibold text-slate-500">
-											{playerMeta(player)}
-										</p>
-									</div>
+									<p class="min-w-0 truncate text-base font-semibold text-slate-100">
+										{player.name}
+									</p>
 								{:else}
 									<span class="size-12 bg-slate-900/80"></span>
-									<div class="min-w-0">
-										<p class="truncate text-base font-semibold text-slate-100">{player.name}</p>
-										<p class="mt-0.5 truncate text-sm font-semibold text-slate-500">
-											{playerMeta(player)}
-										</p>
-									</div>
+									<p class="min-w-0 truncate text-base font-semibold text-slate-100">
+										{player.name}
+									</p>
 								{/if}
 							</div>
 						</div>

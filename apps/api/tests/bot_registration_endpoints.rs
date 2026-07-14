@@ -362,6 +362,10 @@ async fn setup_guild(
             "guildName": format!("Guild {guild_id}"),
             "guildIconHash": null,
             "operatorRoleId": operator_role_id,
+            "recruitmentChannelId": "400000000000000001",
+            "entryChannelId": null,
+            "resultChannelId": null,
+            "logChannelId": null,
             "seasonName": "2026 Summer"
         }),
     )

@@ -56,9 +56,11 @@ describe('workflow presentation', () => {
 			id: '01900000-0000-7000-8000-000000000101',
 			displayNumber: 214,
 			title: '금요 일반 내전 모집',
-			status: 'OPEN',
-			targetCount: 10,
-			joinedCount: 3,
+		status: 'OPEN',
+		targetCount: 10,
+		bestOf: 3,
+		hardFearless: false,
+		joinedCount: 3,
 			assignedCount: 0,
 			revision: 2,
 			updatedAt: '2026-07-12T11:00:00Z',
@@ -72,6 +74,7 @@ describe('workflow presentation', () => {
 		});
 
 		expect(view.activeWork[0]).toMatchObject({
+			format: 'BO3 · 일반',
 			status: '엔트리 모집',
 			detail: '3/10명 · Discord 모집 중',
 			href: recruitment.href

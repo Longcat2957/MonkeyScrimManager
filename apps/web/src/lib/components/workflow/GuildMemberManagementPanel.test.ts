@@ -30,6 +30,14 @@ const dummyMember: GuildAdminMember = {
 	discordName: 'Dummy top'
 };
 
+const decimalMmrMember: GuildAdminMember = {
+	...otherMember,
+	id: '1525847677542207550',
+	discordName: 'Decimal MMR',
+	mainLane: 'MID',
+	laneMmr: { TOP: 1500, JUNGLE: 1500, MID: 1618.75, BOTTOM: 1500, SUPPORT: 1500 }
+};
+
 describe('GuildMemberManagementPanel', () => {
 	it('renders canonical roles and nullable member fields without fabricating a lane', () => {
 		const { body } = render(GuildMemberManagementPanel, {
@@ -50,5 +58,20 @@ describe('GuildMemberManagementPanel', () => {
 		expect(body).toContain('멤버 비활성화');
 		expect(body).toContain('더미');
 		expect(body.match(/disabled/g)?.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it('rounds MMR for display while accepting float member values', () => {
+		const { body } = render(GuildMemberManagementPanel, {
+			props: {
+				members: [decimalMmrMember],
+				revision: 0,
+				currentUserId: member.id,
+				onAdjustMmr: vi.fn(),
+				onSetStatus: vi.fn()
+			}
+		});
+
+		expect(body).toContain('1619');
+		expect(body).not.toContain('1618.75');
 	});
 });

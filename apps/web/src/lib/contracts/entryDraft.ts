@@ -3,6 +3,7 @@ import { championPreferenceLaneSchema, userIdSchema } from './workflow';
 
 const timestampSchema = z.iso.datetime({ offset: true });
 const nonnegativeIntegerSchema = z.number().int().nonnegative();
+const seriesBestOfSchema = z.union([z.literal(1), z.literal(3), z.literal(5)]);
 
 export const entryDraftTeamSchema = z.enum(['TEAM_1', 'TEAM_2']);
 export const entryDraftSlotSchema = z.enum([
@@ -25,6 +26,8 @@ export const entryDraftRecruitmentSchema = z
 		title: z.string().min(1).max(100),
 		status: z.enum(['OPEN', 'CLOSED']),
 		targetCount: z.literal(10),
+		bestOf: seriesBestOfSchema,
+		hardFearless: z.boolean(),
 		revision: nonnegativeIntegerSchema,
 		updatedAt: timestampSchema
 	})

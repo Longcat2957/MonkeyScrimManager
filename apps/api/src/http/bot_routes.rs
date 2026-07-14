@@ -18,7 +18,9 @@ use crate::{
     },
     repository::bot_workflow::{
         self, BotActor, BotRecruitmentCommand, BotWorkflowError, EntryDraftOperation,
-        RegisterGuildMemberCommand, RegisterGuildMemberInput, SetupGuildCommand,
+        RecruitmentSeriesRules, RegisterGuildMemberCommand, RegisterGuildMemberInput,
+        SeriesEarlyCompleteCommand, SeriesGameRevertCommand, SeriesGameSubmitCommand,
+        SeriesPickBanOperation, SetupGuildCommand,
     },
     state::{AppState, RequestId},
 };
@@ -43,6 +45,10 @@ pub struct SetupGuildRequest {
     guild_name: String,
     guild_icon_hash: Option<String>,
     operator_role_id: DiscordRoleId,
+    recruitment_channel_id: DiscordChannelId,
+    entry_channel_id: Option<DiscordChannelId>,
+    result_channel_id: Option<DiscordChannelId>,
+    log_channel_id: Option<DiscordChannelId>,
     season_name: String,
 }
 
@@ -53,8 +59,19 @@ pub struct ActorOnlyRequest {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BrowserCreateRecruitmentRequest {}
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserCreateRecruitmentRequest {
+    best_of: Option<i16>,
+    hard_fearless: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotCreateRecruitmentRequest {
+    actor: ActorRequest,
+    best_of: Option<i16>,
+    hard_fearless: Option<bool>,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -94,6 +111,13 @@ pub(crate) struct BrowserSeriesCreateRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BrowserSeriesLifecycleRequest {
     expected_revision: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserSeriesPickBanRequest {
+    expected_revision: i64,
+    operation: SeriesPickBanOperation,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +204,10 @@ pub async fn setup_guild(
             guild_name: request.guild_name.trim().to_owned(),
             guild_icon_hash: request.guild_icon_hash,
             operator_role_id: request.operator_role_id,
+            recruitment_channel_id: request.recruitment_channel_id,
+            entry_channel_id: request.entry_channel_id,
+            result_channel_id: request.result_channel_id,
+            log_channel_id: request.log_channel_id,
             season_name: request.season_name.trim().to_owned(),
         },
     )
@@ -265,7 +293,7 @@ pub async fn create_recruitment(
 ) -> Result<Response, ApiError> {
     match principal {
         RecruitmentCreatePrincipal::Bot(_) => {
-            let request = serde_json::from_value::<ActorOnlyRequest>(request)
+            let request = serde_json::from_value::<BotCreateRecruitmentRequest>(request)
                 .map_err(|_| invalid_request("body", &request_id))?;
             recruitment_command(
                 &state,
@@ -275,12 +303,16 @@ pub async fn create_recruitment(
                 StatusCode::CREATED,
                 BotRecruitmentCommand::Create {
                     actor: actor(request.actor, &request_id)?,
+                    rules: RecruitmentSeriesRules::from_optional(
+                        request.best_of,
+                        request.hard_fearless,
+                    ),
                 },
             )
             .await
         }
         RecruitmentCreatePrincipal::Session(principal) => {
-            serde_json::from_value::<BrowserCreateRecruitmentRequest>(request)
+            let request = serde_json::from_value::<BrowserCreateRecruitmentRequest>(request)
                 .map_err(|_| invalid_browser_create_request(&request_id))?;
             require_csrf(&headers, &state, &principal, &request_id)?;
             let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
@@ -288,6 +320,7 @@ pub async fn create_recruitment(
                 database(&state, &request_id)?,
                 &guild_id,
                 &principal.session.user_id,
+                RecruitmentSeriesRules::from_optional(request.best_of, request.hard_fearless),
                 &idempotency_key,
                 &request_id,
             )
@@ -600,6 +633,113 @@ pub async fn delete_series(
     Ok(error::success(StatusCode::OK, &request_id, result))
 }
 
+pub async fn update_series_pick_ban(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserSeriesPickBanRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_series_pick_ban_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let snapshot = bot_workflow::update_web_series_pick_ban(
+        database(&state, &request_id)?,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+        request.expected_revision,
+        request.operation,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_series_pick_ban_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn submit_series_game(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<SeriesGameSubmitCommand>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_series_game_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::submit_web_series_game(
+        database(&state, &request_id)?,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+        request,
+    )
+    .await
+    .map_err(|error| web_series_game_error(error, &request_id))?;
+    Ok(error::success(StatusCode::CREATED, &request_id, result))
+}
+
+pub async fn revert_last_series_game(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<SeriesGameRevertCommand>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_series_game_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::revert_last_web_series_game(
+        database(&state, &request_id)?,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+        request,
+    )
+    .await
+    .map_err(|error| web_series_game_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
+}
+
+pub async fn complete_series_early(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<SeriesEarlyCompleteCommand>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_series_early_complete_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::complete_web_series_early(
+        database(&state, &request_id)?,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+        request,
+    )
+    .await
+    .map_err(|error| web_series_early_complete_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
+}
+
 pub async fn update_entry_draft(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -802,6 +942,20 @@ fn invalid_browser_create_request(request_id: &RequestId) -> ApiError {
     )
 }
 
+fn invalid_recruitment_best_of(request_id: &RequestId, received: i16) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_recruitment_best_of",
+        "시리즈 형식은 BO1, BO3 또는 BO5만 선택할 수 있습니다.",
+        Some(serde_json::json!({
+            "field": "bestOf",
+            "allowedValues": [1, 3, 5],
+            "receivedValue": received,
+        })),
+    )
+}
+
 fn invalid_browser_recruitment_member_request(request_id: &RequestId) -> ApiError {
     ApiError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -852,6 +1006,36 @@ fn invalid_browser_series_lifecycle_request(request_id: &RequestId) -> ApiError 
     )
 }
 
+fn invalid_browser_series_pick_ban_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_series_pickban_request",
+        "픽밴 변경 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_series_game_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_series_game_request",
+        "게임 결과 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_series_early_complete_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_series_early_complete_request",
+        "시리즈 조기 종료 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
 fn invalid_idempotency_key(request_id: &RequestId) -> ApiError {
     ApiError::new(
         StatusCode::BAD_REQUEST,
@@ -891,6 +1075,9 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
         _ => tracing::warn!(%error, "Bot workflow command rejected"),
     }
     match error {
+        BotWorkflowError::InvalidRecruitmentBestOf { received } => {
+            invalid_recruitment_best_of(request_id, received)
+        }
         BotWorkflowError::InvalidCommand(_) => ApiError::new(
             StatusCode::BAD_REQUEST,
             request_id,
@@ -1055,12 +1242,94 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "원본 모집 상태가 변경되어 시리즈 상태를 변경할 수 없습니다.",
             Some(serde_json::json!({ "currentStatus": status.as_str() })),
         ),
-        BotWorkflowError::SeriesHasConfirmedGames { count } => ApiError::new(
+        BotWorkflowError::SeriesNoCurrentSet => ApiError::new(
             StatusCode::CONFLICT,
             request_id,
-            "series_has_confirmed_games",
-            "확정된 게임이 있어 지금은 시리즈를 되돌리거나 삭제할 수 없습니다. 마지막 게임부터 되돌린 뒤 다시 시도해 주세요.",
-            Some(serde_json::json!({ "confirmedGameCount": count })),
+            "series_no_current_set",
+            "더 기록할 세트가 없습니다.",
+            None,
+        ),
+        BotWorkflowError::SeriesSetNotCurrent { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_set_not_current",
+            "현재 진행 중인 세트만 기록할 수 있습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedSetNumber": expected, "actualSetNumber": actual })),
+        ),
+        BotWorkflowError::InvalidGameResult => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_series_game_result",
+            "게임 결과의 승리 팀, 픽, 밴 또는 패치 버전 값이 올바르지 않습니다.",
+            None,
+        ),
+        BotWorkflowError::SeriesGameChampionDuplicate { champion_id } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "duplicate_series_game_champion",
+            "같은 세트에서 픽과 밴은 같은 챔피언을 중복할 수 없습니다.",
+            Some(serde_json::json!({ "championId": champion_id })),
+        ),
+        BotWorkflowError::SeriesHardFearlessChampionUsed { champion_id } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "hard_fearless_champion_used",
+            "하드 피어리스에서는 이전 세트에서 픽한 챔피언을 다시 픽할 수 없습니다.",
+            Some(serde_json::json!({ "championId": champion_id })),
+        ),
+        BotWorkflowError::SeriesPickBanPlayerNotInRoster => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "series_pickban_player_not_in_roster",
+            "고정된 시리즈 참가자만 픽을 지정할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::SeriesNoConfirmedGames => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_no_confirmed_games",
+            "되돌릴 확정 게임이 없습니다.",
+            None,
+        ),
+        BotWorkflowError::SeriesEarlyCompletionUnavailable {
+            best_of,
+            confirmed_game_count,
+        } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_early_completion_unavailable",
+            "BO3 또는 BO5에서 1경기 이상 확정한 뒤에만 조기 종료할 수 있습니다.",
+            Some(serde_json::json!({
+                "bestOf": best_of,
+                "confirmedGameCount": confirmed_game_count,
+            })),
+        ),
+        BotWorkflowError::SeriesEarlyDrawRequiresTiedScore {
+            team_1_score,
+            team_2_score,
+        } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "early_draw_requires_tied_score",
+            "무승부 조기 종료는 현재 스코어가 동률일 때만 가능합니다.",
+            Some(serde_json::json!({
+                "team1Score": team_1_score,
+                "team2Score": team_2_score,
+            })),
+        ),
+        BotWorkflowError::SeriesGameMmrHistoryAdvanced => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_game_reversal_not_safe",
+            "이후 MMR 변경이 있어 게임 결과를 안전하게 되돌릴 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::SeriesResultUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_result_unavailable",
+            "완료된 시리즈 결과만 확인할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
         ),
         BotWorkflowError::EntryDraftIncomplete {
             joined,
@@ -1166,6 +1435,7 @@ fn registration_command_error(error: BotWorkflowError, request_id: &RequestId) -
 
 fn web_create_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
     match error {
+        BotWorkflowError::InvalidCommand(_) => invalid_browser_create_request(request_id),
         BotWorkflowError::MembershipRequired => ApiError::new(
             StatusCode::FORBIDDEN,
             request_id,
@@ -1324,13 +1594,6 @@ fn web_series_lifecycle_error(error: BotWorkflowError, request_id: &RequestId) -
             "원본 모집 상태가 변경되어 시리즈 상태를 변경할 수 없습니다.",
             Some(serde_json::json!({ "currentStatus": status.as_str() })),
         ),
-        BotWorkflowError::SeriesHasConfirmedGames { count } => ApiError::new(
-            StatusCode::CONFLICT,
-            request_id,
-            "series_has_confirmed_games",
-            "확정된 게임이 있어 지금은 시리즈를 되돌리거나 삭제할 수 없습니다. 마지막 게임부터 되돌린 뒤 다시 시도해 주세요.",
-            Some(serde_json::json!({ "confirmedGameCount": count })),
-        ),
         BotWorkflowError::MembershipRequired => ApiError::new(
             StatusCode::FORBIDDEN,
             request_id,
@@ -1350,6 +1613,64 @@ fn web_series_lifecycle_error(error: BotWorkflowError, request_id: &RequestId) -
             request_id,
             "idempotency_in_progress",
             "같은 시리즈 상태 변경 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_series_pick_ban_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::InvalidCommand(_) => invalid_browser_series_pick_ban_request(request_id),
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 픽밴 상태를 확인할 수 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_series_game_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::InvalidCommand(_) => invalid_browser_series_game_request(request_id),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 게임 결과 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 게임 결과 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_series_early_complete_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::InvalidCommand(_) => {
+            invalid_browser_series_early_complete_request(request_id)
+        }
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 시리즈 조기 종료 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 시리즈 조기 종료 요청을 처리하고 있습니다.",
             None,
         ),
         error => command_error(error, request_id),

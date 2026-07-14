@@ -22,11 +22,14 @@
 
 <div class="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-1">
 	<p class="truncate text-[11px] font-semibold text-slate-500">{label}</p>
-	<div class="grid min-w-0 grid-cols-3 gap-1">
+	<div
+		class="flex h-9 min-w-0 items-start gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain pb-2 pr-1"
+		aria-label={`${label} 챔피언 목록`}
+	>
 		{#each visibleChampions as champion (champion.id)}
 			<button
 				type="button"
-				class="grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-900/45 px-1 py-1 text-left hover:bg-[var(--color-app-hover)]"
+				class="grid h-7 w-24 shrink-0 grid-cols-[1.5rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-900/45 px-1 text-left hover:bg-[var(--color-app-hover)]"
 				title={champion.name}
 				onclick={() => onPick(champion.id)}
 			>

@@ -94,6 +94,9 @@
 	const usesViewportWorkspace = $derived(
 		viewportWorkspaceRouteIds.includes(page.route.id ?? '')
 	);
+	const usesViewportShell = $derived(
+		usesViewportWorkspace || (page.route.id ?? '').startsWith('/g/[guildId]/admin')
+	);
 	const showQuickActionFab = $derived(
 		!staticDocumentRouteIds.includes(page.route.id ?? '') && !usesViewportWorkspace
 	);
@@ -254,7 +257,7 @@
 
 <div
 	class={`flex flex-col bg-[var(--color-app-bg)] text-slate-100 ${
-		usesViewportWorkspace ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'
+		usesViewportShell ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'
 	}`}
 >
 	<header
@@ -549,7 +552,7 @@
 		></button>
 	{/if}
 
-	<div class={`flex min-h-0 flex-1 flex-col ${usesViewportWorkspace ? 'overflow-hidden' : ''}`}>
+	<div class={`flex min-h-0 flex-1 flex-col ${usesViewportShell ? 'overflow-hidden' : ''}`}>
 		{#if navigating.to}
 			<div
 				transition:fade={{ duration: 120, easing: cubicOut }}
@@ -573,7 +576,7 @@
 			inert={searchOpen}
 			class={`mx-auto flex min-h-0 w-full min-w-0 max-w-[1680px] flex-1 flex-col px-4 pt-5 transition-[filter,opacity] duration-150 lg:px-6 ${
 				showQuickActionFab ? 'pb-40 lg:pb-36' : 'pb-5'
-			} ${usesViewportWorkspace ? 'overflow-hidden' : ''} ${searchOpen ? 'blur-[2px] opacity-55' : ''}`}
+			} ${usesViewportShell ? 'overflow-hidden' : ''} ${searchOpen ? 'blur-[2px] opacity-55' : ''}`}
 		>
 			{#if navigating.to}
 				<section

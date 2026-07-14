@@ -179,10 +179,10 @@
 </script>
 
 <section
-	class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
+	class="flex h-full min-h-0 flex-col overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
 >
 	<header
-		class="flex min-h-14 items-center gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
+		class="flex min-h-14 shrink-0 items-center gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
 	>
 		<FileClock size={18} class="shrink-0 text-cyan-200" aria-hidden="true" />
 		<div class="min-w-0">
@@ -192,7 +192,7 @@
 	</header>
 
 	<div
-		class="grid gap-2 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-3 md:grid-cols-[minmax(0,1fr)_140px_140px]"
+		class="grid shrink-0 gap-2 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-3 md:grid-cols-[minmax(0,1fr)_140px_140px]"
 	>
 		<label
 			class="flex h-10 min-w-0 items-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3"
@@ -226,7 +226,7 @@
 		</select>
 	</div>
 
-	<div class="overflow-x-auto">
+	<div class="min-h-0 flex-1 overflow-auto overscroll-contain pr-px">
 		<div class="min-w-[850px]">
 			<div
 				class="grid grid-cols-[88px_158px_minmax(208px,1fr)_112px_88px_44px] gap-x-3 border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-4 py-2 text-[10px] font-semibold text-slate-600"
@@ -319,7 +319,7 @@
 
 	{#if (nextCursor && onLoadMore) || loadMoreError}
 		<footer
-			class="flex flex-col items-center gap-2 border-t border-[var(--color-app-border-muted)] px-4 py-3"
+			class="flex shrink-0 flex-col items-center gap-2 border-t border-[var(--color-app-border-muted)] px-4 py-3"
 		>
 			{#if loadMoreError}
 				<p class="text-xs text-rose-300" role="alert">{loadMoreError}</p>

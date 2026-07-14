@@ -545,6 +545,7 @@ export const guildAdminSettingsSchema = z
 		operatorRoleId: snowflakeSchema,
 		recruitmentChannelId: snowflakeSchema.nullable(),
 		entryChannelId: snowflakeSchema.nullable(),
+		resultChannelId: snowflakeSchema.nullable(),
 		logChannelId: snowflakeSchema.nullable(),
 		isExternallyPublic: z.boolean()
 	})
@@ -677,6 +678,8 @@ export const recruitmentSchema = z
 		title: z.string(),
 		status: z.enum(['OPEN', 'CLOSED']),
 		targetCount: z.literal(10),
+		bestOf: z.union([z.literal(1), z.literal(3), z.literal(5)]),
+		hardFearless: z.boolean(),
 		joinedCount: nonnegativeInteger,
 		assignedCount: nonnegativeInteger,
 		revision: nonnegativeInteger,
@@ -698,6 +701,7 @@ export const seriesSchema = z
 		displayNumber: z.number().int().positive(),
 		title: z.string(),
 		bestOf: z.union([z.literal(1), z.literal(3), z.literal(5)]),
+		hardFearless: z.boolean(),
 		status: z.enum(['IN_PROGRESS', 'COMPLETED']),
 		team1Score: nonnegativeInteger,
 		team2Score: nonnegativeInteger,

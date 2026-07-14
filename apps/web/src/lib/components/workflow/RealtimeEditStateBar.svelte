@@ -74,10 +74,13 @@
 >
 	<div class="flex min-h-10 items-center gap-3 px-3 py-1.5">
 		<div class="flex min-w-0 flex-1 items-center gap-2">
-			<span class="grid size-5 shrink-0 place-items-center" title={connectionMeta.label}>
+			<span
+				class="inline-flex size-4 shrink-0 items-center justify-center"
+				title={connectionMeta.label}
+			>
 				<connectionMeta.icon
 					size={14}
-					class={`shrink-0 ${connectionMeta.class}`}
+					class={`relative -top-px shrink-0 ${connectionMeta.class}`}
 					aria-hidden="true"
 				/>
 			</span>
@@ -112,7 +115,9 @@
 		<div
 			class="flex shrink-0 items-center gap-1.5 border-l border-[var(--color-app-border-muted)] pl-3"
 		>
-			<saveMeta.icon size={13} class={`shrink-0 ${saveMeta.class}`} aria-hidden="true" />
+			<span class="inline-flex size-4 shrink-0 items-center justify-center">
+				<saveMeta.icon size={14} class={`shrink-0 ${saveMeta.class}`} aria-hidden="true" />
+			</span>
 			<span class="whitespace-nowrap text-[11px] font-semibold text-slate-300"
 				>{saveMeta.label}</span
 			>

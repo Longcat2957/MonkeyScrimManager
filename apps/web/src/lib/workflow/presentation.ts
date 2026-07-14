@@ -5,6 +5,7 @@ import type {
 	RecruitmentDto,
 	SeriesDto
 } from '$lib/contracts/workflow';
+import { formatSeriesRules } from './seriesRules';
 
 export function formatRelativeTime(value: string, now = Date.now()): string {
 	const timestamp = Date.parse(value);
@@ -61,7 +62,7 @@ export function buildSeriesView(
 		kind: 'RECRUITMENT',
 		displayNumber: item.displayNumber,
 		title: item.title,
-		format: `${item.targetCount}인`,
+		format: formatSeriesRules(item.bestOf, item.hardFearless),
 		status:
 			item.status === 'OPEN'
 				? '엔트리 모집'
@@ -81,7 +82,7 @@ export function buildSeriesView(
 		kind: 'SERIES',
 		displayNumber: item.displayNumber,
 		title: item.title,
-		format: `BO${item.bestOf}`,
+		format: formatSeriesRules(item.bestOf, item.hardFearless),
 		status: '픽밴/결과 입력',
 		detail: item.currentSetNumber
 			? `${item.currentSetNumber}세트 · 입력 대기`
@@ -100,7 +101,7 @@ export function buildSeriesView(
 		key: `series:${item.id}`,
 		displayNumber: item.displayNumber,
 		name: item.title,
-		format: `BO${item.bestOf}`,
+		format: formatSeriesRules(item.bestOf, item.hardFearless),
 		score: `${item.team1Score} : ${item.team2Score}`,
 		winner:
 			item.outcome === 'DRAW'

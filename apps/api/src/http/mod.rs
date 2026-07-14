@@ -156,6 +156,26 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             get(workflow_routes::series_detail).delete(bot_routes::delete_series),
         )
         .route(
+            "/api/guilds/{guild_id}/series/{series_id}/pickban",
+            patch(bot_routes::update_series_pick_ban),
+        )
+        .route(
+            "/api/guilds/{guild_id}/series/{series_id}/games",
+            post(bot_routes::submit_series_game),
+        )
+        .route(
+            "/api/guilds/{guild_id}/series/{series_id}/games/last",
+            delete(bot_routes::revert_last_series_game),
+        )
+        .route(
+            "/api/guilds/{guild_id}/series/{series_id}/complete",
+            post(bot_routes::complete_series_early),
+        )
+        .route(
+            "/api/guilds/{guild_id}/series/{series_id}/result",
+            get(workflow_routes::series_result),
+        )
+        .route(
             "/api/guilds/{guild_id}/series/{series_id}/revert",
             post(bot_routes::revert_series),
         )

@@ -35,6 +35,7 @@
 		type EntryDraftRealtimeTopics
 	} from '$lib/realtime/entryDraft';
 	import type { RealtimeConnectionState } from '$lib/realtime/types';
+	import { formatSeriesRules } from '$lib/workflow/seriesRules';
 	import { formatRelativeTime } from '$lib/workflow/presentation';
 	import type { PageProps } from './$types';
 
@@ -190,7 +191,7 @@
 
 	function entryDescription(): string {
 		if (!recruitment) return '엔트리 정보를 불러오는 중';
-		return `${recruitment.title} · 모집 #${recruitment.displayNumber} · ${participants.length}명`;
+		return `${recruitment.title} · ${formatSeriesRules(recruitment.bestOf, recruitment.hardFearless)} · ${participants.length}명`;
 	}
 
 	function currentEntryRoute(): EntryRoute {

@@ -59,7 +59,7 @@
 	<title>내 정보 | MonkeyBot</title>
 </svelte:head>
 
-<div class="mx-auto max-w-6xl space-y-4">
+<div class="space-y-5">
 	<WorkspaceHeader
 		kicker="계정"
 		title="내 정보"

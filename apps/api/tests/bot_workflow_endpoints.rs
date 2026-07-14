@@ -34,6 +34,9 @@ const UNKNOWN_GUILD: &str = "200000000000000003";
 const OPERATOR_ROLE_A: &str = "300000000000000001";
 const OPERATOR_ROLE_B: &str = "300000000000000002";
 const CHANNEL_ID: &str = "400000000000000001";
+const ENTRY_CHANNEL_ID: &str = "400000000000000002";
+const RESULT_CHANNEL_ID: &str = "400000000000000003";
+const LOG_CHANNEL_ID: &str = "400000000000000004";
 const MESSAGE_ID: &str = "500000000000000001";
 const OPERATOR_ID: &str = "100000000000000001";
 const OTHER_OPERATOR_ID: &str = "100000000000000099";
@@ -87,6 +90,10 @@ async fn run_bot_workflow() -> TestResult {
         "guildName": "MonkeyBot Test Guild",
         "guildIconHash": "guild-a-icon",
         "operatorRoleId": OPERATOR_ROLE_A,
+        "recruitmentChannelId": CHANNEL_ID,
+        "entryChannelId": ENTRY_CHANNEL_ID,
+        "resultChannelId": RESULT_CHANNEL_ID,
+        "logChannelId": LOG_CHANNEL_ID,
         "seasonName": "2026 Summer"
     });
 
@@ -197,15 +204,31 @@ async fn run_bot_workflow() -> TestResult {
         )
     );
     assert_eq!(
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT display_name, operator_role_id FROM guild_config WHERE guild_id = $1"
+        sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
+            "SELECT display_name, operator_role_id, recruitment_channel_id, entry_channel_id,
+                    result_channel_id, log_channel_id
+             FROM guild_config WHERE guild_id = $1"
         )
         .bind(GUILD_A)
         .fetch_one(&pool)
         .await?,
         (
             "MonkeyBot Test Guild".to_owned(),
-            OPERATOR_ROLE_A.to_owned()
+            OPERATOR_ROLE_A.to_owned(),
+            CHANNEL_ID.to_owned(),
+            Some(ENTRY_CHANNEL_ID.to_owned()),
+            Some(RESULT_CHANNEL_ID.to_owned()),
+            Some(LOG_CHANNEL_ID.to_owned()),
         )
     );
     assert_eq!(
@@ -264,8 +287,49 @@ async fn run_bot_workflow() -> TestResult {
         1
     );
 
-    let create_request =
-        json!({ "actor": actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A]) });
+    let create_request = json!({
+        "actor": actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A]),
+        "bestOf": 5,
+        "hardFearless": true
+    });
+    let invalid_best_of = bot_request(
+        &app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_A}/recruitments"),
+        BOT_TOKEN,
+        "create-recruitment-invalid-best-of",
+        &json!({
+            "actor": actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A]),
+            "bestOf": 2,
+            "hardFearless": true
+        }),
+    )
+    .await?;
+    assert_eq!(invalid_best_of.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let invalid_best_of = body_json(invalid_best_of).await?;
+    assert_eq!(
+        invalid_best_of["error"]["code"],
+        "invalid_recruitment_best_of"
+    );
+    assert_eq!(
+        invalid_best_of["error"]["message"],
+        "시리즈 형식은 BO1, BO3 또는 BO5만 선택할 수 있습니다."
+    );
+    assert_eq!(
+        invalid_best_of["error"]["details"],
+        json!({
+            "field": "bestOf",
+            "allowedValues": [1, 3, 5],
+            "receivedValue": 2
+        })
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM recruitments WHERE guild_id = $1")
+            .bind(GUILD_A)
+            .fetch_one(&pool)
+            .await?,
+        0
+    );
     let create_response = bot_request(
         &app,
         Method::POST,
@@ -283,6 +347,8 @@ async fn run_bot_workflow() -> TestResult {
         .to_owned();
     assert_eq!(created["data"]["recruitment"]["status"], "OPEN");
     assert_eq!(created["data"]["recruitment"]["targetCount"], 10);
+    assert_eq!(created["data"]["recruitment"]["bestOf"], 5);
+    assert_eq!(created["data"]["recruitment"]["hardFearless"], true);
     assert!(created["data"]["recruitment"]["updatedAt"].is_string());
     assert_eq!(created["data"]["participants"], json!([]));
 
@@ -335,6 +401,11 @@ async fn run_bot_workflow() -> TestResult {
     .await?;
     assert_eq!(non_operator_created.status(), StatusCode::CREATED);
     let non_operator_created = body_json(non_operator_created).await?;
+    assert_eq!(non_operator_created["data"]["recruitment"]["bestOf"], 3);
+    assert_eq!(
+        non_operator_created["data"]["recruitment"]["hardFearless"],
+        false
+    );
     let non_operator_recruitment_id = non_operator_created["data"]["recruitment"]["id"]
         .as_str()
         .ok_or("non-operator create response did not contain a recruitment ID")?;
@@ -523,6 +594,10 @@ async fn run_bot_workflow() -> TestResult {
         "guildName": "Other Guild",
         "guildIconHash": null,
         "operatorRoleId": OPERATOR_ROLE_B,
+        "recruitmentChannelId": CHANNEL_ID,
+        "entryChannelId": null,
+        "resultChannelId": null,
+        "logChannelId": null,
         "seasonName": "2026 Summer"
     });
     let setup_b_response = bot_request(
@@ -535,6 +610,16 @@ async fn run_bot_workflow() -> TestResult {
     )
     .await?;
     assert_eq!(setup_b_response.status(), StatusCode::OK);
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+            "SELECT recruitment_channel_id, entry_channel_id, result_channel_id, log_channel_id
+             FROM guild_config WHERE guild_id = $1",
+        )
+        .bind(GUILD_B)
+        .fetch_one(&pool)
+        .await?,
+        (CHANNEL_ID.to_owned(), None, None, None)
+    );
 
     assert_error(
         bot_request(

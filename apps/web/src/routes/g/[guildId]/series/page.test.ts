@@ -24,7 +24,10 @@ describe('general series page', () => {
 
 		expect(body).toContain('내전 모집');
 		expect(body).toContain('진행 중인 내전이 없습니다.');
-		expect(source).toContain('createRecruitment(data.guildId, idempotencyKey)');
+		expect(source).toContain('createRecruitment(');
+		expect(source).toContain('{ bestOf: createBestOf, hardFearless: createHardFearless }');
+		expect(source).toContain('<Dialog.Root bind:open={createDialogOpen}>');
+		expect(source).toContain('BO{bestOf}');
 		expect(source).toContain("resolve('/g/[guildId]/recruitments/[id]'");
 		expect(source).toContain('id: created.recruitment.id');
 		expect(source).not.toContain('await goto(created.links.entry)');

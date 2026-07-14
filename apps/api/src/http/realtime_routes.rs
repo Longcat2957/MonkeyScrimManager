@@ -228,7 +228,7 @@ async fn subscribe_topics(
         Err(error) => return send_topic_error(sender, error).await,
     };
     for topic in &parsed {
-        match runtime.authorize_entry_topic(pool, user_id, topic).await {
+        match runtime.authorize_topic(pool, user_id, topic).await {
             Ok(()) => {}
             Err(error) => return send_authorization_error(sender, error).await,
         }
@@ -276,7 +276,7 @@ async fn recheck_subscriptions(
             subscriptions.remove(&raw);
             continue;
         };
-        match runtime.authorize_entry_topic(pool, user_id, &topic).await {
+        match runtime.authorize_topic(pool, user_id, &topic).await {
             Ok(()) => {}
             Err(TopicAuthorizationError::Membership(error)) => {
                 tracing::warn!(error = %error, "failed to recheck realtime topic access");

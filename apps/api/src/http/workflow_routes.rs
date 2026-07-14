@@ -61,6 +61,8 @@ struct RecruitmentData {
     title: String,
     status: &'static str,
     target_count: i16,
+    best_of: i16,
+    hard_fearless: bool,
     joined_count: i64,
     assigned_count: i64,
     revision: i64,
@@ -82,6 +84,7 @@ struct SeriesData {
     display_number: i64,
     title: String,
     best_of: i16,
+    hard_fearless: bool,
     status: &'static str,
     team_1_score: i64,
     team_2_score: i64,
@@ -334,6 +337,26 @@ pub async fn series_detail(
     Ok(error::success(StatusCode::OK, &request_id, snapshot))
 }
 
+pub async fn series_result(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_series_result_snapshot(
+        pool,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| series_result_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
 pub async fn auction_recruitments(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -444,6 +467,8 @@ fn map_recruitment_page(
                 title: record.title,
                 status: record.status.as_str(),
                 target_count: record.target_count,
+                best_of: record.best_of,
+                hard_fearless: record.hard_fearless,
                 joined_count: record.participant_count,
                 assigned_count: record.assigned_count,
                 revision: record.revision,
@@ -478,6 +503,7 @@ fn map_series_page(
                 display_number: record.display_number,
                 title: record.title,
                 best_of: record.best_of,
+                hard_fearless: record.hard_fearless,
                 status: record.status.as_str(),
                 team_1_score: record.team_1_score,
                 team_2_score: record.team_2_score,
@@ -773,6 +799,43 @@ fn series_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> Api
         ),
         error => {
             tracing::error!(%error, "series pick-ban snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
+fn series_result_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::SeriesNotFound | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 완료 시리즈 결과를 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::SeriesResultUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_result_unavailable",
+            "시리즈가 아직 완료되지 않아 결과를 확인할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "series result snapshot query failed");
             ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 request_id,

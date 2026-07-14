@@ -33,6 +33,8 @@ describe('general series page server load', () => {
 							title: '금요 일반 내전 모집',
 							status: 'CLOSED',
 							targetCount: 10,
+							bestOf: 3,
+							hardFearless: false,
 							joinedCount: 10,
 							assignedCount: 4,
 							revision: 3,
@@ -52,6 +54,7 @@ describe('general series page server load', () => {
 							displayNumber: 106,
 							title: '금요 정기 내전',
 							bestOf: 3,
+							hardFearless: false,
 							status: 'IN_PROGRESS',
 							team1Score: 0,
 							team2Score: 1,
@@ -76,6 +79,7 @@ describe('general series page server load', () => {
 							displayNumber: 105,
 							title: '주말 자유 내전',
 							bestOf: 3,
+							hardFearless: false,
 							status: 'COMPLETED',
 							team1Score: 1,
 							team2Score: 1,
@@ -118,7 +122,7 @@ describe('general series page server load', () => {
 		]);
 		expect(result.view.activeWork[0]).toMatchObject({
 			displayNumber: 106,
-			format: 'BO3',
+			format: 'BO3 · 일반',
 			href: `/g/${guildId}/series/${activeSeriesId}/pick-ban`
 		});
 		expect(result.view.completedSeries[0]).toMatchObject({

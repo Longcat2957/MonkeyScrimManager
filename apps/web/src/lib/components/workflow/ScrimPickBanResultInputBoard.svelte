@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Redo2, Undo2 } from 'lucide-svelte';
+	import { ChevronDown, ClipboardPenLine, Redo2, Undo2 } from 'lucide-svelte';
 	import { untrack } from 'svelte';
 	import {
 		mockScrimPickBanResultInputGames,
@@ -12,8 +12,18 @@
 		type ScrimPickBanResultInputTeam,
 		type ScrimPickBanResultInputSide
 	} from '$lib/fixtures/scrimPickBanResultInputFixtures';
+	import type {
+		SeriesPickBanBulkItem,
+		SeriesPickBanDraftOperation
+	} from '$lib/contracts/seriesPickBan';
 	import PositionIcon from './PositionIcon.svelte';
-	import type { ScrimPickBanResultInputActiveCell } from './scrimPickBanResultInputHelpers';
+	import ScrimPickBanBulkInput from './ScrimPickBanBulkInput.svelte';
+	import {
+		adjacentScrimPickBanResultInputCell,
+		scrimPickBanResultInputCellId,
+		scrimPickBanResultInputCellOrder,
+		type ScrimPickBanResultInputActiveCell
+	} from './scrimPickBanResultInputHelpers';
 	import ScrimPickBanResultInputTeamPanel from './ScrimPickBanResultInputTeamPanel.svelte';
 
 	interface Props {
@@ -23,6 +33,11 @@
 		champions?: ScrimPickBanResultInputChampion[];
 		patchVersion?: string;
 		teamsAreGameSides?: boolean;
+		hardFearless?: boolean;
+		previousPickChampionIds?: readonly string[];
+		readOnly?: boolean;
+		busy?: boolean;
+		onDraftOperation?: (operation: SeriesPickBanDraftOperation) => void | Promise<void>;
 		onSubmit?: (game: ScrimPickBanResultInputGame) => void | Promise<void>;
 	}
 
@@ -33,6 +48,11 @@
 		champions = scrimPickBanResultInputChampions,
 		patchVersion = mockScrimPickBanResultInputPatch,
 		teamsAreGameSides = false,
+		hardFearless = false,
+		previousPickChampionIds = [],
+		readOnly = false,
+		busy = false,
+		onDraftOperation,
 		onSubmit
 	}: Props = $props();
 
@@ -48,6 +68,7 @@
 	let sidePreset = $state<ScrimPickBanResultInputSidePreset>(
 		untrack(() => initialGame.sidePreset ?? 'DEFAULT')
 	);
+	let sideSelected = $state(untrack(() => hasExplicitSideSelection(initialGame)));
 	let winner = $state<ScrimPickBanResultInputSide | null>(untrack(() => initialGame.winner));
 	let bans = $state<Record<ScrimPickBanResultInputSide, Array<string | null>>>({
 		BLUE: untrack(() => [...initialGame.bans.BLUE]),
@@ -62,6 +83,11 @@
 	let redoStack = $state<ScrimPickBanResultInputSnapshot[]>([]);
 	let saved = $state(false);
 	let submitting = $state(false);
+	let bulkInputOpen = $state(false);
+	let currentSetExpanded = $state(true);
+	let lastSyncedGameFingerprint: string | null = null;
+	let lastSyncedGameId: string | null = null;
+	const currentSetDisclosureId = $props.id();
 
 	const allBansFilled = $derived([...bans.BLUE, ...bans.RED].every(Boolean));
 	const allPicksFilled = $derived(Object.values(picks).every(Boolean));
@@ -69,17 +95,65 @@
 	const pickBanDone = $derived(allBansFilled && allPicksFilled);
 	const canLeavePickBan = $derived(!strict || pickBanDone);
 	const ready = $derived(sideDone && canLeavePickBan && winner !== null);
-	const canSubmit = $derived(ready && onSubmit !== undefined);
+	const serverDraft = $derived(onDraftOperation !== undefined);
+	const canEditDraft = $derived(!readOnly && !busy);
+	const canRecordResult = $derived(!readOnly && !busy && onSubmit !== undefined);
+	const canSubmit = $derived(ready && canRecordResult);
 	const progressSteps = $derived([
 		{ key: 'SIDE' as const, label: '사이드', done: sideDone },
 		{ key: 'PICKBAN' as const, label: '픽밴', done: pickBanDone },
 		{ key: 'WINNER' as const, label: '승자', done: winner !== null }
 	]);
-	const canUndo = $derived(undoStack.length > 0);
-	const canRedo = $derived(redoStack.length > 0);
+	const canUndo = $derived(!serverDraft && canEditDraft && undoStack.length > 0);
+	const canRedo = $derived(!serverDraft && canEditDraft && redoStack.length > 0);
 	const sidePresets: ScrimPickBanResultInputSidePreset[] = ['DEFAULT', 'SWAPPED'];
 	const winnerSides: ScrimPickBanResultInputSide[] = ['BLUE', 'RED'];
 	const boardColumns: Array<'LEFT' | 'RIGHT'> = ['LEFT', 'RIGHT'];
+	const inputCellOrder = $derived(scrimPickBanResultInputCellOrder(teams, bans));
+
+	$effect(() => {
+		const fingerprint = gameFingerprint(initialGame);
+		if (fingerprint === lastSyncedGameFingerprint) return;
+
+		const gameChanged = initialGame.id !== lastSyncedGameId;
+		lastSyncedGameFingerprint = fingerprint;
+		lastSyncedGameId = initialGame.id;
+		sidePreset = initialGame.sidePreset ?? 'DEFAULT';
+		if (gameChanged) {
+			sideSelected = hasExplicitSideSelection(initialGame);
+			bulkInputOpen = false;
+		} else if (hasExplicitSideSelection(initialGame)) {
+			sideSelected = true;
+		}
+		winner = initialGame.winner;
+		bans = {
+			BLUE: [...initialGame.bans.BLUE],
+			RED: [...initialGame.bans.RED]
+		};
+		picks = { ...initialGame.picks };
+		undoStack = [];
+		redoStack = [];
+		saved = false;
+	});
+
+	function hasExplicitSideSelection(game: ScrimPickBanResultInputGame): boolean {
+		return (
+			game.sidePreset === 'SWAPPED' ||
+			game.winner !== null ||
+			Object.values(game.picks).some(Boolean) ||
+			[...game.bans.BLUE, ...game.bans.RED].some(Boolean)
+		);
+	}
+
+	function gameFingerprint(game: ScrimPickBanResultInputGame): string {
+		return JSON.stringify({
+			id: game.id,
+			sidePreset: game.sidePreset,
+			winner: game.winner,
+			bans: game.bans,
+			picks: Object.entries(game.picks).sort(([left], [right]) => left.localeCompare(right))
+		});
+	}
 
 	function captureSnapshot(): ScrimPickBanResultInputSnapshot {
 		return {
@@ -127,8 +201,20 @@
 		restoreSnapshot(next);
 	}
 
-	function setBan(side: ScrimPickBanResultInputSide, index: number, championId: string | null) {
-		if (bans[side][index] === championId) return;
+	async function setBan(
+		side: ScrimPickBanResultInputSide,
+		index: number,
+		championId: string | null
+	) {
+		if (!canEditDraft || bans[side][index] === championId) return;
+		if (onDraftOperation) {
+			await onDraftOperation(
+				championId
+					? { type: 'SET_BAN', side, slot: index + 1, championId }
+					: { type: 'CLEAR_BAN', side, slot: index + 1 }
+			);
+			return;
+		}
 		recordHistory();
 		bans = {
 			...bans,
@@ -137,17 +223,43 @@
 		saved = false;
 	}
 
-	function setPick(playerId: string, championId: string | null) {
-		if ((picks[playerId] ?? null) === championId) return;
+	async function setPick(playerId: string, championId: string | null) {
+		if (!canEditDraft || (picks[playerId] ?? null) === championId) return;
+		if (onDraftOperation) {
+			await onDraftOperation(
+				championId
+					? ({ type: 'SET_PICK', playerId, championId } as SeriesPickBanDraftOperation)
+					: ({ type: 'CLEAR_PICK', playerId } as SeriesPickBanDraftOperation)
+			);
+			return;
+		}
 		recordHistory();
 		picks = { ...picks, [playerId]: championId };
 		saved = false;
 	}
 
-	function selectSide(preset: ScrimPickBanResultInputSidePreset) {
-		if (sidePreset === preset) return;
+	async function applyBulkInput(items: SeriesPickBanBulkItem[]) {
+		if (!canEditDraft || !sideSelected || items.length === 0 || !onDraftOperation) return;
+		await onDraftOperation({ type: 'APPLY_BULK', items });
+	}
+
+	async function selectSide(preset: ScrimPickBanResultInputSidePreset) {
+		if (!canEditDraft) return;
+		if (onDraftOperation) {
+			if (sidePreset !== preset) {
+				await onDraftOperation({ type: 'SET_SIDE', sidePreset: preset });
+			}
+			sidePreset = preset;
+			sideSelected = true;
+			return;
+		}
+		if (sidePreset === preset) {
+			sideSelected = true;
+			return;
+		}
 		recordHistory();
 		sidePreset = preset;
+		sideSelected = true;
 		saved = false;
 	}
 
@@ -181,10 +293,26 @@
 	}
 
 	function setWinner(side: ScrimPickBanResultInputSide) {
-		if (winner === side) return;
+		if (!canRecordResult || winner === side) return;
 		recordHistory();
 		winner = side;
 		saved = false;
+	}
+
+	function navigateInputCell(current: ScrimPickBanResultInputActiveCell, direction: -1 | 1) {
+		if (!canEditDraft) return;
+		const next = adjacentScrimPickBanResultInputCell(inputCellOrder, current, direction);
+		if (!next) return;
+
+		activeCell = next;
+		if (typeof window === 'undefined') return;
+		window.requestAnimationFrame(() => {
+			const input = document.getElementById(
+				scrimPickBanResultInputCellId(next)
+			) as HTMLInputElement | null;
+			input?.focus({ preventScroll: true });
+			input?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+		});
 	}
 
 	function progressBarClass(done: boolean, current: boolean): string {
@@ -225,268 +353,330 @@
 	}
 </script>
 
-<div class="grid gap-1.5">
+<section
+	class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
+>
+	<header class="flex min-h-10 items-center gap-2 px-3 py-1.5">
+		<button
+			type="button"
+			class="flex min-w-0 flex-1 items-center justify-between gap-3 text-left hover:text-slate-100"
+			aria-expanded={currentSetExpanded}
+			aria-controls={currentSetDisclosureId}
+			onclick={() => (currentSetExpanded = !currentSetExpanded)}
+		>
+			<span class="flex min-w-0 items-center gap-2">
+				<span class="truncate text-xs font-semibold text-slate-200">현재 세트 결과</span>
+				<span class="shrink-0 text-[11px] font-medium text-slate-500">{initialGame.label}</span>
+			</span>
+			<span
+				class="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-400"
+			>
+				{currentSetExpanded ? '접기' : '입력'}
+				<ChevronDown
+					size={15}
+					class={`transition-transform ${currentSetExpanded ? 'rotate-180' : ''}`}
+					aria-hidden="true"
+				/>
+			</span>
+		</button>
+		{#if serverDraft && sideSelected}
+			<button
+				type="button"
+				disabled={!canEditDraft}
+				title={canEditDraft ? '일괄 입력' : '픽밴 편집 권한이 필요합니다.'}
+				onclick={() => (bulkInputOpen = true)}
+				class="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-cyan-300/25 px-2.5 text-[11px] font-semibold text-cyan-100 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-35"
+			>
+				<ClipboardPenLine size={14} aria-hidden="true" /> 일괄 입력
+			</button>
+		{/if}
+	</header>
+
 	<div
-		class="grid gap-1.5 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] px-3 py-1.5 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+		id={currentSetDisclosureId}
+		hidden={!currentSetExpanded}
+		class="grid gap-1.5 border-t border-[var(--color-app-border-muted)]"
 	>
-		<div class="min-w-0">
-			<p class="text-xs font-semibold text-slate-500">결과 입력</p>
+		<div class="grid grid-cols-3 gap-1 bg-[var(--color-app-surface)] px-2 py-1.5">
+			{#each progressSteps as step (step.label)}
+				{@const current = step.key === inputStep}
+				<div class="grid gap-1">
+					<div class={`h-1.5 ${progressBarClass(step.done, current)}`}></div>
+					<p class={`text-center text-xs font-semibold ${progressTextClass(step.done, current)}`}>
+						{step.label}
+					</p>
+				</div>
+			{/each}
 		</div>
-		<div class="flex flex-wrap items-center justify-end gap-1.5">
-			<div class="flex items-center gap-1">
-				<button
-					type="button"
-					class="grid size-8 place-items-center rounded-sm text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
-					disabled={!canUndo}
-					aria-label="되돌리기"
-					title="되돌리기"
-					onclick={undo}
-				>
-					<Undo2 size={15} />
-				</button>
-				<button
-					type="button"
-					class="grid size-8 place-items-center rounded-sm text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
-					disabled={!canRedo}
-					aria-label="다시 실행"
-					title="다시 실행"
-					onclick={redo}
-				>
-					<Redo2 size={15} />
-				</button>
-			</div>
-		</div>
-	</div>
 
-	<div class="grid grid-cols-3 gap-1 bg-[var(--color-app-surface)] px-2 py-1.5">
-		{#each progressSteps as step (step.label)}
-			{@const current = step.key === inputStep}
-			<div class="grid gap-1">
-				<div class={`h-1.5 ${progressBarClass(step.done, current)}`}></div>
-				<p class={`text-center text-xs font-semibold ${progressTextClass(step.done, current)}`}>
-					{step.label}
-				</p>
-			</div>
-		{/each}
-	</div>
+		{#if inputStep === 'SIDE'}
+			<section
+				class="border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] p-1.5"
+			>
+				<div class="grid gap-1.5">
+					<div class="grid grid-cols-2 gap-1">
+						{#each sidePresets as preset (preset)}
+							<button
+								type="button"
+								class={`inline-flex h-8 w-full items-center justify-center px-2.5 text-xs font-semibold transition ${
+									sidePreset === preset
+										? 'rounded-md bg-cyan-400/12 text-cyan-100'
+										: 'rounded-sm bg-slate-950/25 text-slate-300 hover:bg-slate-900/55'
+								}`}
+								disabled={!canEditDraft}
+								onclick={() => void selectSide(preset)}
+							>
+								{preset === 'DEFAULT' ? '왼쪽 팀 블루' : '오른쪽 팀 블루'}
+							</button>
+						{/each}
+					</div>
 
-	{#if inputStep === 'SIDE'}
-		<section
-			class="border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] p-1.5"
-		>
-			<div class="grid gap-1.5">
-				<div class="grid grid-cols-2 gap-1">
 					{#each sidePresets as preset (preset)}
-						<button
-							type="button"
-							class={`inline-flex h-8 w-full items-center justify-center px-2.5 text-xs font-semibold transition ${
-								sidePreset === preset
-									? 'rounded-md bg-cyan-400/12 text-cyan-100'
-									: 'rounded-sm bg-slate-950/25 text-slate-300 hover:bg-slate-900/55'
-							}`}
-							onclick={() => selectSide(preset)}
-						>
-							{preset === 'DEFAULT' ? '왼쪽 팀 블루' : '오른쪽 팀 블루'}
-						</button>
-					{/each}
-				</div>
-
-				{#each sidePresets as preset (preset)}
-					{#if sidePreset === preset}
-						<div
-							class="grid min-w-[34rem] grid-cols-2 gap-1 overflow-x-auto bg-[var(--color-app-surface)]"
-						>
-							{#each boardColumns as column (column)}
-								{@const side = sideForColumn(preset, column)}
-								{@const team = teamsAreGameSides
-									? teams[side]
-									: column === 'LEFT'
-										? teams.BLUE
-										: teams.RED}
-								<section class={sidePanelClass(side)}>
-									<div class="flex h-11 items-center justify-between px-2">
-										<div>
-											<p class="text-sm font-semibold text-slate-100">
-												{team.name}
-											</p>
-										</div>
-										<span
-											class={`bg-slate-950/35 px-2 py-1 text-[11px] font-semibold ${sideClass(side)}`}
-										>
-											{sideLabel(side)}
-										</span>
-									</div>
-									<div class="grid grid-rows-[repeat(5,3rem)] gap-1 px-1.5 pb-1.5">
-										{#each team.players as player (player.id)}
-											<div
-												class="grid min-h-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-950/25 p-1"
-											>
-												<span class="grid place-items-center bg-slate-950/35 text-slate-300">
-													<PositionIcon role={player.lane} size="sm" />
-												</span>
-												<span class="truncate text-sm font-semibold text-slate-100">
-													{player.name}
-												</span>
+						{#if sidePreset === preset}
+							<div
+								class="grid min-w-[34rem] grid-cols-2 gap-1 overflow-x-auto bg-[var(--color-app-surface)]"
+							>
+								{#each boardColumns as column (column)}
+									{@const side = sideForColumn(preset, column)}
+									{@const team = teamsAreGameSides
+										? teams[side]
+										: column === 'LEFT'
+											? teams.BLUE
+											: teams.RED}
+									<section class={sidePanelClass(side)}>
+										<div class="flex h-11 items-center justify-between px-2">
+											<div>
+												<p class="text-sm font-semibold text-slate-100">
+													{team.name}
+												</p>
 											</div>
-										{/each}
-									</div>
-								</section>
-							{/each}
-						</div>
-					{/if}
-				{/each}
-			</div>
-		</section>
-	{:else if inputStep === 'PICKBAN'}
-		<section
-			class="overflow-x-auto border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-border-muted)]"
-		>
-			<div class="grid min-w-[64rem] gap-px xl:min-w-0">
-				<ScrimPickBanResultInputTeamPanel
-					team={teams.BLUE}
-					bans={bans.BLUE}
-					{picks}
-					{activeCell}
-					{champions}
-					version={patchVersion}
-					onActiveCell={(cell) => {
-						activeCell = cell;
-					}}
-					onBan={setBan}
-					onPick={setPick}
-				/>
-				<ScrimPickBanResultInputTeamPanel
-					team={teams.RED}
-					bans={bans.RED}
-					{picks}
-					{activeCell}
-					{champions}
-					version={patchVersion}
-					onActiveCell={(cell) => {
-						activeCell = cell;
-					}}
-					onBan={setBan}
-					onPick={setPick}
-				/>
-			</div>
-		</section>
-	{:else}
-		<section
-			class="border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] p-1.5"
-		>
-			<div class="grid gap-1.5">
-				<div class="grid grid-cols-2 gap-1">
-					{#each winnerSides as side (side)}
-						{@const team = teamForSide(side)}
-						<button
-							type="button"
-							class={`inline-flex h-8 w-full items-center justify-center px-2.5 text-xs font-semibold transition ${
-								winner === side
-									? 'rounded-md bg-emerald-400/14 text-emerald-100'
-									: 'rounded-sm bg-slate-950/25 text-slate-300 hover:bg-slate-900/55'
-							}`}
-							onclick={() => setWinner(side)}
-						>
-							{sideLabel(side)} 승리 · {team.name}
-						</button>
-					{/each}
-				</div>
-
-				<div
-					class="grid min-w-[34rem] grid-cols-2 gap-1 overflow-x-auto bg-[var(--color-app-surface)]"
-				>
-					{#each winnerSides as side (side)}
-						{@const team = teamForSide(side)}
-						{@const selected = winner === side}
-						<section class={winnerPanelClass(selected)}>
-							<div class="flex h-11 items-center justify-between px-2">
-								<p class={`text-sm font-semibold ${sideClass(side)}`}>{sideLabel(side)}</p>
-								<div class="flex items-center gap-1">
-									<span class="bg-slate-950/35 px-2 py-1 text-[11px] font-semibold text-slate-100">
-										{team.name}
-									</span>
-									{#if selected}
-										<span
-											class="bg-emerald-400/14 px-2 py-1 text-[11px] font-semibold text-emerald-100"
-										>
-											승리
-										</span>
-									{/if}
-								</div>
-							</div>
-							<div class="grid grid-rows-[repeat(5,3rem)] gap-1 px-1.5 pb-1.5">
-								{#each team.players as player (player.id)}
-									<div
-										class="grid min-h-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-950/25 p-1"
-									>
-										<span class="grid place-items-center bg-slate-950/35 text-slate-300">
-											<PositionIcon role={player.lane} size="sm" />
-										</span>
-										<span class="truncate text-sm font-semibold text-slate-100">
-											{player.name}
-										</span>
-									</div>
+											<span
+												class={`bg-slate-950/35 px-2 py-1 text-[11px] font-semibold ${sideClass(side)}`}
+											>
+												{sideLabel(side)}
+											</span>
+										</div>
+										<div class="grid grid-rows-[repeat(5,3rem)] gap-1 px-1.5 pb-1.5">
+											{#each team.players as player (player.id)}
+												<div
+													class="grid min-h-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-950/25 p-1"
+												>
+													<span class="grid place-items-center bg-slate-950/35 text-slate-300">
+														<PositionIcon role={player.lane} size="sm" />
+													</span>
+													<span class="truncate text-sm font-semibold text-slate-100">
+														{player.name}
+													</span>
+												</div>
+											{/each}
+										</div>
+									</section>
 								{/each}
 							</div>
-						</section>
+						{/if}
 					{/each}
 				</div>
-			</div>
-		</section>
-	{/if}
+			</section>
+		{:else if inputStep === 'PICKBAN'}
+			<section
+				class="overflow-x-auto border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-border-muted)]"
+			>
+				<div
+					class={`grid min-w-[64rem] gap-px xl:min-w-0 ${
+						canEditDraft ? '' : 'pointer-events-none opacity-60'
+					}`}
+					aria-busy={busy}
+				>
+					<ScrimPickBanResultInputTeamPanel
+						team={teams.BLUE}
+						bans={bans.BLUE}
+						{picks}
+						{activeCell}
+						{champions}
+						version={patchVersion}
+						onActiveCell={(cell) => {
+							activeCell = cell;
+						}}
+						onBan={setBan}
+						onPick={setPick}
+						onNavigate={canEditDraft ? navigateInputCell : undefined}
+					/>
+					<ScrimPickBanResultInputTeamPanel
+						team={teams.RED}
+						bans={bans.RED}
+						{picks}
+						{activeCell}
+						{champions}
+						version={patchVersion}
+						onActiveCell={(cell) => {
+							activeCell = cell;
+						}}
+						onBan={setBan}
+						onPick={setPick}
+						onNavigate={canEditDraft ? navigateInputCell : undefined}
+					/>
+				</div>
+			</section>
+		{:else}
+			<section
+				class="border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] p-1.5"
+			>
+				<div class="grid gap-1.5">
+					<div class="grid grid-cols-2 gap-1">
+						{#each winnerSides as side (side)}
+							{@const team = teamForSide(side)}
+							<button
+								type="button"
+								class={`inline-flex h-8 w-full items-center justify-center px-2.5 text-xs font-semibold transition ${
+									winner === side
+										? 'rounded-md bg-emerald-400/14 text-emerald-100'
+										: 'rounded-sm bg-slate-950/25 text-slate-300 hover:bg-slate-900/55'
+								}`}
+								disabled={!canRecordResult}
+								onclick={() => setWinner(side)}
+							>
+								{sideLabel(side)} 승리 · {team.name}
+							</button>
+						{/each}
+					</div>
 
-	<div class="bg-[var(--color-app-surface)] p-1.5">
-		<div class="flex flex-wrap justify-end gap-1.5">
-			{#if inputStep === 'SIDE'}
-				<button
-					type="button"
-					class="inline-flex h-9 items-center justify-center rounded-sm bg-cyan-400/12 px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/18"
-					onclick={goToPickBan}
-				>
-					다음
-				</button>
-			{:else if inputStep === 'PICKBAN'}
-				<button
-					type="button"
-					class="inline-flex h-9 items-center justify-center rounded-sm px-3 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
-					onclick={() => {
-						inputStep = 'SIDE';
-					}}
-				>
-					이전
-				</button>
-				<button
-					type="button"
-					class="inline-flex h-9 items-center justify-center rounded-sm bg-cyan-400/12 px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/18 disabled:cursor-not-allowed disabled:opacity-50"
-					disabled={!canLeavePickBan}
-					onclick={goToWinner}
-				>
-					다음
-				</button>
-			{:else if inputStep === 'WINNER'}
-				<button
-					type="button"
-					class="inline-flex h-9 items-center justify-center rounded-sm px-3 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
-					onclick={goToPickBan}
-				>
-					이전
-				</button>
-				<button
-					type="button"
-					class="inline-flex h-9 items-center justify-center rounded-sm bg-emerald-400/14 px-4 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-					disabled={!canSubmit || submitting}
-					title={onSubmit ? undefined : '결과 기록 API가 연결되면 사용할 수 있습니다.'}
-					onclick={submit}
-				>
-					{submitting ? '기록 중' : '결과 기록'}
-				</button>
+					<div
+						class="grid min-w-[34rem] grid-cols-2 gap-1 overflow-x-auto bg-[var(--color-app-surface)]"
+					>
+						{#each winnerSides as side (side)}
+							{@const team = teamForSide(side)}
+							{@const selected = winner === side}
+							<section class={winnerPanelClass(selected)}>
+								<div class="flex h-11 items-center justify-between px-2">
+									<p class={`text-sm font-semibold ${sideClass(side)}`}>{sideLabel(side)}</p>
+									<div class="flex items-center gap-1">
+										<span
+											class="bg-slate-950/35 px-2 py-1 text-[11px] font-semibold text-slate-100"
+										>
+											{team.name}
+										</span>
+										{#if selected}
+											<span
+												class="bg-emerald-400/14 px-2 py-1 text-[11px] font-semibold text-emerald-100"
+											>
+												승리
+											</span>
+										{/if}
+									</div>
+								</div>
+								<div class="grid grid-rows-[repeat(5,3rem)] gap-1 px-1.5 pb-1.5">
+									{#each team.players as player (player.id)}
+										<div
+											class="grid min-h-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-950/25 p-1"
+										>
+											<span class="grid place-items-center bg-slate-950/35 text-slate-300">
+												<PositionIcon role={player.lane} size="sm" />
+											</span>
+											<span class="truncate text-sm font-semibold text-slate-100">
+												{player.name}
+											</span>
+										</div>
+									{/each}
+								</div>
+							</section>
+						{/each}
+					</div>
+				</div>
+			</section>
+		{/if}
+
+		<div class="bg-[var(--color-app-surface)] p-1.5">
+			<div class="flex flex-wrap items-center justify-end gap-1.5">
+				{#if !serverDraft}
+					<div class="flex items-center gap-1">
+						<button
+							type="button"
+							class="grid size-8 place-items-center rounded-sm text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
+							disabled={!canUndo}
+							aria-label="되돌리기"
+							title="되돌리기"
+							onclick={undo}
+						>
+							<Undo2 size={15} />
+						</button>
+						<button
+							type="button"
+							class="grid size-8 place-items-center rounded-sm text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
+							disabled={!canRedo}
+							aria-label="다시 실행"
+							title="다시 실행"
+							onclick={redo}
+						>
+							<Redo2 size={15} />
+						</button>
+					</div>
+				{/if}
+				{#if inputStep === 'SIDE'}
+					<button
+						type="button"
+						class="inline-flex h-9 items-center justify-center rounded-sm bg-cyan-400/12 px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/18"
+						onclick={goToPickBan}
+					>
+						다음
+					</button>
+				{:else if inputStep === 'PICKBAN'}
+					<button
+						type="button"
+						class="inline-flex h-9 items-center justify-center rounded-sm px-3 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
+						onclick={() => {
+							inputStep = 'SIDE';
+						}}
+					>
+						이전
+					</button>
+					<button
+						type="button"
+						class="inline-flex h-9 items-center justify-center rounded-sm bg-cyan-400/12 px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/18 disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={!canLeavePickBan}
+						onclick={goToWinner}
+					>
+						다음
+					</button>
+				{:else if inputStep === 'WINNER'}
+					<button
+						type="button"
+						class="inline-flex h-9 items-center justify-center rounded-sm px-3 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
+						onclick={goToPickBan}
+					>
+						이전
+					</button>
+					<button
+						type="button"
+						class="inline-flex h-9 items-center justify-center rounded-sm bg-emerald-400/14 px-4 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={!canSubmit || submitting}
+						title={onSubmit ? undefined : '결과 기록 API가 연결되면 사용할 수 있습니다.'}
+						onclick={submit}
+					>
+						{submitting ? '기록 중' : '결과 기록'}
+					</button>
+				{/if}
+			</div>
+
+			{#if saved}
+				<div class="bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100">
+					결과가 기록되었습니다.
+				</div>
 			{/if}
 		</div>
-	</div>
 
-	{#if saved}
-		<div class="bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100">
-			결과가 기록되었습니다.
-		</div>
-	{/if}
-</div>
+		{#if serverDraft && sideSelected}
+			<ScrimPickBanBulkInput
+				bind:open={bulkInputOpen}
+				{teams}
+				{picks}
+				{bans}
+				{champions}
+				{hardFearless}
+				{previousPickChampionIds}
+				readOnly={!canEditDraft}
+				{busy}
+				onApply={applyBulkInput}
+			/>
+		{/if}
+	</div>
+</section>

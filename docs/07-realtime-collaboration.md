@@ -214,15 +214,18 @@ guild:{guildId}:auction-match:{matchId}
 roster/status/capability 변경을, entry-draft topic은 assignment/draft metadata 변경을 알린다. 현재
 WebSocket을 사용하지 않는 HTTP-only route는 이 topic을 구독하지 않고 다음 snapshot 조회로 복구한다.
 
-현재 subscribe를 허용하는 범위는 일반 내전 엔트리의 아래 두 topic뿐이다.
+현재 subscribe를 허용하는 범위는 일반 내전 엔트리의 아래 두 topic과 진행 중 일반 series의 topic이다.
 
 ```txt
 guild:{guildId}:recruitment:{recruitmentId}
 guild:{guildId}:recruitment-entry-draft:{recruitmentId}
+guild:{guildId}:series:{seriesId}
 ```
 
-나머지 topic 형식은 outbox/namespace의 예약 계약이다. 해당 화면의 HTTP snapshot, 권한 검사, frontend
-재조회가 함께 준비되기 전에는 `/ws` subscribe가 `unsupported_topic`을 반환한다.
+entry topic은 해당 guild의 active member가 구독할 수 있다. series topic은 `IN_PROGRESS` series의 current
+active operator만 구독할 수 있다. 일반 member와 result ledger는 socket을 열지 않고 HTTP snapshot을 다시
+읽는다. 나머지 topic 형식은 outbox/namespace의 예약 계약이며 해당 화면의 HTTP snapshot, 권한 검사,
+frontend 재조회가 함께 준비되기 전에는 `/ws` subscribe가 `unsupported_topic`을 반환한다.
 
 ### Client frame
 
@@ -235,7 +238,8 @@ guild:{guildId}:recruitment-entry-draft:{recruitmentId}
 ```
 
 - unknown field, empty/duplicate/non-canonical topic은 거부한다.
-- subscribe 전체를 먼저 parse하고 각 topic의 guild membership과 현재 resource visibility를 확인한다.
+- subscribe 전체를 먼저 parse하고 각 topic의 guild membership, 현재 resource visibility, 필요한 경우
+  operator role을 확인한다.
 - client는 필요한 두 topic을 한 `subscribe` frame으로 보내고, 두 topic 모두 들어 있는 `subscribed` ack를
   받은 뒤에만 `connected`를 표시한다.
 

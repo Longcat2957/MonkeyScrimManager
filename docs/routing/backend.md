@@ -144,6 +144,10 @@ currentSeason
 `Idempotency-Key`로 전달한다. actor의 Discord guild 관리 권한은 Bot이 먼저 확인하고,
 backend는 `INSTALLED|SETUP_REQUIRED`이고 `guild_config`가 없는 길드에만
 guild/user/member/config/ACTIVE season/counter를 한 transaction에서 생성한다.
+`recruitmentChannelId`는 필수 Discord channel snowflake이며, `entryChannelId`, `resultChannelId`,
+`logChannelId`는 nullable snowflake다. setup 시점에는 Discord catalog가 아직 없을 수 있으므로 catalog 존재
+검증은 하지 않는다. Bot이 같은 Discord guild의 게시 가능한 text/announcement channel인지 먼저 검증한 값만
+전달한다.
 
 ```json
 {
@@ -157,6 +161,10 @@ guild/user/member/config/ACTIVE season/counter를 한 transaction에서 생성�
 	"guildName": "MonkeyBot Test Guild",
 	"guildIconHash": null,
 	"operatorRoleId": "300000000000000001",
+	"recruitmentChannelId": "400000000000000010",
+	"entryChannelId": null,
+	"resultChannelId": null,
+	"logChannelId": null,
 	"seasonName": "시즌 1"
 }
 ```
@@ -508,10 +516,19 @@ actionable row의 `href`는 `OPEN`이면 `/g/{guildId}/recruitments/{id}`로, `C
 일반 모집 생성. Discord `/내전모집`과 `/g/{guildId}/series`의 내전 모집 버튼이 같은 command를 쓴다.
 
 Bot request는 service principal, Discord interaction `Idempotency-Key`, actor snapshot을 사용한다.
-Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`, 빈 `{}` body를 사용하며 actor를
-지정할 수 없다. 둘 다 ACTIVE guild member면 생성할 수 있다. Bot은 생성 전에 actor user/member/role
-snapshot을 동기화하고, backend는 ACTIVE season과 guild counter를 잠근 뒤 OPEN 모집과 빈 entry draft를
-함께 만든다.
+Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`를 사용하며 actor를 지정할 수 없다.
+두 경로 모두 다음 규칙을 같은 create command에 전달한다.
+
+```json
+{ "bestOf": 3, "hardFearless": false }
+```
+
+`bestOf`는 `1 | 3 | 5`, `hardFearless`는 boolean이다. Web과 최신 Bot은 항상 명시적으로 보내며,
+호환 목적의 누락값만 server가 `BO3`, `false`로 해석한다. 둘 다 ACTIVE guild member면 생성할 수 있다.
+`bestOf`가 이 범위를 벗어나면 server는 `422 invalid_recruitment_best_of`와
+`details { field: "bestOf", allowedValues: [1,3,5], receivedValue }`를 반환한다.
+Bot은 생성 전에 actor user/member/role snapshot을 동기화하고, backend는 ACTIVE season과 guild counter를
+잠근 뒤 규칙을 가진 OPEN 모집과 빈 entry draft를 함께 만든다.
 
 Browser 생성에는 `guild_config.recruitment_channel_id`가 반드시 설정되어 있어야 한다. 같은 transaction에
 그 채널을 대상으로 하는 `bot_notification_outbox`의 `RECRUITMENT_MESSAGE_CREATE` row도 적재한다.
@@ -539,7 +556,9 @@ reference를 연결한다.
 		"displayName": "MSM Longcat",
 		"avatarHash": null,
 		"roleIds": ["300000000000000001"]
-	}
+	},
+	"bestOf": 3,
+	"hardFearless": false
 }
 ```
 
@@ -560,7 +579,7 @@ transaction 밖에서 먼저 완료하고 이 command를 호출한다. 이 route
 
 ```text
 recruitment
-  id, displayNumber, title, status, targetCount, revision
+  id, displayNumber, title, status, targetCount, bestOf, hardFearless, revision
 participants[]
 links
   entry
@@ -590,7 +609,8 @@ ACTIVE guild member의 session read다. 아래 `EntryDraftSnapshot`을 반환한
 
 ```text
 recruitment
-  id, displayNumber, title, status OPEN|CLOSED, targetCount 10, revision, updatedAt
+  id, displayNumber, title, status OPEN|CLOSED, targetCount 10, bestOf 1|3|5,
+  hardFearless boolean, revision, updatedAt
 draft
   revision, updatedAt, updatedBy { id, displayName } | null
   participants[]
@@ -714,8 +734,17 @@ source recruitment를 먼저 잠근 뒤 entry draft를 잠그고, source가 `CLO
 
 성공 transaction은 source recruitment의 season에서 각 배정 lane의 MMR row를 잠근다. 아직 MMR row가
 없으면 1500으로 초기화한 후 `series_participants`에 모두 `CAPTURED` snapshot으로 고정한다. 이어서
-별도 series ID의 `IN_PROGRESS` `bestOf=3` series를 만들고, source recruitment를 `CONVERTED`로 전이하며,
-recruitment revision, audit, idempotency response, realtime outbox를 함께 확정한다. 응답은 `201 Created`다.
+source recruitment의 `best_of`, `hard_fearless`를 복사한 별도 series ID의 `IN_PROGRESS` series를 만들고,
+source recruitment를 `CONVERTED`로 전이하며, recruitment revision, audit, idempotency response, realtime
+outbox를 함께 확정한다. 이미 bound Discord 모집 메시지가 있으면 같은 transaction에
+`RECRUITMENT_MESSAGE_UPDATE`를 적재하여 `시리즈 진행 중` 상태로 바꾼다.
+
+`guild_config.entry_channel_id`가 설정되어 있으면 같은 transaction에 `ENTRY_CONFIRMATION_CREATE`도
+적재한다. payload는 immutable series rule, 확정된 `TEAM_1|TEAM_2` roster와 lane, 그리고 pick-ban deep
+link를 고정한다. Bot relay는 이 immutable snapshot을 SVG 기반 PNG 엔트리 카드로 렌더링해 entry channel에
+게시한 뒤 generic acknowledgement를 보내며, Discord delivery 실패는 retry/terminal failure로만 기록하고
+series 생성 성공을 rollback하지 않는다.
+entry channel이 `NULL`이면 이 notification만 생략하고 series 생성은 정상적으로 `201 Created`를 반환한다.
 
 ```json
 {
@@ -732,9 +761,9 @@ recruitment revision, audit, idempotency response, realtime outbox를 함께 확
 동일 `Idempotency-Key`와 body는 같은 `201` 결과를 replay한다. stale recruitment revision은
 `409 recruitment_revision_conflict`, source가 더 이상 `CLOSED`가 아닌 경우는
 `409 series_source_not_ready`, 10인 편성이 완성되지 않은 경우는
-`422 entry_draft_incomplete`(joined/assigned/target count detail 포함)로 반환한다. format control은 아직
-frontend에 없으므로 신규 series의 `bestOf`는 서버가 3으로 기록한다. DB와 read DTO는 legacy/향후
-1/3/5를 보존한다.
+`422 entry_draft_incomplete`(joined/assigned/target count detail 포함)로 반환한다. 이 endpoint는 format
+값을 받거나 수정하지 않는다. 모집 생성 시 확정한 규칙을 복사하므로 Bot과 Web 모집이 같은 series
+규칙을 보장한다.
 
 ### GET /api/guilds/{guildId}/series
 
@@ -750,22 +779,22 @@ active row는 다음 작업 URL을, completed row는 score/outcome/nullable winn
 
 ### GET /api/guilds/{guildId}/series/{id}
 
-현재 `IN_PROGRESS` 일반 series의 첫 pick-ban read slice다. Discord OAuth session의 active guild
+현재 `IN_PROGRESS` 일반 series의 pick-ban workspace read다. Discord OAuth session의 active guild
 member만 읽을 수 있다. 응답은 immutable `series_participants` roster(MMR snapshot, tier, 선호 챔피언),
-현재 set의 draft, lifecycle capability를 반환한다. `expectedRevision`에 쓰는 값은 `series.revision`이다.
+현재 set의 draft, 이미 확정된 set 요약, lifecycle capability를 반환한다. `expectedRevision`에 쓰는 값은
+`series.revision`이다.
 
 ```text
-data.series: id/displayNumber/title/bestOf/status/revision/sourceRecruitmentId/updatedAt
+data.series: id/displayNumber/title/bestOf/hardFearless/status/revision/sourceRecruitmentId/updatedAt
 data.teams: TEAM_1|TEAM_2 각각 TOP/JUNGLE/MID/BOTTOM/SUPPORT 5명
 data.currentGame: setNumber/sidePreset/winner/picks(10명 모두)/bans(BLUE·RED 각 5칸)/patchVersion
-data.games: []
-data.capabilities: canRevert/canDelete
+data.games: 확정된 set 순서의 sidePreset/winner/picks/bans/patchVersion
+data.capabilities: canEdit/canSubmit/canEarlyComplete/canRevertLastGame/canRevert/canDelete
 ```
 
-첫 slice는 완료 game ledger를 중복 전송하지 않는다. `games`는 항상 빈 배열이고, 확정 game 수는 다음
-`currentGame.setNumber`과 lifecycle capability 계산에만 쓴다. game result/ledger endpoint가 구현되기 전에는
-frontend가 이를 임의의 전적이나 목업으로 채우지 않는다. Custom match submit에는 duration 입력이 없으므로
-값을 추측하거나 문자열로 합성하지 않는다.
+`currentGame`은 다음 미확정 set이며 `games`는 결과 ledger의 축약본이다. `canEdit`, `canSubmit`,
+`canRevertLastGame`, `canRevert`, `canDelete`는 모두 current active operator에게만 true다. Custom match
+submit에는 duration 입력이 없으므로 값은 추측하거나 문자열로 합성하지 않는다.
 
 ### PATCH /api/guilds/{guildId}/series/{id}/pickban
 
@@ -777,10 +806,47 @@ SET_PICK
 CLEAR_PICK
 SET_BAN
 CLEAR_BAN
+APPLY_BULK
 ```
 
-특정 game/player/side/index만 수정한다. Hard Fearless를 MVP server invariant로
-강제하지 않는다.
+Browser session, CSRF, current active operator 권한과 아래 body가 필요하다. Idempotency-Key는 필요하지
+않으며 각 cell action은 `series.revision`을 정확히 하나 올리고 updated actor/time, audit, series realtime
+outbox를 같은 transaction에 기록한다.
+
+```json
+{
+	"expectedRevision": 12,
+	"operation": { "type": "SET_PICK", "playerId": "100000000000000001", "championId": "Ahri" }
+}
+```
+
+`SET_SIDE(sidePreset=DEFAULT|SWAPPED)`, `SET_PICK`, `CLEAR_PICK`,
+`SET_BAN(side=BLUE|RED, slot=1..5)`, `CLEAR_BAN`을 허용한다. `hardFearless`는 이 endpoint에서
+수정할 수 없다. 모집 생성 시 확정된 series 규칙 snapshot을 읽기와 validation에만 사용한다.
+
+`APPLY_BULK`는 일괄 입력 전용이며 `items`에 최대 20개의 semantic `SET_PICK` 또는 `SET_BAN`만 담는다.
+중첩 operation과 clear는 허용하지 않고, 동일 player pick 또는 동일 ban slot을 한 요청 안에서 두 번
+지정할 수 없다. 모든 item은 최종 draft에 원자적으로 반영된 후 한 번만 validation/revision/outbox를
+실행한다.
+
+```json
+{
+	"expectedRevision": 12,
+	"operation": {
+		"type": "APPLY_BULK",
+		"items": [
+			{ "type": "SET_PICK", "playerId": "100000000000000001", "championId": "Ahri" },
+			{ "type": "SET_BAN", "side": "BLUE", "slot": 1, "championId": "Yone" }
+		]
+	}
+}
+```
+
+Pick user는 frozen 10인 roster에 있어야 하며 champion ID는 1..64 ASCII 영숫자다. 같은 set에서 pick과
+ban을 합쳐 챔피언이 중복되면 `422 duplicate_series_game_champion`을 반환한다. `hardFearless=true`이면
+이전 confirmed set에서 픽된 챔피언을 후속 set에서 다시 픽할 수 없고, `422 hard_fearless_champion_used`를
+반환한다. 이전 ban은 Hard Fearless 대상이 아니다. 이 validation은 draft cell, bulk, game submit 모두에서
+server-side로 다시 수행한다.
 
 ### POST /api/guilds/{guildId}/series/{id}/games
 
@@ -795,20 +861,79 @@ picks
 bans
 ```
 
-winner는 필수, picks/bans는 optional이다. game/MMR/score/completion/checkpoint/
-audit/outbox가 한 transaction이다.
+Browser session, CSRF, UUID browser `Idempotency-Key`, active operator 권한이 필요하다. `winner`는 필수,
+`picks`/`bans`/`patchVersion`은 optional이다. 제공된 `picks`는 frozen 10명 전체 key를 포함해야 하고,
+`bans`는 BLUE/RED 각각 정확히 5칸이어야 한다. current next set만 확정할 수 있다.
+
+game, participant/bans, ELO MMR ledger, series score/completion, series revision, audit, idempotency response,
+realtime outbox는 하나의 transaction이다. 성공은 `201`이며 다음을 반환한다.
+
+```text
+series: id/status(IN_PROGRESS|COMPLETED)/revision
+confirmedGameCount
+nextHref: active이면 /pick-ban, 완료면 /result
+```
+
+score가 series 형식의 필요 승수에 도달해 `COMPLETED/SCORE_REACHED`로 전이할 때만, configured
+`guild_config.result_channel_id`에 `SERIES_RESULT_CREATE` Discord notification도 같은 transaction에 적재한다.
+진행 중 set 확정에는 결과 카드를 만들지 않는다. Discord delivery는 outbox worker의 재시도 대상이며 game 확정
+응답을 기다리거나 rollback하지 않는다. result channel이 `NULL`이면 시리즈 결과는 정상 확정하고 notification만
+생략한다. `entry_channel_id`는 결과 notification fallback이 아니다.
+
+새 결과 notification은 `schemaVersion: 2`다. immutable snapshot은 series metadata/score/terminal reason,
+고정된 1팀·2팀 lane roster, confirmed set마다 `winner`, `sidePreset`, 두 팀의 lane-ordered pick과
+`bans.blue`/`bans.red` 5칸, `patchVersion`, result deep link를 포함한다. MMR 및 MMR delta는 Discord 결과
+카드 contract에 넣지 않는다. 이미 outbox에 남은 `schemaVersion: 1` compact payload는 재작성하거나 replay하지
+않으며, Bot이 legacy renderer로 delivery한다. 새 backend emitter만 v2를 생성한다.
 
 ### DELETE /api/guilds/{guildId}/series/{id}/games/last
 
-Idempotency-Key와 expectedRevision이 필요하다. game void, MMR reversal,
-score/status 복구를 한 transaction에서 수행한다.
+Browser session, CSRF, UUID browser `Idempotency-Key`, active operator 권한과 `{ "expectedRevision": n }`이
+필요하다. `IN_PROGRESS|COMPLETED`의 마지막 confirmed game만 void하고 MMR reversal, score/status 복구,
+series revision, audit/outbox를 한 transaction에서 수행한다. 성공은 `200`이며 POST game과 같은
+`series/confirmedGameCount/nextHref` response를 반환한다. 이후 manual MMR 변경 또는 아직 되돌리지 않은
+후속 game 결과가 있으면 `409 series_game_reversal_not_safe`로 거절한다.
+
+### GET /api/guilds/{guildId}/series/{id}/result
+
+완료된 일반 series의 immutable result ledger다. active guild member가 읽을 수 있고 `COMPLETED`가 아니면
+`409 series_result_unavailable`을 반환한다.
+
+```text
+data.series: id/displayNumber/title/bestOf/status/revision/sourceRecruitmentId/
+             winningTeam/terminalReason/startedAt/endedAt
+data.teams: frozen TEAM_1|TEAM_2 roster
+data.games: setNumber/sidePreset/winner/picks/bans/patchVersion/durationSeconds/mmrChanges
+data.score: team1/team2
+data.capabilities: canRevertLastGame/canDelete (operator only)
+```
+
+result read에는 WebSocket을 사용하지 않는다. result에서 마지막 game을 되돌리면 series가 `IN_PROGRESS`로
+복귀하므로 이후 GET result는 `series_result_unavailable`을 반환하고 client는 `/pick-ban`으로 이동한다.
 
 ### POST /api/guilds/{guildId}/series/{id}/complete
 
-Bot operator 조기 종료 command다. `outcome=TEAM_1|TEAM_2|DRAW|CANCEL`, expectedRevision, reason을
-받는다. DRAW는 현재 game score가 동률일 때만 `COMPLETED/EARLY_DRAW`로, TEAM 결과는
-`COMPLETED/EARLY_WIN`으로, CANCEL은 `CANCELLED`로 전이한다. 기존 game/MMR은 보존하고 audit와
-revision을 같은 transaction에서 기록한다.
+현재 진행 중인 일반 내전을 브라우저에서 조기 종료하는 lifecycle command다. Browser session, CSRF,
+UUID `Idempotency-Key`, active operator 권한과 아래 body가 필요하다.
+
+```json
+{ "expectedRevision": 4, "outcome": "TEAM_1" }
+```
+
+`outcome`은 `TEAM_1 | TEAM_2 | DRAW`만 허용한다. 아직 결착이 나지 않은 `IN_PROGRESS` BO3/BO5에서
+확정 game이 하나 이상 있을 때만 실행할 수 있다. `DRAW`는 현재 확정 스코어가 동률일 때만
+`COMPLETED/EARLY_DRAW`로 전이하고, 팀 결과는 `COMPLETED/EARLY_WIN`으로 전이한다. 현재 입력 중인
+`DRAFT` 픽밴은 결과에 포함하거나 void하지 않으며, 이후 마지막 확정 game을 되돌려 `IN_PROGRESS`로
+복귀할 때 다시 사용할 수 있도록 보존한다.
+
+기존 confirmed game과 해당 MMR ledger는 그대로 유지한다. revision, audit
+`SERIES_EARLY_COMPLETED`, series realtime outbox, idempotency response는 하나의 transaction에서 기록한다.
+`result_channel_id`가 설정되어 있으면 같은 transaction에 `SERIES_RESULT_CREATE` 결과 카드 notification도
+적재한다.
+성공은 `200`이고 game confirm과 같은 `series/confirmedGameCount/nextHref`를 반환하며 `nextHref`는
+`/result`다. BO1 또는 확정 game이 없으면 `409 series_early_completion_unavailable`, 동률이 아닌
+`DRAW`이면 `409 early_draw_requires_tied_score`를 safe details와 함께 반환한다. 취소는 이 endpoint의
+outcome이 아니며 기존 `POST .../revert` 또는 `DELETE` lifecycle을 사용한다.
 
 ### POST /api/guilds/{guildId}/series/{id}/revert
 
@@ -819,31 +944,32 @@ revision을 같은 transaction에서 기록한다.
 { "expectedRevision": 0 }
 ```
 
-source recruitment -> series 순서로 lock하고, series가 `IN_PROGRESS`, source가 `CONVERTED`, `revision`이
-일치하며 확정 game이 0개인지 한 transaction에서 다시 검증한다. 성공하면 series는 retained history로
-`CANCELLED`/`terminal_reason=CANCELLED`가 되고 source recruitment는 `CLOSED`로 복구한다. audit와 두
-aggregate의 realtime outbox도 같은 transaction에 기록한다.
+source recruitment -> series 순서로 lock하고, series가 `IN_PROGRESS|COMPLETED`, source가 `CONVERTED`,
+`revision`이 일치하는지 한 transaction에서 다시 검증한다. confirmed game이 있으면 마지막 set부터 역순으로
+`VOIDED`/MMR reversal을 수행한 뒤 series를 retained history의 `CANCELLED`/`terminal_reason=CANCELLED`로
+전이하고 source recruitment를 `CLOSED`로 복구한다. 어느 game의 reversal도 안전하지 않으면 전체 transaction을
+rollback하고 `409 series_game_reversal_not_safe`를 반환한다. audit와 두 aggregate의 realtime outbox도 같은
+transaction에 기록한다.
 
 ```json
 {
-  "data": { "nextHref": "/g/{guildId}/recruitments/{sourceRecruitmentId}/entry" },
-  "meta": { "requestId": "01900000-0000-7000-8000-000000000003" }
+	"data": { "nextHref": "/g/{guildId}/recruitments/{sourceRecruitmentId}/entry" },
+	"meta": { "requestId": "01900000-0000-7000-8000-000000000003" }
 }
 ```
 
-확정 game이 하나라도 있으면 `409 series_has_confirmed_games`로 거절한다. stale series revision은
-`409 series_revision_conflict`다. 동일 key/body는 같은 성공 응답을 replay한다.
+stale series revision은 `409 series_revision_conflict`다. 동일 key/body는 같은 성공 응답을 replay한다.
 
 ### DELETE /api/guilds/{guildId}/series/{id}
 
-물리 삭제가 아니라 첫 series lifecycle 취소 command다. request/권한/lock/revision/confirmed-game guard는
+물리 삭제가 아니라 series lifecycle 취소 command다. request/권한/lock/revision/confirmed-game reversal은
 `POST .../revert`와 동일하다. 성공하면 series는 `CANCELLED` history로 남고 source recruitment는 다시
 모집으로 열리지 않도록 `CANCELLED`로 전이한다.
 
 ```json
 {
-  "data": { "nextHref": "/g/{guildId}/series" },
-  "meta": { "requestId": "01900000-0000-7000-8000-000000000003" }
+	"data": { "nextHref": "/g/{guildId}/series" },
+	"meta": { "requestId": "01900000-0000-7000-8000-000000000003" }
 }
 ```
 
@@ -1529,6 +1655,7 @@ settings
   operatorRoleId
   recruitmentChannelId | null
   entryChannelId | null
+  resultChannelId | null
   logChannelId | null
   isExternallyPublic
 roles[]
@@ -1551,18 +1678,23 @@ Bot이 동기화한 게시 가능한 channel을 position, 이름, ID로 정렬�
 ```text
 displayName            trim 후 1..100자
 operatorRoleId         Discord role snowflake
-recruitmentChannelId   Discord channel snowflake | null
+recruitmentChannelId   required Discord channel snowflake
 entryChannelId         Discord channel snowflake | null
+resultChannelId        Discord channel snowflake | null
 logChannelId           Discord channel snowflake | null
 isExternallyPublic     boolean
 expectedRevision       guild_config.revision, 0 이상
 ```
 
-Session cookie, CSRF cookie/header와 Origin 검증이 필요하며 request는 위 일곱 field만 허용한다. 현재
+Session cookie, CSRF cookie/header와 Origin 검증이 필요하며 request는 위 여덟 field만 허용한다. 현재
 `guild_config` row를 lock하고 변경 전 `operatorRoleId`와 동기화된 member role로 actor를 검증한 뒤
 revision을 비교한다. 변경된 운영자 role은 non-managed catalog role이어야 하고, 변경된 non-null channel은
 catalog에 있어야 한다. Catalog 교체로 사라진 기존 ID를 그대로 유지하는 rename/public-only update는
-허용하지만 새 누락 ID 선택은 `422 invalid_settings_selection`으로 거부한다.
+허용하지만 새 누락 ID 선택은 `422 invalid_settings_selection`으로 거부한다. `resultChannelId=null`이면
+결과 notification을 생략한다. `entryChannelId`는 fallback으로 사용하지 않는다.
+`recruitmentChannelId=null`은 `422 recruitment_channel_required`와 `field=recruitmentChannelId`로 거부한다.
+GET에는 migration 이전 legacy `recruitmentChannelId=null`이 남아 있을 수 있으며, 운영자는 유효한 채널을
+선택해 저장하여 복구한다.
 
 성공 transaction은 `guild_config.revision`을 1 올리고 `updated_by/updated_at`과
 `GUILD_SETTINGS_UPDATED`/`GUILD_CONFIG` audit before/after summary를 기록한다. 응답은 GET과 동일한 최신
@@ -1752,8 +1884,8 @@ Bot service principal만 사용한다. request는 `{ "instanceId": "bot-1", "lim
 
 request는 `{ "instanceId", "notificationId", "leaseToken", "discordMessageId" }`다. owner+token이
 현재 lease와 일치할 때만 generic notification을 delivered로 전이한다. `RECRUITMENT_MESSAGE_UPDATE`와
-`RECRUITMENT_MESSAGE_DELETE`는 Discord edit/delete 성공 뒤 이 route를 사용한다. Browser-created
-`RECRUITMENT_MESSAGE_CREATE`에는 이 route를 사용하지 않으며 호출하면 `422
+`RECRUITMENT_MESSAGE_DELETE`, `ENTRY_CONFIRMATION_CREATE`는 Discord delivery 성공 뒤 이 route를 사용한다.
+Browser-created `RECRUITMENT_MESSAGE_CREATE`에는 이 route를 사용하지 않으며 호출하면 `422
 recruitment_message_create_requires_typed_ack`로 거절한다.
 
 ### POST /internal/notifications/recruitment-message/ack

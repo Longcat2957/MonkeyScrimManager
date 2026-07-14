@@ -15,6 +15,7 @@
 	const activeSection = $derived(
 		getActiveSection(page.url.pathname, page.url.searchParams.get('tab'))
 	);
+	const usesPanelScrollArea = $derived(activeSection === 'members' || activeSection === 'logs');
 	const tabs = $derived([
 		{
 			value: 'members' as const,
@@ -57,35 +58,45 @@
 	<title>{guild.displayName} 관리 | MonkeyBot</title>
 </svelte:head>
 
-<div class="space-y-4">
-	<WorkspaceHeader
-		kicker="길드 관리"
-		title={guild.displayName}
-		description={`${guild.memberCount}명 · ${guild.currentUserRole === 'OPERATOR' ? '운영자' : '참가자'}`}
-	>
-		{#snippet actions()}
-			<nav
-				class="grid w-full max-w-full grid-cols-4 border border-[var(--color-app-border)] bg-[var(--color-app-control)] p-1 sm:flex sm:w-auto"
-				aria-label="길드 관리 메뉴"
-			>
-				{#each tabs as tab (tab.value)}
-					<a
-						href={tab.href}
-						aria-current={activeSection === tab.value ? 'page' : undefined}
-						class={`inline-flex h-8 min-w-0 items-center justify-center gap-1 px-1 text-xs font-semibold sm:shrink-0 sm:gap-1.5 sm:px-3 ${
-							activeSection === tab.value
-								? 'rounded-sm bg-cyan-400/12 text-cyan-100'
-								: 'text-slate-500 hover:text-slate-200'
-						}`}
-					>
-						<tab.icon size={14} aria-hidden="true" />
-						<span class="sm:hidden">{tab.shortLabel}</span>
-						<span class="hidden sm:inline">{tab.label}</span>
-					</a>
-				{/each}
-			</nav>
-		{/snippet}
-	</WorkspaceHeader>
+<div class="flex min-h-0 flex-1 flex-col gap-4">
+	<div class="shrink-0">
+		<WorkspaceHeader
+			kicker="길드 관리"
+			title={guild.displayName}
+			description={`${guild.memberCount}명 · ${guild.currentUserRole === 'OPERATOR' ? '운영자' : '참가자'}`}
+		>
+			{#snippet actions()}
+				<nav
+					class="grid w-full max-w-full grid-cols-4 border border-[var(--color-app-border)] bg-[var(--color-app-control)] p-1 sm:flex sm:w-auto"
+					aria-label="길드 관리 메뉴"
+				>
+					{#each tabs as tab (tab.value)}
+						<a
+							href={tab.href}
+							aria-current={activeSection === tab.value ? 'page' : undefined}
+							class={`inline-flex h-8 min-w-0 items-center justify-center gap-1 px-1 text-xs font-semibold sm:shrink-0 sm:gap-1.5 sm:px-3 ${
+								activeSection === tab.value
+									? 'rounded-sm bg-cyan-400/12 text-cyan-100'
+									: 'text-slate-500 hover:text-slate-200'
+							}`}
+						>
+							<tab.icon size={14} aria-hidden="true" />
+							<span class="sm:hidden">{tab.shortLabel}</span>
+							<span class="hidden sm:inline">{tab.label}</span>
+						</a>
+					{/each}
+				</nav>
+			{/snippet}
+		</WorkspaceHeader>
+	</div>
 
-	{@render children()}
+	<div
+		class={`min-h-0 flex-1 ${
+			usesPanelScrollArea
+				? 'flex flex-col overflow-hidden'
+				: 'overflow-y-auto overscroll-contain pr-px'
+		}`}
+	>
+		{@render children()}
+	</div>
 </div>

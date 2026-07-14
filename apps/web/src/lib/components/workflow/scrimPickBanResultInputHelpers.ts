@@ -1,8 +1,55 @@
-import type { ScrimPickBanResultInputChampion } from '$lib/fixtures/scrimPickBanResultInputFixtures';
+import type {
+	ScrimPickBanResultInputChampion,
+	ScrimPickBanResultInputSide,
+	ScrimPickBanResultInputTeam
+} from '$lib/fixtures/scrimPickBanResultInputFixtures';
 
 export interface ScrimPickBanResultInputActiveCell {
 	kind: 'BAN' | 'PICK';
 	key: string;
+}
+
+const pickBanSides: ScrimPickBanResultInputSide[] = ['BLUE', 'RED'];
+
+export function scrimPickBanResultInputBanKey(
+	side: ScrimPickBanResultInputSide,
+	index: number
+): string {
+	return `${side}-ban-${index}`;
+}
+
+export function scrimPickBanResultInputCellOrder(
+	teams: Record<ScrimPickBanResultInputSide, ScrimPickBanResultInputTeam>,
+	bans: Record<ScrimPickBanResultInputSide, Array<string | null>>
+): ScrimPickBanResultInputActiveCell[] {
+	return [
+		...pickBanSides.flatMap((side) =>
+			bans[side].map((_, index) => ({
+				kind: 'BAN' as const,
+				key: scrimPickBanResultInputBanKey(side, index)
+			}))
+		),
+		...pickBanSides.flatMap((side) =>
+			teams[side].players.map((player) => ({ kind: 'PICK' as const, key: player.id }))
+		)
+	];
+}
+
+export function adjacentScrimPickBanResultInputCell(
+	cells: ScrimPickBanResultInputActiveCell[],
+	current: ScrimPickBanResultInputActiveCell,
+	direction: -1 | 1
+): ScrimPickBanResultInputActiveCell | null {
+	if (cells.length === 0) return null;
+	const currentIndex = cells.findIndex(
+		(cell) => cell.kind === current.kind && cell.key === current.key
+	);
+	if (currentIndex < 0) return cells[direction === 1 ? 0 : cells.length - 1] ?? null;
+	return cells[(currentIndex + direction + cells.length) % cells.length] ?? null;
+}
+
+export function scrimPickBanResultInputCellId(cell: ScrimPickBanResultInputActiveCell): string {
+	return `scrim-pickban-${cell.kind.toLowerCase()}-${cell.key}`;
 }
 
 export function findScrimPickBanResultInputChampionById(

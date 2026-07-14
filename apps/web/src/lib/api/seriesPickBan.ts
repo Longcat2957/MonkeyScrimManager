@@ -1,17 +1,43 @@
 import {
+	seriesGameMutationResultSchema,
+	seriesEarlyCompletionOutcomeSchema,
+	seriesPickBanDraftOperationSchema,
+	seriesPickBanSidePresetSchema,
+	seriesPickBanSideSchema,
 	seriesPickBanSnapshotSchema,
+	type SeriesGameMutationResult,
+	type SeriesEarlyCompletionOutcome,
+	type SeriesPickBanDraftOperation,
 	type SeriesPickBanSnapshot
 } from '$lib/contracts/seriesPickBan';
-import { apiErrorEnvelopeSchema, responseMetaSchema } from '$lib/contracts/workflow';
+import { apiErrorEnvelopeSchema, responseMetaSchema, userIdSchema } from '$lib/contracts/workflow';
 import { apiRoute } from '$lib/routing';
 import { z } from 'zod';
 
 const idempotencyKeySchema = z.uuid();
 const seriesIdSchema = z.uuid();
 const revisionSchema = z.number().int().nonnegative();
+const setNumberSchema = z.number().int().min(1).max(5);
+const championIdSchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.regex(/^[A-Za-z0-9]+$/);
+const patchVersionSchema = z.string().min(1).max(32).nullable();
+const picksSchema = z.record(userIdSchema, championIdSchema.nullable());
+const bansSchema = z
+	.object({
+		BLUE: z.array(championIdSchema.nullable()).length(5),
+		RED: z.array(championIdSchema.nullable()).length(5)
+	})
+	.strict();
 const seriesPickBanEnvelopeSchema = z
 	.object({ data: seriesPickBanSnapshotSchema, meta: responseMetaSchema })
 	.strict();
+const gameMutationEnvelopeSchema = z
+	.object({ data: seriesGameMutationResultSchema, meta: responseMetaSchema })
+	.strict();
+const responseMetaEnvelopeSchema = z.object({ meta: responseMetaSchema }).passthrough();
 const lifecycleResponseEnvelopeSchema = z
 	.object({
 		data: z.object({ nextHref: z.string().startsWith('/g/') }).strict(),
@@ -19,7 +45,8 @@ const lifecycleResponseEnvelopeSchema = z
 	})
 	.strict();
 
-type SeriesPickBanAction = 'load' | 'revert' | 'delete';
+type SeriesPickBanAction =
+	'load' | 'draft' | 'submit_game' | 'early_complete' | 'revert_last_game' | 'revert' | 'delete';
 
 export class SeriesPickBanApiError extends Error {
 	constructor(
@@ -33,6 +60,14 @@ export class SeriesPickBanApiError extends Error {
 	}
 }
 
+export function isSeriesPickBanRevisionConflict(cause: unknown): cause is SeriesPickBanApiError {
+	return (
+		cause instanceof SeriesPickBanApiError &&
+		cause.status === 409 &&
+		cause.code === 'series_revision_conflict'
+	);
+}
+
 function readCsrfToken(): string | null {
 	const prefix = 'monkeybot_csrf=';
 	const value = (globalThis.document?.cookie ?? '')
@@ -42,7 +77,7 @@ function readCsrfToken(): string | null {
 	return value ? decodeURIComponent(value.slice(prefix.length)) : null;
 }
 
-function mutationHeaders(idempotencyKey: string): Record<string, string> {
+function csrfMutationHeaders(): Record<string, string> {
 	const token = readCsrfToken();
 	if (!token) {
 		throw new SeriesPickBanApiError(
@@ -52,6 +87,14 @@ function mutationHeaders(idempotencyKey: string): Record<string, string> {
 			null
 		);
 	}
+	return {
+		accept: 'application/json',
+		'content-type': 'application/json',
+		'X-CSRF-Token': token
+	};
+}
+
+function idempotentMutationHeaders(idempotencyKey: string): Record<string, string> {
 	if (!idempotencyKeySchema.safeParse(idempotencyKey).success) {
 		throw new SeriesPickBanApiError(
 			'요청 식별자가 올바르지 않습니다.',
@@ -60,16 +103,15 @@ function mutationHeaders(idempotencyKey: string): Record<string, string> {
 			null
 		);
 	}
-	return {
-		accept: 'application/json',
-		'content-type': 'application/json',
-		'X-CSRF-Token': token,
-		'Idempotency-Key': idempotencyKey
-	};
+	return { ...csrfMutationHeaders(), 'Idempotency-Key': idempotencyKey };
 }
 
 function actionLabel(action: SeriesPickBanAction): string {
 	if (action === 'load') return '시리즈 정보 조회';
+	if (action === 'draft') return '픽밴 변경';
+	if (action === 'submit_game') return '게임 결과 기록';
+	if (action === 'early_complete') return '시리즈 조기 종료';
+	if (action === 'revert_last_game') return '마지막 게임 결과 되돌리기';
 	if (action === 'revert') return '시리즈 되돌리기';
 	return '시리즈 삭제';
 }
@@ -87,6 +129,11 @@ function fallbackErrorMessage(status: number, action: SeriesPickBanAction): stri
 
 async function responsePayload(response: Response): Promise<unknown> {
 	return await response.json().catch(() => null);
+}
+
+function responseRequestId(payload: unknown): string | null {
+	const parsed = responseMetaEnvelopeSchema.safeParse(payload);
+	return parsed.success ? parsed.data.meta.requestId : null;
 }
 
 function responseError(
@@ -140,11 +187,8 @@ function assertSeriesId(seriesId: string): void {
 	}
 }
 
-function assertLifecycleCommand(command: {
-	expectedRevision: number;
-	idempotencyKey: string;
-}): void {
-	if (!revisionSchema.safeParse(command.expectedRevision).success) {
+function assertRevision(expectedRevision: number): void {
+	if (!revisionSchema.safeParse(expectedRevision).success) {
 		throw new SeriesPickBanApiError(
 			'시리즈 버전 정보가 올바르지 않습니다.',
 			0,
@@ -152,6 +196,40 @@ function assertLifecycleCommand(command: {
 			null
 		);
 	}
+}
+
+function parseSnapshot(
+	response: Response,
+	payload: unknown,
+	action: SeriesPickBanAction
+): SeriesPickBanSnapshot {
+	const parsed = seriesPickBanEnvelopeSchema.safeParse(payload);
+	if (!parsed.success) {
+		throw new SeriesPickBanApiError(
+			`${actionLabel(action)} 응답 형식이 올바르지 않습니다.`,
+			response.status,
+			'invalid_response',
+			responseRequestId(payload)
+		);
+	}
+	return parsed.data.data;
+}
+
+function parseGameMutation(
+	response: Response,
+	payload: unknown,
+	action: Extract<SeriesPickBanAction, 'submit_game' | 'early_complete' | 'revert_last_game'>
+): SeriesGameMutationResult {
+	const parsed = gameMutationEnvelopeSchema.safeParse(payload);
+	if (!parsed.success) {
+		throw new SeriesPickBanApiError(
+			`${actionLabel(action)} 응답 형식이 올바르지 않습니다.`,
+			response.status,
+			'invalid_response',
+			responseRequestId(payload)
+		);
+	}
+	return parsed.data.data;
 }
 
 export async function fetchSeriesPickBan(
@@ -164,16 +242,165 @@ export async function fetchSeriesPickBan(
 		{ headers: { accept: 'application/json' } },
 		'load'
 	);
-	const parsed = seriesPickBanEnvelopeSchema.safeParse(payload);
-	if (!parsed.success) {
+	return parseSnapshot(response, payload, 'load');
+}
+
+export async function updateSeriesPickBanDraft(
+	guildId: string,
+	seriesId: string,
+	command: { expectedRevision: number; operation: SeriesPickBanDraftOperation }
+): Promise<SeriesPickBanSnapshot> {
+	assertSeriesId(seriesId);
+	assertRevision(command.expectedRevision);
+	if (!seriesPickBanDraftOperationSchema.safeParse(command.operation).success) {
 		throw new SeriesPickBanApiError(
-			'픽밴 시리즈 응답 형식이 올바르지 않습니다.',
-			response.status,
-			'invalid_response',
+			'픽밴 변경 값이 올바르지 않습니다.',
+			0,
+			'invalid_pickban',
 			null
 		);
 	}
-	return parsed.data.data;
+
+	const { response, payload } = await request(
+		apiRoute(['guilds', guildId, 'series', seriesId, 'pickban']),
+		{
+			method: 'PATCH',
+			headers: csrfMutationHeaders(),
+			body: JSON.stringify({
+				expectedRevision: command.expectedRevision,
+				operation: command.operation
+			})
+		},
+		'draft'
+	);
+	return parseSnapshot(response, payload, 'draft');
+}
+
+export async function submitSeriesPickBanGame(
+	guildId: string,
+	seriesId: string,
+	command: {
+		setNumber: number;
+		expectedRevision: number;
+		sidePreset: 'DEFAULT' | 'SWAPPED';
+		winner: 'BLUE' | 'RED';
+		picks?: Record<string, string | null>;
+		bans?: { BLUE: Array<string | null>; RED: Array<string | null> };
+		patchVersion?: string | null;
+		idempotencyKey: string;
+	}
+): Promise<SeriesGameMutationResult> {
+	assertSeriesId(seriesId);
+	assertRevision(command.expectedRevision);
+	if (!setNumberSchema.safeParse(command.setNumber).success) {
+		throw new SeriesPickBanApiError(
+			'세트 번호가 올바르지 않습니다.',
+			0,
+			'invalid_set_number',
+			null
+		);
+	}
+	if (!seriesPickBanSidePresetSchema.safeParse(command.sidePreset).success) {
+		throw new SeriesPickBanApiError(
+			'사이드 정보가 올바르지 않습니다.',
+			0,
+			'invalid_side_preset',
+			null
+		);
+	}
+	if (!seriesPickBanSideSchema.safeParse(command.winner).success) {
+		throw new SeriesPickBanApiError('승리 팀 정보가 올바르지 않습니다.', 0, 'invalid_winner', null);
+	}
+	if (command.picks !== undefined && !picksSchema.safeParse(command.picks).success) {
+		throw new SeriesPickBanApiError('픽 정보가 올바르지 않습니다.', 0, 'invalid_picks', null);
+	}
+	if (command.bans !== undefined && !bansSchema.safeParse(command.bans).success) {
+		throw new SeriesPickBanApiError('밴 정보가 올바르지 않습니다.', 0, 'invalid_bans', null);
+	}
+	if (
+		command.patchVersion !== undefined &&
+		!patchVersionSchema.safeParse(command.patchVersion).success
+	) {
+		throw new SeriesPickBanApiError(
+			'패치 버전 정보가 올바르지 않습니다.',
+			0,
+			'invalid_patch_version',
+			null
+		);
+	}
+
+	const { response, payload } = await request(
+		apiRoute(['guilds', guildId, 'series', seriesId, 'games']),
+		{
+			method: 'POST',
+			headers: idempotentMutationHeaders(command.idempotencyKey),
+			body: JSON.stringify({
+				setNumber: command.setNumber,
+				expectedRevision: command.expectedRevision,
+				sidePreset: command.sidePreset,
+				winner: command.winner,
+				picks: command.picks,
+				bans: command.bans,
+				patchVersion: command.patchVersion
+			})
+		},
+		'submit_game'
+	);
+	return parseGameMutation(response, payload, 'submit_game');
+}
+
+export async function completeSeriesEarly(
+	guildId: string,
+	seriesId: string,
+	command: {
+		expectedRevision: number;
+		outcome: SeriesEarlyCompletionOutcome;
+		idempotencyKey: string;
+	}
+): Promise<SeriesGameMutationResult> {
+	assertSeriesId(seriesId);
+	assertRevision(command.expectedRevision);
+	if (!seriesEarlyCompletionOutcomeSchema.safeParse(command.outcome).success) {
+		throw new SeriesPickBanApiError(
+			'조기 종료 결과가 올바르지 않습니다.',
+			0,
+			'invalid_early_completion_outcome',
+			null
+		);
+	}
+
+	const { response, payload } = await request(
+		apiRoute(['guilds', guildId, 'series', seriesId, 'complete']),
+		{
+			method: 'POST',
+			headers: idempotentMutationHeaders(command.idempotencyKey),
+			body: JSON.stringify({
+				expectedRevision: command.expectedRevision,
+				outcome: command.outcome
+			})
+		},
+		'early_complete'
+	);
+	return parseGameMutation(response, payload, 'early_complete');
+}
+
+export async function revertLastSeriesPickBanGame(
+	guildId: string,
+	seriesId: string,
+	command: { expectedRevision: number; idempotencyKey: string }
+): Promise<SeriesGameMutationResult> {
+	assertSeriesId(seriesId);
+	assertRevision(command.expectedRevision);
+	const { response, payload } = await request(
+		apiRoute(['guilds', guildId, 'series', seriesId, 'games', 'last']),
+		{
+			method: 'DELETE',
+			headers: idempotentMutationHeaders(command.idempotencyKey),
+			body: JSON.stringify({ expectedRevision: command.expectedRevision })
+		},
+		'revert_last_game'
+	);
+	return parseGameMutation(response, payload, 'revert_last_game');
 }
 
 async function lifecycleMutation(
@@ -184,7 +411,7 @@ async function lifecycleMutation(
 	action: Extract<SeriesPickBanAction, 'revert' | 'delete'>
 ): Promise<{ nextHref: string }> {
 	assertSeriesId(seriesId);
-	assertLifecycleCommand(command);
+	assertRevision(command.expectedRevision);
 	const segments =
 		action === 'revert'
 			? ['guilds', guildId, 'series', seriesId, 'revert']
@@ -193,7 +420,7 @@ async function lifecycleMutation(
 		apiRoute(segments),
 		{
 			method,
-			headers: mutationHeaders(command.idempotencyKey),
+			headers: idempotentMutationHeaders(command.idempotencyKey),
 			body: JSON.stringify({ expectedRevision: command.expectedRevision })
 		},
 		action
@@ -204,7 +431,7 @@ async function lifecycleMutation(
 			`${actionLabel(action)} 응답 형식이 올바르지 않습니다.`,
 			response.status,
 			'invalid_response',
-			null
+			responseRequestId(payload)
 		);
 	}
 	return parsed.data.data;

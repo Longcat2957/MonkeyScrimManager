@@ -141,7 +141,11 @@
 	}
 
 	function signed(value: number): string {
-		return `${value > 0 ? '+' : ''}${value}`;
+		return `${value > 0 ? '+' : ''}${formatMmr(value)}`;
+	}
+
+	function formatMmr(value: number): string {
+		return String(Math.round(value));
 	}
 
 	function roleLabel(role: GuildAdminMember['role']): string {
@@ -167,10 +171,10 @@
 </script>
 
 <section
-	class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
+	class="flex h-full min-h-0 flex-col overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
 >
 	<header
-		class="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
+		class="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
 	>
 		<div class="flex min-w-0 items-center gap-3">
 			<UsersRound size={18} class="shrink-0 text-cyan-200" aria-hidden="true" />
@@ -200,7 +204,7 @@
 	</header>
 	{#if errorMessage && !adjustmentOpen}
 		<div
-			class="border-b border-rose-300/15 bg-rose-400/5 px-4 py-2 text-xs text-rose-200"
+			class="shrink-0 border-b border-rose-300/15 bg-rose-400/5 px-4 py-2 text-xs text-rose-200"
 			role="alert"
 		>
 			{errorMessage}
@@ -208,7 +212,7 @@
 	{/if}
 
 	<div
-		class="grid gap-2 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-3 sm:grid-cols-[minmax(0,1fr)_140px_140px]"
+		class="grid shrink-0 gap-2 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-3 sm:grid-cols-[minmax(0,1fr)_140px_140px]"
 	>
 		<label
 			class="flex h-10 min-w-0 items-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3"
@@ -241,7 +245,9 @@
 		</select>
 	</div>
 
-	<div class="divide-y divide-[var(--color-app-border-muted)] lg:hidden">
+	<div
+		class="min-h-0 flex-1 divide-y divide-[var(--color-app-border-muted)] overflow-y-auto overscroll-contain pr-px lg:hidden"
+	>
 		{#each filteredMembers as member (member.id)}
 			<div class={`grid gap-3 p-3 ${member.status === 'INACTIVE' ? 'opacity-55' : ''}`}>
 				<div class="flex min-w-0 items-start justify-between gap-3">
@@ -282,7 +288,7 @@
 						<span class="block text-[9px] font-semibold text-slate-600">주 포지션</span>
 						<strong class="mt-0.5 block truncate text-[11px] text-slate-200">
 							{#if member.mainLane}
-								{laneLabel[member.mainLane]} · {member.laneMmr[member.mainLane]}
+								{laneLabel[member.mainLane]} · {formatMmr(member.laneMmr[member.mainLane])}
 							{:else}
 								미설정
 							{/if}
@@ -330,7 +336,7 @@
 		{/each}
 	</div>
 
-	<div class="hidden overflow-x-auto lg:block">
+	<div class="hidden min-h-0 flex-1 overflow-auto overscroll-contain pr-px lg:block">
 		<div class="min-w-[900px]">
 			<div
 				class="grid grid-cols-[minmax(190px,1fr)_90px_110px_150px_90px_190px] border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-4 py-2 text-[10px] font-semibold text-slate-600"
@@ -379,7 +385,7 @@
 						<div>
 							{#if member.mainLane}
 								<strong class="font-mono text-sm tabular-nums text-slate-100">
-									{member.laneMmr[member.mainLane]}
+									{formatMmr(member.laneMmr[member.mainLane])}
 								</strong>
 								<span class="ml-2 text-[10px] font-semibold text-slate-500">
 									{laneLabel[member.mainLane]}
@@ -469,7 +475,9 @@
 							>
 								<option value="" disabled>포지션 선택</option>
 								{#each LANES as lane (lane)}
-									<option value={lane}>{laneLabel[lane]} · {selectedMember.laneMmr[lane]}</option>
+									<option value={lane}>
+										{laneLabel[lane]} · {formatMmr(selectedMember.laneMmr[lane])}
+									</option>
 								{/each}
 							</select>
 						</label>

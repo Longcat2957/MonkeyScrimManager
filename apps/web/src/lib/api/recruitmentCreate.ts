@@ -4,6 +4,7 @@ import {
 } from '$lib/contracts/recruitmentSnapshot';
 import { apiErrorEnvelopeSchema, responseMetaSchema } from '$lib/contracts/workflow';
 import { apiRoute } from '$lib/routing';
+import type { SeriesBestOf } from '$lib/workflow/seriesRules';
 import { z } from 'zod';
 
 const idempotencyKeySchema = z.uuid();
@@ -13,6 +14,10 @@ const recruitmentCreateEnvelopeSchema = z
 	.strict();
 
 export type RecruitmentCreateSnapshot = RecruitmentSnapshot;
+export type RecruitmentCreateOptions = {
+	bestOf: SeriesBestOf;
+	hardFearless: boolean;
+};
 
 export class RecruitmentCreateApiError extends Error {
 	constructor(
@@ -80,6 +85,7 @@ export function recruitmentCreateErrorText(cause: unknown): string {
 
 export async function createRecruitment(
 	guildId: string,
+	options: RecruitmentCreateOptions,
 	idempotencyKey: string
 ): Promise<RecruitmentCreateSnapshot> {
 	let response: Response;
@@ -88,7 +94,7 @@ export async function createRecruitment(
 			method: 'POST',
 			credentials: 'same-origin',
 			headers: mutationHeaders(idempotencyKey),
-			body: '{}'
+			body: JSON.stringify(options)
 		});
 	} catch (cause) {
 		if (cause instanceof RecruitmentCreateApiError) throw cause;

@@ -34,6 +34,7 @@
 		isNewerRecruitmentInvalidation,
 		recruitmentRealtimeTopic
 	} from '$lib/realtime/recruitment';
+	import { formatSeriesRules } from '$lib/workflow/seriesRules';
 	import type { PageProps } from './$types';
 
 	type RecruitmentRoute = {
@@ -329,7 +330,7 @@
 	<WorkspaceHeader
 		kicker="일반 내전"
 		title="엔트리 모집"
-		description={`${recruitment.title} · 모집 #${recruitment.displayNumber}`}
+		description={`${recruitment.title} · 모집 #${recruitment.displayNumber} · ${formatSeriesRules(recruitment.bestOf, recruitment.hardFearless)}`}
 	>
 		{#snippet actions()}
 			{#if !isOpen}

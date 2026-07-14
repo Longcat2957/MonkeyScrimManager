@@ -45,12 +45,14 @@ Backend:
 
 - 필요 없음 또는 최소 상태 확인.
 
-### `/초기설정 [길드이름] 운영자역할`
+### `/초기설정 운영자역할 모집채널 [길드이름] [엔트리채널] [결과알림채널] [운영로그채널]`
 
 목적:
 
 - bot이 설치된 Discord guild를 MonkeyBot 운영 공간으로 활성화한다.
 - 선택한 Discord role ID를 관리 권한의 source로 저장한다.
+- 모집 채널은 필수이며, 엔트리/결과/운영 로그 채널은 별도로 선택한다. 미선택 feedback channel은 `null`로
+  저장하고 해당 Discord feedback을 발행하지 않는다.
 - 길드 이름을 생략하면 현재 Discord guild 이름을 사용한다.
 - 설정 완료 후 guild dashboard link를 제공한다.
 - 최초 활성화에만 사용한다. 설정이 끝난 길드에서 새 interaction으로 다시 실행하면
@@ -59,7 +61,9 @@ Backend:
 
 Backend:
 
-- guild setup API/service.
+- guild setup API/service. Bot은 API 호출 전에 선택한 채널이 현재 guild의 게시 가능한 text/announcement
+  channel인지 검증하고 `recruitmentChannelId`, nullable `entryChannelId`/`resultChannelId`/`logChannelId`를
+  모두 보낸다. setup 직후 catalog sync가 수행되므로 backend는 이 command에서 catalog lookup을 하지 않는다.
 
 권한:
 
@@ -189,6 +193,14 @@ MVP command registry에 등록하지 않는다. Screening UI와 API 계약이 �
 
 - 5v5 일반 모집 생성.
 - Discord 모집 메시지 발행.
+
+옵션:
+
+- `형식`: 선택값 `BO1 | BO3 | BO5`, 생략 시 `BO3`.
+- `하드피어리스`: boolean, 생략 시 `false`.
+
+선택값은 모집 생성 request에 항상 명시적으로 전달한다. Bot은 series를 직접 만들지 않으며, Web의
+엔트리 편성 전환이 모집의 규칙을 series immutable snapshot으로 복사한다.
 
 처리 순서:
 
@@ -627,6 +639,50 @@ RECRUITMENT_MESSAGE_UPDATE
 RECRUITMENT_MESSAGE_DELETE
 payload = { schemaVersion: 1, recruitmentId, snapshot }
 ```
+
+확정 엔트리 notification:
+
+```text
+ENTRY_CONFIRMATION_CREATE
+payload = { schemaVersion: 1, seriesId, snapshot }
+```
+
+`snapshot`은 series 생성 transaction에서 고정한 `bestOf`, `hardFearless`, 1팀/2팀의 lane별 roster,
+`/g/{guildId}/series/{seriesId}/pick-ban` deep link를 담는다. configured entry channel이 있을 때만
+생성되며, Bot은 snapshot을 SVG로 렌더링한 PNG 엔트리 카드와 `픽/밴 입력 열기` link button을 게시한 후
+generic acknowledgement를 보낸다. Discord의 SVG preview 호환성에 의존하지 않으며, 재시도해도 같은
+immutable snapshot으로 같은 roster를 전송한다.
+delivery 실패는 series 생성 결과를 바꾸지 않고 notification outbox retry 정책으로 처리한다.
+
+일반 시리즈 결과 notification:
+
+```text
+SERIES_RESULT_CREATE
+payload = { schemaVersion: 2, seriesId, snapshot }
+```
+
+시리즈가 자연 종료(`SCORE_REACHED`)하거나 조기 종료(`EARLY_WIN|EARLY_DRAW`)로 `COMPLETED`가 될 때만
+configured result channel에 적재한다. 목적지는 `result_channel_id`이며 `entry_channel_id` fallback은 없다.
+`snapshot`은 immutable `id/displayNumber/title/bestOf/hardFearless`,
+`TEAM_1|TEAM_2`의 lane-ordered roster, 최종 score, nullable 승리 팀, terminal reason, 확정 set마다
+`winner/sidePreset`, 두 팀의 lane-ordered pick, lower-case `bans.blue`/`bans.red` 5칸, `patchVersion`,
+`/g/{guildId}/series/{seriesId}/result` link를 담는다. Bot은 SVG 기반 PNG 결과 카드와 `결과 보기` link
+button을 게시한 후 generic acknowledgement를 보낸다. MMR과 MMR delta는 결과 카드 payload에 넣지 않는다.
+
+v2 결과 카드는 기존 결과 카드의 header와 최종 score를 유지한다. 참가자 roster는 팀별 한 번만 두고,
+각 확정 set에는 팀별 5개 pick face와 BLUE/RED 5개 ban face만 배치한다. champion 이름, patch, player
+이름, side 설명을 set마다 반복하지 않는다. Bot은 allowlist된 Data Dragon champion PNG만 process-local
+cache로 가져와 SVG renderer에 주입한다. artwork fetch가 timeout/404/invalid image이면 해당 tile은 muted
+empty slot으로 남기고 Discord 결과 알림과 acknowledgement는 계속 처리한다.
+
+배포 전 이미 claim되지 않은 v1 compact outbox row는 그대로 존재할 수 있다. Bot은 `schemaVersion: 1`과 v2를
+모두 parse하며, v1은 기존 compact renderer로, v2는 상세 renderer로 전송한다. backend는 새 row만 v2로
+생성하며 기존 payload/deduplication key를 변환하거나 재발행하지 않는다.
+
+result channel이 `NULL`이면 시리즈 완료는 정상 처리되고 결과 notification만 생략한다. delivery 실패도 완료
+transaction을 rollback하지 않으며 기존 outbox retry 정책으로 처리한다. 이 첫 slice는 one-shot card만 발행한다.
+이후 결과를 되돌리거나 재확정할 때 기존 Discord 카드를 edit/delete하는 `end_card_*` binding은 별도 lifecycle
+확장으로 남긴다.
 
 처리 순서:
 

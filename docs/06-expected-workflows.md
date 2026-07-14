@@ -90,11 +90,12 @@ Discord command
   -> guilds 생성 또는 복구
   -> status = INSTALLED
 
-운영자가 /초기설정 [길드이름] 운영자역할 실행
+운영자가 /초기설정 [운영자역할] [모집채널] [길드이름] [엔트리채널] [결과알림채널] [운영로그채널] 실행
   -> 실행자를 guild_members에 등록
   -> 초기 operator로 기록
   -> guild 표시 이름 저장
   -> 관리 권한 role 이름 저장
+  -> 필수 모집 채널과 선택적 Discord feedback 채널 저장
   -> 기본 season 생성
   -> status = ACTIVE
 
@@ -117,7 +118,7 @@ admin_audit_log
 - 같은 bot이 여러 guild에 설치되어도 각 guild는 독립 운영된다.
 - bot 재설치 시 기존 `guild_id` 데이터는 복구 가능해야 한다.
 - `/초기설정`은 회원가입이 아니라 guild 운영 공간 활성화다.
-- `/초기설정`은 선택적 guild 표시 이름과 Discord 관리 role을 받는다.
+- `/초기설정`은 필수 Discord 관리 role과 모집 채널, 선택적 guild 표시 이름/엔트리/결과/운영 로그 채널을 받는다.
 - `/초기설정`은 `INSTALLED` 또는 `SETUP_REQUIRED` 상태에서 설정 row가 없을 때 한 번만 실행한다.
 - 동일 Discord interaction의 재전송은 저장된 성공 응답을 재생하지만, 설정 완료 뒤 새 interaction으로
   다시 실행하면 `guild_already_configured`로 거절하고 guild, member, config, season을 변경하지 않는다.
@@ -167,16 +168,19 @@ Web /g/{guildId}/series 내전 모집
 
 ```txt
 /내전모집
-  -> recruitments(guild_id) 생성
+  -> BO1/BO3/BO5, 하드 피어리스 선택
+  -> 선택 규칙을 가진 recruitments(guild_id) 생성
   -> Discord 모집 메시지 발행
 
 Web 내전 모집 (ACTIVE guild member)
+  -> BO1/BO3/BO5와 하드 피어리스 선택
   -> 모집 채널 설정 여부 확인
-  -> recruitments(guild_id), 빈 entry draft, RECRUITMENT_MESSAGE_CREATE outbox row를 한 transaction으로 생성
+  -> 선택 규칙을 포함한 recruitments(guild_id), 빈 entry draft, RECRUITMENT_MESSAGE_CREATE outbox row를 한 transaction으로 생성
   -> /g/{guildId}/recruitments/{id} 엔트리 모집 화면 이동
   -> Bot worker가 configured 모집 채널에 /내전모집과 같은 메시지 게시
   -> typed ack이 Discord channel/message ID를 recruitment에 원자적으로 bind
   -> Discord 모집 메시지에서 참가 / 취소 / 선호 라인 수집
+  -> 엔트리 편성 완료 후 series 생성 시 모집 규칙을 immutable snapshot으로 복사
 
 Web 운영자 수동 참가자 추가
   -> OPEN 모집에서 ACTIVE guild member 선택
@@ -201,6 +205,7 @@ Web 모집 취소 (생성자 또는 운영자)
 운영자가 Web에서 엔트리 편성
   -> entry draft 저장
   -> series 생성
+  -> bound 모집 메시지를 시리즈 진행 상태로 갱신하고, 설정된 엔트리 채널에는 확정 roster와 픽/밴 링크를 비동기 게시
   -> /g/{guildId}/series/{id}/pick-ban
 
 운영자가 픽밴 / 결과 입력
@@ -212,7 +217,7 @@ Web 모집 취소 (생성자 또는 운영자)
 
 시리즈 완료
   -> 결과 화면
-  -> Bot 종료 카드 발행
+  -> configured 결과 채널에 최종 스코어/세트 결과/결과 링크가 담긴 Bot 종료 카드 비동기 발행
   -> 전적 검색과 프로필에 반영
 ```
 

@@ -3,6 +3,7 @@ import { championPreferenceLaneSchema, userIdSchema } from './workflow';
 
 const snowflakeSchema = z.string().regex(/^[1-9][0-9]{0,19}$/);
 const timestampSchema = z.iso.datetime({ offset: true });
+const seriesBestOfSchema = z.union([z.literal(1), z.literal(3), z.literal(5)]);
 
 export const recruitmentStatusSchema = z.enum(['OPEN', 'CLOSED', 'CANCELLED']);
 
@@ -13,6 +14,8 @@ export const recruitmentSummarySchema = z
 		title: z.string().min(1).max(100),
 		status: recruitmentStatusSchema,
 		targetCount: z.literal(10),
+		bestOf: seriesBestOfSchema,
+		hardFearless: z.boolean(),
 		revision: z.number().int().nonnegative(),
 		createdById: userIdSchema,
 		channelId: snowflakeSchema.nullable(),

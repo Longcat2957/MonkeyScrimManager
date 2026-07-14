@@ -18,6 +18,8 @@ describe('recruitment stage page server load', () => {
 						title: '금요 일반 내전 모집',
 						status: 'OPEN',
 						targetCount: 10,
+						bestOf: 3,
+						hardFearless: false,
 						revision: 3,
 						createdById: '200000000000000004',
 						channelId: '200000000000000002',

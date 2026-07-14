@@ -123,6 +123,7 @@ export async function updateGuildAdminSettings(
 			operatorRoleId: settings.operatorRoleId,
 			recruitmentChannelId: settings.recruitmentChannelId,
 			entryChannelId: settings.entryChannelId,
+			resultChannelId: settings.resultChannelId,
 			logChannelId: settings.logChannelId,
 			isExternallyPublic: settings.isExternallyPublic,
 			expectedRevision: command.expectedRevision

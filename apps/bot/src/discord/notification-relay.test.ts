@@ -5,9 +5,25 @@ import type { Logger } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
 import { MonkeyBotApiTransportError, type MonkeyBotApiClient } from '../api/client.js';
-import type { BotNotification, RecruitmentSnapshot } from '../api/contracts.js';
+import type {
+	BotNotification,
+	EntryConfirmationSnapshot,
+	RecruitmentSnapshot,
+	SeriesResultNotificationSnapshot,
+	SeriesResultNotificationV1Snapshot,
+	SeriesResultNotificationV2Snapshot
+} from '../api/contracts.js';
+import {
+	renderEntryConfirmationMessage,
+	renderEntryConfirmationPng,
+	renderEntryConfirmationSvg
+} from './entry-confirmation-message.js';
 import { renderRecruitmentMessage } from './recruitment-message.js';
 import { installBotNotificationRelay } from './notification-relay.js';
+import {
+	renderSeriesResultMessage,
+	type SeriesResultImageResolver
+} from './series-result-message.js';
 
 const guildId = '200000000000000001';
 const channelId = '500000000000000001';
@@ -18,6 +34,7 @@ const leaseToken = '01900000-0000-7000-8000-000000000302';
 const instanceId = 'bot-test';
 const discordNonce = 'abcdefghijklmnopqrstuv';
 const webOrigin = new URL('https://dev.monkeybot.lol');
+const noOpResultImageResolver: SeriesResultImageResolver = async () => undefined;
 
 describe('Bot notification relay', () => {
 	it('claims a CREATE notification, sends the normal recruitment message with its stable nonce, and uses typed acknowledgement', async () => {
@@ -57,6 +74,217 @@ describe('Bot notification relay', () => {
 		);
 		expect(current.acknowledgeNotification).not.toHaveBeenCalled();
 		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('sends an entry confirmation with its stable nonce and uses generic acknowledgement', async () => {
+		const snapshot = entryConfirmationSnapshot();
+		const sent = { id: messageId };
+		const send = vi.fn(async (options: unknown) => {
+			void options;
+			return sent;
+		});
+		const channel = {
+			isSendable: () => true,
+			isDMBased: () => false,
+			send
+		};
+		const current = createRelay([entryConfirmationNotification(snapshot)], channel);
+
+		await current.relay.poll();
+
+		expect(send).toHaveBeenCalledTimes(1);
+		const sentOptions = send.mock.calls[0]?.[0];
+		expect(sentOptions).toMatchObject({ nonce: discordNonce, enforceNonce: true });
+		expect(messagePayload(sentOptions)).toEqual(
+			messagePayload(renderEntryConfirmationMessage(snapshot, webOrigin))
+		);
+		const entryOptions = sentOptions as {
+			embeds?: unknown;
+			files?: Array<{ attachment: unknown; name: string | null }>;
+		};
+		expect(entryOptions.embeds).toBeUndefined();
+		expect(entryOptions.files).toHaveLength(1);
+		expect(entryOptions.files?.[0]).toMatchObject({ name: 'series-12-entry.png' });
+		expect(entryOptions.files?.[0]?.attachment).toBeInstanceOf(Buffer);
+		expect(current.acknowledgeNotification).toHaveBeenCalledWith(
+			{
+				instanceId,
+				notificationId,
+				leaseToken,
+				discordMessageId: messageId
+			},
+			expect.any(Object)
+		);
+		expect(current.acknowledgeRecruitmentMessage).not.toHaveBeenCalled();
+		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('renders the entry roster as an escaped SVG-derived PNG card', () => {
+		const snapshot = entryConfirmationSnapshot();
+		snapshot.teams[0]!.players[0]!.displayName = '<Longcat & Co>';
+
+		const svg = renderEntryConfirmationSvg(snapshot);
+		const png = renderEntryConfirmationPng(snapshot);
+
+		expect(svg).toContain('&lt;Longcat &amp; Co&gt;');
+		expect(svg).not.toContain('<Longcat & Co>');
+		expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+	});
+
+	it('sends a full schema v2 series result card with its stable nonce and generic acknowledgement', async () => {
+		const snapshot = seriesResultV2Snapshot();
+		const sent = { id: messageId };
+		const send = vi.fn(async (options: unknown) => {
+			void options;
+			return sent;
+		});
+		const channel = {
+			isSendable: () => true,
+			isDMBased: () => false,
+			send
+		};
+		const current = createRelay([seriesResultNotification(snapshot)], channel);
+
+		await current.relay.poll();
+
+		expect(send).toHaveBeenCalledTimes(1);
+		const sentOptions = send.mock.calls[0]?.[0];
+		expect(sentOptions).toMatchObject({ nonce: discordNonce, enforceNonce: true });
+		expect(messagePayload(sentOptions)).toEqual(
+			messagePayload(
+				await renderSeriesResultMessage(snapshot, webOrigin, {
+					resolveImages: noOpResultImageResolver
+				})
+			)
+		);
+		const resultOptions = sentOptions as {
+			embeds?: unknown;
+			files?: Array<{ attachment: unknown; name: string | null }>;
+		};
+		expect(resultOptions.embeds).toBeUndefined();
+		expect(resultOptions.files).toHaveLength(1);
+		expect(resultOptions.files?.[0]).toMatchObject({ name: 'series-12-result.png' });
+		expect(resultOptions.files?.[0]?.attachment).toBeInstanceOf(Buffer);
+		expect(current.acknowledgeNotification).toHaveBeenCalledWith(
+			{
+				instanceId,
+				notificationId,
+				leaseToken,
+				discordMessageId: messageId
+			},
+			expect.any(Object)
+		);
+		expect(current.acknowledgeRecruitmentMessage).not.toHaveBeenCalled();
+		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('continues delivering an existing compact schema v1 result notification', async () => {
+		const snapshot = seriesResultSnapshot();
+		const sent = { id: messageId };
+		const send = vi.fn(async (options: unknown) => {
+			void options;
+			return sent;
+		});
+		const channel = {
+			isSendable: () => true,
+			isDMBased: () => false,
+			send
+		};
+		const current = createRelay([seriesResultNotification(snapshot)], channel);
+
+		await current.relay.poll();
+
+		expect(send).toHaveBeenCalledTimes(1);
+		expect(messagePayload(send.mock.calls[0]?.[0])).toEqual(
+			messagePayload(
+				await renderSeriesResultMessage(snapshot, webOrigin, {
+					resolveImages: noOpResultImageResolver
+				})
+			)
+		);
+		expect(current.acknowledgeNotification).toHaveBeenCalledOnce();
+		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('nacks an invalid series result payload as a terminal HTTP 422 failure', async () => {
+		const snapshot = seriesResultSnapshot();
+		const current = createRelay(
+			[
+				seriesResultNotification(snapshot, {
+					schemaVersion: 1,
+					seriesId: snapshot.series.id,
+					snapshot: { ...snapshot, score: { team1: 2, team2: 1 } }
+				})
+			],
+			null
+		);
+
+		await current.relay.poll();
+
+		expect(current.nackNotification).toHaveBeenCalledWith(
+			expect.objectContaining({
+				instanceId,
+				notificationId,
+				leaseToken,
+				failure: {
+					kind: 'HTTP',
+					status: 422,
+					message:
+						'Series result notification payload does not match supported schema versions 1 or 2'
+				}
+			}),
+			expect.any(Object)
+		);
+		expect(current.acknowledgeNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('nacks a malformed full schema v2 result payload before Discord delivery', async () => {
+		const snapshot = seriesResultV2Snapshot();
+		snapshot.games[0]!.bans.blue.pop();
+		const current = createRelay([seriesResultNotification(snapshot)], null);
+
+		await current.relay.poll();
+
+		expect(current.nackNotification).toHaveBeenCalledWith(
+			expect.objectContaining({
+				failure: {
+					kind: 'HTTP',
+					status: 422,
+					message:
+						'Series result notification payload does not match supported schema versions 1 or 2'
+				}
+			}),
+			expect.any(Object)
+		);
+		expect(current.acknowledgeNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('retries a series result notification when its generic acknowledgement is unavailable', async () => {
+		const snapshot = seriesResultSnapshot();
+		const channel = {
+			isSendable: () => true,
+			isDMBased: () => false,
+			send: vi.fn(async () => ({ id: messageId }))
+		};
+		const current = createRelay([seriesResultNotification(snapshot)], channel);
+		current.acknowledgeNotification.mockRejectedValueOnce(
+			new MonkeyBotApiTransportError('connection reset')
+		);
+
+		await current.relay.poll();
+
+		expect(current.nackNotification).toHaveBeenCalledWith(
+			expect.objectContaining({
+				failure: { kind: 'TRANSPORT', message: 'connection reset' }
+			}),
+			expect.any(Object)
+		);
 		current.relay.close();
 	});
 
@@ -196,6 +424,8 @@ function recruitmentSnapshot(
 			title: '금요 정기 내전',
 			status: 'OPEN',
 			targetCount: 10,
+			bestOf: 3,
+			hardFearless: false,
 			revision: 3,
 			createdById: '100000000000000001',
 			channelId: null,
@@ -227,6 +457,183 @@ function notification(
 		payload,
 		discordNonce,
 		attempts: 1
+	};
+}
+
+function entryConfirmationSnapshot(): EntryConfirmationSnapshot {
+	return {
+		series: {
+			id: '01900000-0000-7000-8000-000000000401',
+			displayNumber: 12,
+			title: '일반 내전 #12',
+			bestOf: 3,
+			hardFearless: true
+		},
+		teams: [
+			{
+				team: 'TEAM_1',
+				name: '1팀',
+				players: [
+					{ id: '100000000000000001', displayName: 'Longcat', lane: 'TOP' },
+					{ id: '100000000000000002', displayName: 'Jungle', lane: 'JUNGLE' },
+					{ id: '100000000000000003', displayName: 'Mid', lane: 'MID' },
+					{ id: '100000000000000004', displayName: 'Bottom', lane: 'BOTTOM' },
+					{ id: '100000000000000005', displayName: 'Support', lane: 'SUPPORT' }
+				]
+			},
+			{
+				team: 'TEAM_2',
+				name: '2팀',
+				players: [
+					{ id: '100000000000000006', displayName: 'Top Two', lane: 'TOP' },
+					{ id: '100000000000000007', displayName: 'Jungle Two', lane: 'JUNGLE' },
+					{ id: '100000000000000008', displayName: 'Mid Two', lane: 'MID' },
+					{ id: '100000000000000009', displayName: 'Bottom Two', lane: 'BOTTOM' },
+					{ id: '100000000000000010', displayName: 'Support Two', lane: 'SUPPORT' }
+				]
+			}
+		],
+		links: { pickBan: `/g/${guildId}/series/01900000-0000-7000-8000-000000000401/pick-ban` }
+	};
+}
+
+function entryConfirmationNotification(snapshot: EntryConfirmationSnapshot): BotNotification {
+	return {
+		id: notificationId,
+		guildId,
+		leaseToken,
+		leaseUntil: '2026-07-13T10:00:30Z',
+		channelId,
+		type: 'ENTRY_CONFIRMATION_CREATE',
+		payload: {
+			schemaVersion: 1,
+			seriesId: snapshot.series.id,
+			snapshot
+		},
+		discordNonce,
+		attempts: 1
+	};
+}
+
+function seriesResultSnapshot(): SeriesResultNotificationV1Snapshot {
+	const seriesId = '01900000-0000-7000-8000-000000000401';
+	return {
+		series: {
+			id: seriesId,
+			displayNumber: 12,
+			title: '일반 내전 #12',
+			bestOf: 3,
+			hardFearless: true,
+			winningTeam: 'TEAM_1',
+			terminalReason: 'SCORE_REACHED'
+		},
+		score: { team1: 2, team2: 0 },
+		games: [
+			{ setNumber: 1, winner: 'TEAM_1' },
+			{ setNumber: 2, winner: 'TEAM_1' }
+		],
+		links: { result: `/g/${guildId}/series/${seriesId}/result` }
+	};
+}
+
+function seriesResultV2Snapshot(): SeriesResultNotificationV2Snapshot {
+	const seriesId = '01900000-0000-7000-8000-000000000401';
+	const teams: SeriesResultNotificationV2Snapshot['teams'] = [
+		{
+			team: 'TEAM_1',
+			name: '1팀',
+			players: [
+				{ id: '100000000000000001', displayName: 'Longcat', lane: 'TOP' },
+				{ id: '100000000000000002', displayName: 'Jungle', lane: 'JUNGLE' },
+				{ id: '100000000000000003', displayName: 'Mid', lane: 'MID' },
+				{ id: '100000000000000004', displayName: 'Bottom', lane: 'BOTTOM' },
+				{ id: '100000000000000005', displayName: 'Support', lane: 'SUPPORT' }
+			]
+		},
+		{
+			team: 'TEAM_2',
+			name: '2팀',
+			players: [
+				{ id: '100000000000000006', displayName: 'Top Two', lane: 'TOP' },
+				{ id: '100000000000000007', displayName: 'Jungle Two', lane: 'JUNGLE' },
+				{ id: '100000000000000008', displayName: 'Mid Two', lane: 'MID' },
+				{ id: '100000000000000009', displayName: 'Bottom Two', lane: 'BOTTOM' },
+				{ id: '100000000000000010', displayName: 'Support Two', lane: 'SUPPORT' }
+			]
+		}
+	];
+	const team1 = teams[0]!;
+	const team2 = teams[1]!;
+	const game = (
+		setNumber: number,
+		winner: 'TEAM_1' | 'TEAM_2',
+		sidePreset: 'DEFAULT' | 'SWAPPED'
+	): SeriesResultNotificationV2Snapshot['games'][number] => ({
+		setNumber,
+		winner,
+		sidePreset,
+		team1: {
+			team: team1.team,
+			name: team1.name,
+			picks: team1.players.map((player, index) => ({
+				...player,
+				championId: ['Garen', 'LeeSin', 'Ahri', 'Jinx', 'Lulu'][index]!
+			}))
+		},
+		team2: {
+			team: team2.team,
+			name: team2.name,
+			picks: team2.players.map((player, index) => ({
+				...player,
+				championId: ['Darius', 'Viego', 'Orianna', 'KaiSa', 'Nautilus'][index]!
+			}))
+		},
+		bans: {
+			blue: ['Yone', 'Rumble', 'Aatrox', 'Syndra', 'Draven'],
+			red: ['Aurora', 'Sejuani', 'Azir', 'Aphelios', 'Rakan']
+		},
+		patchVersion: '15.14'
+	});
+
+	return {
+		series: {
+			id: seriesId,
+			displayNumber: 12,
+			title: '일반 내전 #12',
+			bestOf: 3,
+			hardFearless: true,
+			winningTeam: 'TEAM_1',
+			terminalReason: 'SCORE_REACHED'
+		},
+		teams: [...teams],
+		score: { team1: 2, team2: 0 },
+		games: [game(1, 'TEAM_1', 'DEFAULT'), game(2, 'TEAM_1', 'SWAPPED')],
+		links: { result: `/g/${guildId}/series/${seriesId}/result` }
+	};
+}
+
+function seriesResultNotification(
+	snapshot: SeriesResultNotificationSnapshot,
+	payload: unknown = seriesResultPayload(snapshot)
+): BotNotification {
+	return {
+		id: notificationId,
+		guildId,
+		leaseToken,
+		leaseUntil: '2026-07-13T10:00:30Z',
+		channelId,
+		type: 'SERIES_RESULT_CREATE',
+		payload,
+		discordNonce,
+		attempts: 1
+	};
+}
+
+function seriesResultPayload(snapshot: SeriesResultNotificationSnapshot): unknown {
+	return {
+		schemaVersion: 'teams' in snapshot ? 2 : 1,
+		seriesId: snapshot.series.id,
+		snapshot
 	};
 }
 
@@ -266,7 +673,8 @@ function createRelay(notifications: BotNotification[], channel: object | null) {
 	const relay = installBotNotificationRelay(client as unknown as Client, api, logger, {
 		instanceId,
 		webOrigin,
-		pollIntervalMs: 1_000
+		pollIntervalMs: 1_000,
+		resultImageResolver: noOpResultImageResolver
 	});
 
 	return {

@@ -38,14 +38,29 @@ export function renderRecruitmentMessage(snapshot: RecruitmentSnapshot, webOrigi
 				: '모집 중'
 			: recruitment.status === 'CLOSED'
 				? '엔트리 편성 중'
-				: recruitment.status;
+				: recruitment.status === 'CONVERTED'
+					? '시리즈 진행 중'
+					: '모집 취소';
 	const embed = new EmbedBuilder()
-		.setColor(recruitment.status === 'OPEN' ? (full ? 0x34d399 : 0x22d3ee) : 0xfbbf24)
+		.setColor(
+			recruitment.status === 'OPEN'
+				? full
+					? 0x34d399
+					: 0x22d3ee
+				: recruitment.status === 'CONVERTED'
+					? 0x34d399
+					: 0xfbbf24
+		)
 		.setTitle(`5v5 내전 모집 #${recruitment.displayNumber}`)
 		.setDescription(recruitment.title)
 		.addFields(
 			{ name: '상태', value: statusLabel, inline: true },
 			{ name: '정원', value: `${joinedCount} / ${recruitment.targetCount}`, inline: true },
+			{
+				name: '규칙',
+				value: `BO${recruitment.bestOf} · ${recruitment.hardFearless ? '하드 피어리스' : '일반'}`,
+				inline: true
+			},
 			{ name: '참가자 · 선호 라인', value: roster || '아직 참가자가 없습니다.' }
 		);
 

@@ -23,6 +23,8 @@ const snapshot: EntryDraftSnapshot = {
 		title: '금요 일반 내전 모집',
 		status: 'CLOSED',
 		targetCount: 10,
+		bestOf: 3,
+		hardFearless: false,
 		revision: 3,
 		updatedAt: '2026-07-14T12:00:00Z'
 	},

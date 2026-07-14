@@ -11,6 +11,7 @@ const snapshot: GuildAdminSettingsSnapshot = {
 		operatorRoleId: '1525889769761149148',
 		recruitmentChannelId: null,
 		entryChannelId: '1525900000000000002',
+		resultChannelId: null,
 		logChannelId: '1525900000000000003',
 		isExternallyPublic: false
 	},
@@ -60,10 +61,10 @@ describe('guild admin settings API client', () => {
 		expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get('accept')).toBe('application/json');
 	});
 
-	it('puts only the six settings fields and expected revision with CSRF', async () => {
+	it('puts all settings fields including the result channel and expected revision with CSRF', async () => {
 		const authoritative: GuildAdminSettingsSnapshot = {
 			...snapshot,
-			settings: { ...snapshot.settings, recruitmentChannelId: '1525900000000000001' },
+			settings: { ...snapshot.settings, resultChannelId: '1525900000000000001' },
 			revision: 4
 		};
 		const fetcher = fetchMock(() => envelope(authoritative));

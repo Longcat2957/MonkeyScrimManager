@@ -20,6 +20,8 @@ const snapshot = {
 		title: '일반 내전 모집 #214',
 		status: 'OPEN' as const,
 		targetCount: 10 as const,
+		bestOf: 3 as const,
+		hardFearless: false,
 		revision: 1,
 		createdById: memberId,
 		channelId: '1525900000000000001',

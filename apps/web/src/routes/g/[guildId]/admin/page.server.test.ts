@@ -15,6 +15,7 @@ const settingsSnapshot = {
 		operatorRoleId: '1525889769761149148',
 		recruitmentChannelId: null,
 		entryChannelId: null,
+		resultChannelId: null,
 		logChannelId: null,
 		isExternallyPublic: false
 	},

@@ -68,11 +68,12 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 | ---------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
 | `EntryDraftBoard`                  | `/g/[guildId]/recruitments/[id]/entry` 편성 탭     | controlled `participants`, `assignments`, `onMoveParticipant`, `onReset`; 선택 `readOnly`, `busy`, `canReset`, `synergies`, `headToHead`, `targetCount`, `profileIconVersion` | `EntryDraftSnapshot` |
 | `SeriesCompletedEntryRosterBoard`  | `/g/[guildId]/recruitments/[id]/entry` 미리보기 탭 | `EntryDraftSnapshot`에서 변환한 `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                                                        | API snapshot         |
-| `ScrimPickBanResultInputBoard`     | `/g/[guildId]/series/[id]/pick-ban` 입력 탭        | `teams`, `initialGame`, `champions`, `patchVersion`, `onSubmit`                                                                                                               | Mock adapter         |
-| `ScrimPickBanResultSetSummaryCard` | `/g/[guildId]/series/[id]/pick-ban` 요약 탭        | `label`, 양 팀, `winner`, `bans`, `picks`, `champions`, `version`                                                                                                             | Mock data            |
-| `SeriesResultLedgerBoard`          | `/g/[guildId]/series/[id]/result`                  | `catalog: ChampionCatalog`; 선택 `seriesId`                                                                                                                                   | Mock data            |
+| `ScrimPickBanResultInputBoard`     | `/g/[guildId]/series/[id]/pick-ban` 입력 영역     | controlled `SeriesPickBanSnapshot.currentGame`, frozen `teams`, champion catalog, draft cell mutation, game submit/revert callbacks                                           | API snapshot         |
+| `ScrimPickBanConfirmedSetsDisclosure` | `/g/[guildId]/series/[id]/pick-ban` 입력 위     | confirmed `SeriesPickBanSnapshot.games`, champion catalog; 기본 collapsed set history                                                                                          | API snapshot         |
+| `ScrimPickBanBulkInput`            | `/g/[guildId]/series/[id]/pick-ban` 입력 위        | current picks/bans, frozen teams, catalog, `hardFearless`, prior confirmed picks, single `APPLY_BULK` callback                                                                 | API snapshot         |
+| `SeriesResultLedgerBoard`          | `/g/[guildId]/series/[id]/result`                  | `SeriesResultSnapshot`의 frozen teams, confirmed games, score, MMR ledger, champion catalog; nullable `durationSeconds`는 `-` adapter                                       | API snapshot         |
 
-`/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 보여주고 하단에 완료 시리즈를 보여준다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
+`/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 보여주고 하단에 완료 시리즈를 보여준다. 내전 모집은 BO1/BO3/BO5와 하드 피어리스를 선택하는 작은 dialog를 통해 생성한다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
 
 ## 경매 Entrypoints
 

@@ -123,6 +123,13 @@ fn repository_error(source: GuildAdminSettingsRepositoryError, request_id: &Requ
             "expectedRevision은 0 이상이어야 합니다.",
             None,
         ),
+        GuildAdminSettingsRepositoryError::RecruitmentChannelRequired => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "recruitment_channel_required",
+            "모집 채널은 반드시 설정해야 합니다.",
+            Some(serde_json::json!({ "field": "recruitmentChannelId" })),
+        ),
         GuildAdminSettingsRepositoryError::InvalidSettings { field } => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             request_id,

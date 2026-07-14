@@ -57,7 +57,8 @@ Valkey는 Pub/Sub, presence, rate limit, 재생성 가능한 cache만 담당한�
 | Game side         | BLUE, RED                         |
 | Auction format    | TEN_PERSON, TWENTY_PERSON         |
 | Best of storage   | 1, 3, 5                           |
-| MVP new match     | BO3                               |
+| 일반 내전 format  | 모집 생성 시 BO1, BO3, BO5 선택   |
+| 경매 신규 match   | BO3                               |
 | Conflict          | HTTP 409 + revision_conflict      |
 
 상대 시각은 frontend가 만든다. BOTTOM의 UI label은 원딜로 표시할 수 있다.
@@ -126,7 +127,6 @@ HTTP 성공 전 local 상태를 server 원장으로 확정하지 않는다.
 - 현재 게임/Riot Spectator
 - CRDT/OT/offline mutation queue
 - 범용 undo/redo
-- Hard Fearless server 강제
 - 웹 일괄 등록/시즌 초기화/오래된 내전 정리
 - KDA/CS를 custom match 결과의 필수값으로 사용
 - 자체 회원가입과 Discord 외 OAuth
@@ -672,9 +672,11 @@ Auction invariant:
 
 MMR 수동 조정은 MANUAL_ADJUSTMENT ledger와 actor/note/before/after를 남긴다.
 웹 settings mutation은 displayName, operatorRoleId, recruitmentChannelId,
-entryChannelId, logChannelId, isExternallyPublic과 expectedRevision만 허용한다. Settings GET/PUT은
+entryChannelId, resultChannelId, logChannelId, isExternallyPublic과 expectedRevision만 허용한다. Settings GET/PUT은
 구현되어 있으며 `guild_config.revision`을 concurrency token으로 사용하고 성공 시
 `GUILD_SETTINGS_UPDATED` audit와 authoritative full settings/catalog snapshot을 남긴다.
+`recruitmentChannelId`는 신규 write에서 필수다. legacy nullable row는 GET으로 보존하고 유효한 채널을
+선택한 PUT으로만 복구한다. entry/result/log channel은 nullable이며 result는 entry channel fallback을 쓰지 않는다.
 
 Bot은 별도 service-principal PUT으로 Discord role/channel catalog를 전체 교체한다. Role catalog는
 managed 여부까지 저장하되 Web 선택지와 새 operator 검증에서는 non-managed role만 사용한다. Channel
@@ -1200,7 +1202,7 @@ interaction으로 이후 vertical slice의 입력 상태를 만들기 위한 최
 
 Task:
 
-- BE-350 길드 setup upsert와 운영자 역할/모집 채널 설정.
+- BE-350 길드 setup upsert와 운영자 역할/필수 모집 채널/선택적 Discord feedback 채널 설정.
 - BE-351 일반 모집 create/message bind/join/leave/preferred-lane/close command.
 - BE-352 Discord interaction ID 기반 idempotency와 Bot service principal guard.
 - BOT-350 Node 22 + discord.js runtime, health/readiness, command registration.
@@ -1262,7 +1264,8 @@ Task:
 - BE-509 모든 일반 내전 상태의 명시 edit/revert/delete cascade. child game/MMR을 역순 void/reversal하고
   series를 `CANCELLED`로 보존한 뒤 source recruitment를 복구한다.
 - BE-510 일반 모집/series notification outbox와 internal claim/ack/nack.
-- FE-500 EntryDraft controlled adapter와 reset/reopen/createSeries control. 신규 series는 BO3.
+- BE-511 모집 생성 규칙(`bestOf`, `hardFearless`) 저장 및 series immutable snapshot 복사.
+- FE-500 EntryDraft controlled adapter와 reset/reopen/createSeries control. 규칙은 모집에서 읽기만 한다.
 - FE-501 PickBan controlled adapter와 cell/submit/deleteLast/revert control.
 - FE-502 completed series outcome adapter including EARLY_DRAW.
 - FE-503 result ledger nullable duration adapter.
@@ -1272,7 +1275,7 @@ Test:
 
 - entry swap/candidate.
 - no full JSON replace.
-- 신규 BO3 score/completion과 imported BO1/BO3 read.
+- 신규 BO1/BO3/BO5 score/completion, hard fearless 검증, imported BO1/BO3 read.
 - optional pick/ban, required winner.
 - operator early win/draw/cancel preserves existing game/MMR and renders nullable winner safely.
 - failed transaction leaves game/MMR/revision unchanged.

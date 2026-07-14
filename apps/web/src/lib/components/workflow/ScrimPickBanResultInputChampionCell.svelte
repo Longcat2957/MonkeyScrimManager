@@ -15,8 +15,11 @@
 		active: boolean;
 		compact?: boolean;
 		embedded?: boolean;
+		inputId?: string;
+		inputLabel?: string;
 		onFocus: () => void;
 		onCommit: (championId: string | null) => void;
+		onNavigate?: (direction: -1 | 1) => void;
 	}
 
 	let {
@@ -27,8 +30,11 @@
 		active,
 		compact = false,
 		embedded = false,
+		inputId,
+		inputLabel,
 		onFocus,
-		onCommit
+		onCommit,
+		onNavigate
 	}: Props = $props();
 
 	const selected = $derived(findScrimPickBanResultInputChampionById(value, champions));
@@ -37,6 +43,7 @@
 	let syncedValue = $state<string | null>(null);
 	let focused = $state(false);
 	let highlightedIndex = $state(0);
+	let skipNextBlurCommit = false;
 	const suggestions = $derived(suggestScrimPickBanResultInputChampions(text, champions));
 	const showSuggestions = $derived(focused && suggestions.length > 0);
 
@@ -70,6 +77,15 @@
 		highlightedIndex = 0;
 		syncedValue = champion.id;
 		onCommit(champion.id);
+	}
+
+	function commitCurrentSelection() {
+		const suggestedChampion = suggestions[Math.min(highlightedIndex, suggestions.length - 1)];
+		if (showSuggestions && suggestedChampion) {
+			commitChampion(suggestedChampion);
+			return;
+		}
+		commit();
 	}
 
 	function surfaceClass(): string {
@@ -114,11 +130,13 @@
 			>
 		{/if}
 		<input
+			id={inputId}
 			bind:value={text}
 			class={`block w-full min-w-0 bg-transparent font-semibold text-slate-100 outline-none placeholder:text-slate-600 ${label ? 'h-5 text-center text-xs' : 'h-9 text-left text-sm'}`}
 			placeholder="챔피언"
 			autocomplete="off"
 			role="combobox"
+			aria-label={inputLabel ?? label ?? '챔피언'}
 			aria-expanded={showSuggestions}
 			aria-autocomplete="list"
 			aria-controls={listboxId}
@@ -130,6 +148,14 @@
 				highlightedIndex = 0;
 			}}
 			onkeydown={(event) => {
+				if (event.isComposing) return;
+				if (event.key === 'Tab' && onNavigate) {
+					event.preventDefault();
+					skipNextBlurCommit = true;
+					commitCurrentSelection();
+					onNavigate(event.shiftKey ? -1 : 1);
+					return;
+				}
 				if (event.key === 'ArrowDown') {
 					event.preventDefault();
 					highlightedIndex = Math.min(highlightedIndex + 1, suggestions.length - 1);
@@ -142,15 +168,11 @@
 				}
 				if (event.key !== 'Enter') return;
 				event.preventDefault();
-				const suggestedChampion = suggestions[Math.min(highlightedIndex, suggestions.length - 1)];
-				if (showSuggestions && suggestedChampion) {
-					commitChampion(suggestedChampion);
-					return;
-				}
-				commit();
+				commitCurrentSelection();
 			}}
 			onblur={() => {
-				commit();
+				if (!skipNextBlurCommit) commit();
+				skipNextBlurCommit = false;
 				focused = false;
 			}}
 		/>

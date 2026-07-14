@@ -17,6 +17,7 @@
 		"commands:register:global": "tsx src/register-commands.ts global"
 	},
 	"dependencies": {
+		"@resvg/resvg-js": "^2.6.2",
 		"discord.js": "^14.22.1",
 		"dotenv": "^17.2.3",
 		"pino": "^10.1.0",

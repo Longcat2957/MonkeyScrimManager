@@ -76,6 +76,7 @@ pub struct UpdateGuildSettingsCommand {
     pub operator_role_id: DiscordRoleId,
     pub recruitment_channel_id: Option<DiscordChannelId>,
     pub entry_channel_id: Option<DiscordChannelId>,
+    pub result_channel_id: Option<DiscordChannelId>,
     pub log_channel_id: Option<DiscordChannelId>,
     pub is_externally_public: bool,
     pub expected_revision: i64,
@@ -102,6 +103,7 @@ pub struct GuildSettingsValues {
     pub operator_role_id: DiscordRoleId,
     pub recruitment_channel_id: Option<DiscordChannelId>,
     pub entry_channel_id: Option<DiscordChannelId>,
+    pub result_channel_id: Option<DiscordChannelId>,
     pub log_channel_id: Option<DiscordChannelId>,
     pub is_externally_public: bool,
 }
@@ -305,17 +307,19 @@ async fn update_attempt(
              operator_role_id = $2,
              recruitment_channel_id = $3,
              entry_channel_id = $4,
-             log_channel_id = $5,
-             is_externally_public = $6,
-             revision = $7,
-             updated_by = $8,
-             updated_at = $9
-         WHERE guild_id = $10 AND revision = $11",
+             result_channel_id = $5,
+             log_channel_id = $6,
+             is_externally_public = $7,
+             revision = $8,
+             updated_by = $9,
+             updated_at = $10
+         WHERE guild_id = $11 AND revision = $12",
     )
     .bind(&after.display_name)
     .bind(&after.operator_role_id)
     .bind(&after.recruitment_channel_id)
     .bind(&after.entry_channel_id)
+    .bind(&after.result_channel_id)
     .bind(&after.log_channel_id)
     .bind(after.is_externally_public)
     .bind(next_revision)
@@ -387,6 +391,7 @@ async fn lock_operator_settings(
                 config.operator_role_id,
                 config.recruitment_channel_id,
                 config.entry_channel_id,
+                config.result_channel_id,
                 config.log_channel_id,
                 config.is_externally_public,
                 config.revision,
@@ -450,6 +455,7 @@ async fn fetch_snapshot(
                 config.operator_role_id,
                 config.recruitment_channel_id,
                 config.entry_channel_id,
+                config.result_channel_id,
                 config.log_channel_id,
                 config.is_externally_public,
                 config.revision,
@@ -527,6 +533,14 @@ async fn validate_changed_selections(
         "entryChannelId",
         current.entry_channel_id.as_ref(),
         command.entry_channel_id.as_ref(),
+    )
+    .await?;
+    validate_changed_channel(
+        connection,
+        guild_id,
+        "resultChannelId",
+        current.result_channel_id.as_ref(),
+        command.result_channel_id.as_ref(),
     )
     .await?;
     validate_changed_channel(
@@ -684,6 +698,9 @@ fn normalize_settings(
     if command.expected_revision < 0 {
         return Err(GuildAdminSettingsRepositoryError::InvalidExpectedRevision);
     }
+    if command.recruitment_channel_id.is_none() {
+        return Err(GuildAdminSettingsRepositoryError::RecruitmentChannelRequired);
+    }
     command.display_name = normalized_text(&command.display_name, MAX_DISPLAY_NAME_CHARS).ok_or(
         GuildAdminSettingsRepositoryError::InvalidSettings {
             field: "displayName",
@@ -732,6 +749,7 @@ impl UpdateGuildSettingsCommand {
             operator_role_id: self.operator_role_id.clone(),
             recruitment_channel_id: self.recruitment_channel_id.clone(),
             entry_channel_id: self.entry_channel_id.clone(),
+            result_channel_id: self.result_channel_id.clone(),
             log_channel_id: self.log_channel_id.clone(),
             is_externally_public: self.is_externally_public,
         }
@@ -744,6 +762,7 @@ struct SettingsRow {
     operator_role_id: DiscordRoleId,
     recruitment_channel_id: Option<DiscordChannelId>,
     entry_channel_id: Option<DiscordChannelId>,
+    result_channel_id: Option<DiscordChannelId>,
     log_channel_id: Option<DiscordChannelId>,
     is_externally_public: bool,
     revision: i64,
@@ -758,6 +777,7 @@ impl SettingsRow {
             operator_role_id: self.operator_role_id.clone(),
             recruitment_channel_id: self.recruitment_channel_id.clone(),
             entry_channel_id: self.entry_channel_id.clone(),
+            result_channel_id: self.result_channel_id.clone(),
             log_channel_id: self.log_channel_id.clone(),
             is_externally_public: self.is_externally_public,
         }
@@ -841,6 +861,8 @@ pub enum GuildAdminSettingsRepositoryError {
     },
     #[error("expected revision is invalid")]
     InvalidExpectedRevision,
+    #[error("recruitment channel is required")]
+    RecruitmentChannelRequired,
     #[error("guild settings are invalid for field {field}")]
     InvalidSettings { field: &'static str },
     #[error("guild settings selection is invalid for field {field}")]
@@ -861,23 +883,39 @@ mod tests {
         DiscordRoleId::parse(value).expect("valid role ID")
     }
 
+    fn channel_id(value: &str) -> DiscordChannelId {
+        DiscordChannelId::parse(value).expect("valid channel ID")
+    }
+
     fn guild_id() -> GuildId {
         GuildId::parse("200000000000000001").expect("valid guild ID")
     }
 
     #[test]
-    fn settings_normalization_trims_names_and_rejects_everyone_or_negative_revision() {
+    fn settings_normalization_requires_recruitment_channel_and_rejects_invalid_values() {
         let valid = UpdateGuildSettingsCommand {
             display_name: "  MonkeyBot Guild  ".to_owned(),
             operator_role_id: role_id("300000000000000001"),
-            recruitment_channel_id: None,
+            recruitment_channel_id: Some(channel_id("400000000000000001")),
             entry_channel_id: None,
+            result_channel_id: None,
             log_channel_id: None,
             is_externally_public: false,
             expected_revision: 0,
         };
         let normalized = normalize_settings(&guild_id(), valid.clone()).expect("valid settings");
         assert_eq!(normalized.display_name, "MonkeyBot Guild");
+
+        assert!(matches!(
+            normalize_settings(
+                &guild_id(),
+                UpdateGuildSettingsCommand {
+                    recruitment_channel_id: None,
+                    ..valid.clone()
+                }
+            ),
+            Err(GuildAdminSettingsRepositoryError::RecruitmentChannelRequired)
+        ));
 
         assert!(matches!(
             normalize_settings(

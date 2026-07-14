@@ -232,6 +232,13 @@ API 한 번으로 확정한다. 선택 group 추가는 별도 revision mutation�
 
 ## 일반 내전 Routes
 
+### `/g/[guildId]/series`
+
+일반 내전의 작업 목록과 완료 series를 표시한다. 상단 `내전 모집` action은 즉시 생성하지 않고 작은
+설정 dialog를 연다. dialog는 `BO1 | BO3 | BO5` 세그먼트와 `하드 피어리스` boolean toggle만 제공하며,
+선택값을 모집 create API에 명시적으로 전송한다. 생성 뒤에는 모집 detail로 이동한다. 규칙은 모집에서
+immutable로 저장되므로 entry 또는 pick-ban 화면에 수정 control을 중복으로 두지 않는다.
+
 ### `/g/[guildId]/recruitments/[id]`
 
 파일:
@@ -242,6 +249,8 @@ API 한 번으로 확정한다. 선택 group 추가는 별도 revision mutation�
 목적:
 
 - `OPEN` 모집의 엔트리 모집 현황과 참가자 roster를 확인한다.
+- 헤더에만 `BOx · 일반` 또는 `BOx · 하드 피어리스` 규칙을 compact하게 표시한다. 별도 summary card나
+  중복 상태 텍스트를 추가하지 않는다.
 - 참가, 취소, 선호 라인 선택은 Discord 모집 메시지에서 처리한다.
 - `CLOSED` 모집일 때만 엔트리 편성 route로 이동한다.
 - 더미 참가자 전용 조작 UI는 두지 않는다. 더미 데이터는 persistent DB/API 개발 도구에서만 관리한다.
@@ -362,6 +371,7 @@ Backend 데이터:
 - side 선택, game tab, 선택적 밴/픽, 승자 입력.
 - 게임 결과 입력.
 - 마지막 게임 되돌리기.
+- BO3/BO5 조기 종료.
 - 정해진 지점 되돌리기.
 
 Bot 딥링크:
@@ -371,19 +381,32 @@ Bot 딥링크:
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/series/:id`
+- draft cell: `PATCH /api/guilds/:guildId/series/:id/pickban`
+- game confirm: `POST /api/guilds/:guildId/series/:id/games`
+- last game revert: `DELETE /api/guilds/:guildId/series/:id/games/last`
+- early completion: `POST /api/guilds/:guildId/series/:id/complete`
 - `POST /api/guilds/:guildId/series/:id/revert`
 - `DELETE /api/guilds/:guildId/series/:id`
 
-현재 page는 authoritative GET snapshot으로 frozen roster, MMR, Riot tier, 선호 챔피언과 현재 draft를
-렌더링한다. `canRevert`/`canDelete`가 true인 active operator만 명시 확인 dialog를 거쳐 lifecycle request를
-보낸다. `POST .../revert`는 source entry route로, `DELETE`는 series list로 이동한다. 두 action 모두
-CSRF, `Idempotency-Key`, `series.revision`을 사용하고 backend의 safe error message/request ID를 그대로
-표시한다. pick/ban 저장, game 확정, last-game rollback은 아직 endpoint가 없으므로 완료된 것처럼 표시하지
-않는다.
+page는 authoritative GET snapshot으로 frozen roster, MMR, Riot tier, 선호 챔피언, 현재 draft와 확정 set
+요약을 렌더링한다. draft cell은 `expectedRevision`과 최소 operation 하나만 PATCH하며 success snapshot으로
+local state를 교체한다. game 확정과 last-game rollback은 CSRF, UUID `Idempotency-Key`,
+`series.revision`을 사용한다. game confirm 성공 시 response `nextHref`로 `/pick-ban` 또는 `/result`를
+이동한다.
+
+`canEdit`/`canSubmit`/`canEarlyComplete`/`canRevertLastGame`/`canRevert`/`canDelete`가 true인 active
+operator만 해당 control을 렌더링한다. 조기 종료는 BO3/BO5에 한 세트 이상 확정된 경우에만 열고, 확정된
+스코어와 MMR은 유지한 채 팀 승리 또는 동률 무승부를 명시 확인한다. 현재 DRAFT의 픽밴은 결과에 포함하지
+않는다. `POST .../revert`는 source entry route로, `DELETE`는 series list로 이동한다. lifecycle은 확정
+game도 역순 void/MMR reversal하므로 UI가 오래된 "먼저 게임을 하나씩 되돌려야 함" 안내를 표시하지 않는다.
+모든 오류는 backend가 준 safe message/code/request ID를 그대로 표시한다.
 
 WebSocket:
 
-- 첫 slice에서는 사용하지 않는다. series realtime topic은 이후 game command가 추가될 때 연결한다.
+- active operator만 `guild:{guildId}:series:{id}` topic을 구독하고 `invalidate`/`resync_required` 때 active
+  snapshot을 다시 읽는다. 다른 운영자의 조기 종료로 active snapshot이 `COMPLETED`가 되면 result GET을
+  확인한 뒤 `/result`로 이동한다. 일반 guild member와 completed result 화면은 WebSocket을 열지 않고 HTTP
+  read만 사용한다.
 
 ### `/g/[guildId]/series/[id]/result`
 
@@ -399,8 +422,12 @@ WebSocket:
 
 Backend 데이터:
 
-- `GET /api/guilds/:guildId/series/:id`
+- `GET /api/guilds/:guildId/series/:id/result`
 - `GET /api/guilds/:guildId/series/:id/balance.svg`
+
+완료 series만 렌더링한다. operator에게만 `canRevertLastGame` 또는 `canDelete`가 true이면 확인 dialog와
+game/lifecycle mutation control을 제공한다. 마지막 game revert가 성공해 series가 `IN_PROGRESS`로 바뀌면
+response `nextHref`를 사용해 `/pick-ban`으로 이동한다.
 
 WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 
@@ -762,8 +789,10 @@ WebSocket: 사용하지 않는다.
 - `logs`: 작업, 대상, 실행자별 감사 로그와 상세 payload.
 
 관리 헤더와 OPERATOR 권한 검사는 admin layout이 공통으로 제공한다. `settings` tab의 server load는
-실제 settings/catalog snapshot을 조회한다. 모집 채널은 모집 메시지, 엔트리 채널은 밸런스 결과와 확정
-엔트리, 로그 채널은 운영 알림의 목적지를 각각 표현하며 세 channel은 `설정 안 함`을 지원한다.
+실제 settings/catalog snapshot을 조회한다. 모집 채널은 모집 메시지의 필수 목적지다. 엔트리 채널은 밸런스
+결과와 확정 엔트리, 결과 채널은 일반 시리즈 최종 결과, 로그 채널은 운영 알림의 목적지를 각각 표현하며
+후자 세 channel만 `설정 안 함`을 지원한다. legacy `recruitmentChannelId=null` snapshot은 읽을 수 있지만
+다음 저장 전에 채널을 선택해 복구해야 한다.
 
 `members` tab의 server load는 다음 strict snapshot을 읽는다.
 
@@ -801,6 +830,7 @@ settings
   operatorRoleId
   recruitmentChannelId | null
   entryChannelId | null
+  resultChannelId | null
   logChannelId | null
   isExternallyPublic
 revision

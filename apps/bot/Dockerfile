@@ -16,7 +16,8 @@ RUN pnpm --filter @monkeybot/bot build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
-RUN corepack enable
+RUN corepack enable \
+ && apk add --no-cache font-noto-cjk
 
 ENV NODE_ENV=production
 ENV MONKEYBOT_BOT_HEALTH_ADDR=0.0.0.0:8081

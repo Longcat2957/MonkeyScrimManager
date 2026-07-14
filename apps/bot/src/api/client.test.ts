@@ -32,6 +32,8 @@ const snapshot: RecruitmentSnapshot = {
 		title: '금요 정기 내전',
 		status: 'OPEN',
 		targetCount: 10,
+		bestOf: 3,
+		hardFearless: false,
 		revision: 3,
 		createdById: userId,
 		channelId: null,
@@ -127,6 +129,10 @@ describe('MonkeyBotApiClient', () => {
 				guildName: 'MSM Seoul',
 				guildIconHash: null,
 				operatorRoleId: '300000000000000001',
+				recruitmentChannelId: '500000000000000001',
+				entryChannelId: null,
+				resultChannelId: '500000000000000002',
+				logChannelId: null,
 				seasonName: '시즌 1'
 			},
 			context
@@ -136,7 +142,7 @@ describe('MonkeyBotApiClient', () => {
 			{ actor, gameName: 'Longcat', tagLine: 'KR1', platform: 'KR' },
 			context
 		);
-		await client.createRecruitment(guildId, { actor }, context);
+		await client.createRecruitment(guildId, { actor, bestOf: 3, hardFearless: false }, context);
 		await client.bindRecruitmentMessage(
 			guildId,
 			recruitmentId,
@@ -179,6 +185,22 @@ describe('MonkeyBotApiClient', () => {
 			expect(headers.get('idempotency-key')).toBe(context.idempotencyKey);
 			expect(headers.get('content-type')).toBe('application/json');
 		}
+		expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+			actor,
+			guildName: 'MSM Seoul',
+			guildIconHash: null,
+			operatorRoleId: '300000000000000001',
+			recruitmentChannelId: '500000000000000001',
+			entryChannelId: null,
+			resultChannelId: '500000000000000002',
+			logChannelId: null,
+			seasonName: '시즌 1'
+		});
+		expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+			actor,
+			bestOf: 3,
+			hardFearless: false
+		});
 	});
 
 	it('rejects success envelopes with unknown fields', async () => {
@@ -188,7 +210,11 @@ describe('MonkeyBotApiClient', () => {
 		const client = createClient(fetchMock);
 
 		await expect(
-			client.createRecruitment(guildId, { actor }, { idempotencyKey: '400000000000000002' })
+			client.createRecruitment(
+				guildId,
+				{ actor, bestOf: 3, hardFearless: false },
+				{ idempotencyKey: '400000000000000002' }
+			)
 		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
 	});
 
@@ -197,7 +223,11 @@ describe('MonkeyBotApiClient', () => {
 		const client = createClient(validFetch);
 
 		await expect(
-			client.createRecruitment(guildId, { actor }, { idempotencyKey: '400000000000000005' })
+			client.createRecruitment(
+				guildId,
+				{ actor, bestOf: 3, hardFearless: false },
+				{ idempotencyKey: '400000000000000005' }
+			)
 		).resolves.toMatchObject({
 			participants: [
 				{ id: userId, displayName: 'Longcat' },
@@ -209,7 +239,11 @@ describe('MonkeyBotApiClient', () => {
 		invalidSnapshot.participants[1]!.id = 'dmy_not-a-uuid';
 		const invalidClient = createClient(vi.fn(async () => envelope(invalidSnapshot)));
 		await expect(
-			invalidClient.createRecruitment(guildId, { actor }, { idempotencyKey: '400000000000000006' })
+			invalidClient.createRecruitment(
+				guildId,
+				{ actor, bestOf: 3, hardFearless: false },
+				{ idempotencyKey: '400000000000000006' }
+			)
 		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
 	});
 
@@ -368,7 +402,7 @@ describe('MonkeyBotApiClient', () => {
 		const client = createClient(fetchMock, 100);
 		const request = client.createRecruitment(
 			guildId,
-			{ actor },
+			{ actor, bestOf: 3, hardFearless: false },
 			{ idempotencyKey: '400000000000000004' }
 		);
 		const assertion = expect(request).rejects.toMatchObject({

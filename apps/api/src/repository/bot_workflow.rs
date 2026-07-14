@@ -16,9 +16,10 @@ use super::{
     },
     mmr::{self, MmrLaneKey, MmrRepositoryError},
     notification_outbox::{
-        self, EnqueueNotification, NotificationOutboxError, RECRUITMENT_MESSAGE_CREATE_TYPE,
+        self, ENTRY_CONFIRMATION_CREATE_TYPE, ENTRY_CONFIRMATION_SCHEMA_VERSION,
+        EnqueueNotification, NotificationOutboxError, RECRUITMENT_MESSAGE_CREATE_TYPE,
         RECRUITMENT_MESSAGE_DELETE_TYPE, RECRUITMENT_MESSAGE_SCHEMA_VERSION,
-        RECRUITMENT_MESSAGE_UPDATE_TYPE,
+        RECRUITMENT_MESSAGE_UPDATE_TYPE, SERIES_RESULT_CREATE_TYPE, SERIES_RESULT_SCHEMA_VERSION,
     },
     riot::{
         self, CanonicalRiotAccount, RiotAccountLinkState, RiotAccountRecord, RiotRepositoryError,
@@ -28,8 +29,9 @@ use crate::{
     auth::AuthService,
     domain::{
         DiscordChannelId, DiscordInteractionId, DiscordMessageId, DiscordRoleId, DiscordUserId,
-        GuildId, GuildMemberStatus, GuildStatus, IdempotencyRecordId, Lane, NotificationId,
-        OutboxEventId, RecruitmentId, RecruitmentStatus, SeasonId, SeriesId, SeriesStatus, UserId,
+        GameId, GuildId, GuildMemberStatus, GuildStatus, IdempotencyRecordId, Lane, LaneMatchup,
+        MatchupPlayer, NotificationId, OutboxEventId, RecruitmentId, RecruitmentStatus, RosterTeam,
+        SeasonId, SeriesId, SeriesStatus, UserId, apply_game_elo,
     },
     infrastructure::postgres::{
         DatabaseTransaction, DeadlockRetryPolicy, TransactionAttemptError, TransactionRetryError,
@@ -52,7 +54,15 @@ const SERIES_REVERT_METHOD: &str = "POST";
 const SERIES_REVERT_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/revert";
 const SERIES_DELETE_METHOD: &str = "DELETE";
 const SERIES_DELETE_ROUTE: &str = "/api/guilds/{guildId}/series/{id}";
-const SERIES_BEST_OF: i16 = 3;
+const SERIES_GAME_SUBMIT_METHOD: &str = "POST";
+const SERIES_GAME_SUBMIT_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/games";
+const SERIES_GAME_REVERT_METHOD: &str = "DELETE";
+const SERIES_GAME_REVERT_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/games/last";
+const SERIES_EARLY_COMPLETE_METHOD: &str = "POST";
+const SERIES_EARLY_COMPLETE_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/complete";
+pub const DEFAULT_RECRUITMENT_BEST_OF: i16 = 3;
+const MAX_CHAMPION_ID_BYTES: usize = 64;
+const MAX_PATCH_VERSION_BYTES: usize = 32;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +81,10 @@ pub struct SetupGuildCommand {
     pub guild_name: String,
     pub guild_icon_hash: Option<String>,
     pub operator_role_id: DiscordRoleId,
+    pub recruitment_channel_id: DiscordChannelId,
+    pub entry_channel_id: Option<DiscordChannelId>,
+    pub result_channel_id: Option<DiscordChannelId>,
+    pub log_channel_id: Option<DiscordChannelId>,
     pub season_name: String,
 }
 
@@ -146,6 +160,7 @@ pub struct RegisterGuildMemberResult {
 pub enum BotRecruitmentCommand {
     Create {
         actor: BotActor,
+        rules: RecruitmentSeriesRules,
     },
     BindMessage {
         actor: BotActor,
@@ -175,6 +190,31 @@ pub enum BotRecruitmentCommand {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecruitmentSeriesRules {
+    pub best_of: i16,
+    pub hard_fearless: bool,
+}
+
+impl Default for RecruitmentSeriesRules {
+    fn default() -> Self {
+        Self {
+            best_of: DEFAULT_RECRUITMENT_BEST_OF,
+            hard_fearless: false,
+        }
+    }
+}
+
+impl RecruitmentSeriesRules {
+    pub fn from_optional(best_of: Option<i16>, hard_fearless: Option<bool>) -> Self {
+        Self {
+            best_of: best_of.unwrap_or(DEFAULT_RECRUITMENT_BEST_OF),
+            hard_fearless: hard_fearless.unwrap_or(false),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecruitmentSummarySnapshot {
@@ -183,6 +223,8 @@ pub struct RecruitmentSummarySnapshot {
     pub title: String,
     pub status: RecruitmentStatus,
     pub target_count: i16,
+    pub best_of: i16,
+    pub hard_fearless: bool,
     pub revision: i64,
     pub channel_id: Option<DiscordChannelId>,
     pub message_id: Option<DiscordMessageId>,
@@ -229,6 +271,8 @@ pub struct EntryDraftRecruitmentSnapshot {
     pub title: String,
     pub status: RecruitmentStatus,
     pub target_count: i16,
+    pub best_of: i16,
+    pub hard_fearless: bool,
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
@@ -298,6 +342,133 @@ pub struct CreatedSeriesSnapshot {
     pub href: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryConfirmationSnapshot {
+    series: EntryConfirmationSeriesSnapshot,
+    teams: Vec<EntryConfirmationTeamSnapshot>,
+    links: EntryConfirmationLinksSnapshot,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryConfirmationSeriesSnapshot {
+    id: SeriesId,
+    display_number: i64,
+    title: String,
+    best_of: i16,
+    hard_fearless: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryConfirmationTeamSnapshot {
+    team: String,
+    name: String,
+    players: Vec<EntryConfirmationPlayerSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryConfirmationPlayerSnapshot {
+    id: UserId,
+    display_name: String,
+    lane: Lane,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryConfirmationLinksSnapshot {
+    pick_ban: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationSnapshot {
+    series: SeriesResultNotificationSeriesSnapshot,
+    teams: Vec<SeriesResultNotificationTeamSnapshot>,
+    score: SeriesResultNotificationScoreSnapshot,
+    games: Vec<SeriesResultNotificationGameSnapshot>,
+    links: SeriesResultNotificationLinksSnapshot,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationSeriesSnapshot {
+    id: SeriesId,
+    display_number: i64,
+    title: String,
+    best_of: i16,
+    hard_fearless: bool,
+    winning_team: Option<String>,
+    terminal_reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationScoreSnapshot {
+    team_1: i64,
+    team_2: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationTeamSnapshot {
+    team: String,
+    name: String,
+    players: Vec<SeriesResultNotificationPlayerSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationPlayerSnapshot {
+    id: UserId,
+    display_name: String,
+    lane: Lane,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationGameSnapshot {
+    set_number: i16,
+    winner: String,
+    side_preset: String,
+    team_1: SeriesResultNotificationGameTeamSnapshot,
+    team_2: SeriesResultNotificationGameTeamSnapshot,
+    bans: SeriesResultNotificationGameBansSnapshot,
+    patch_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationGameBansSnapshot {
+    blue: Vec<Option<String>>,
+    red: Vec<Option<String>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationGameTeamSnapshot {
+    team: String,
+    name: String,
+    picks: Vec<SeriesResultNotificationGamePickSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationGamePickSnapshot {
+    id: UserId,
+    display_name: String,
+    lane: Lane,
+    champion_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesResultNotificationLinksSnapshot {
+    result: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesPickBanSnapshot {
@@ -315,6 +486,7 @@ pub struct SeriesPickBanSeriesSnapshot {
     pub display_number: i64,
     pub title: String,
     pub best_of: i16,
+    pub hard_fearless: bool,
     pub status: SeriesStatus,
     pub revision: i64,
     pub source_recruitment_id: RecruitmentId,
@@ -362,7 +534,178 @@ pub struct SeriesPickBanBansSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesPickBanCapabilities {
+    pub can_edit: bool,
+    pub can_submit: bool,
+    pub can_revert_last_game: bool,
+    pub can_early_complete: bool,
     pub can_revert: bool,
+    pub can_delete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum SeriesPickBanOperation {
+    SetSide {
+        #[serde(rename = "sidePreset")]
+        side_preset: String,
+    },
+    SetPick {
+        #[serde(rename = "playerId")]
+        player_id: UserId,
+        #[serde(rename = "championId")]
+        champion_id: String,
+    },
+    ClearPick {
+        #[serde(rename = "playerId")]
+        player_id: UserId,
+    },
+    SetBan {
+        side: String,
+        slot: i16,
+        #[serde(rename = "championId")]
+        champion_id: String,
+    },
+    ClearBan {
+        side: String,
+        slot: i16,
+    },
+    ApplyBulk {
+        items: Vec<SeriesPickBanBulkItem>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum SeriesPickBanBulkItem {
+    SetPick {
+        #[serde(rename = "playerId")]
+        player_id: UserId,
+        #[serde(rename = "championId")]
+        champion_id: String,
+    },
+    SetBan {
+        side: String,
+        slot: i16,
+        #[serde(rename = "championId")]
+        champion_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SeriesGameSubmitCommand {
+    pub set_number: i16,
+    pub expected_revision: i64,
+    pub side_preset: String,
+    pub winner: String,
+    pub picks: Option<BTreeMap<UserId, Option<String>>>,
+    pub bans: Option<SeriesPickBanBansSnapshot>,
+    pub patch_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SeriesGameRevertCommand {
+    pub expected_revision: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SeriesEarlyCompletionOutcome {
+    #[serde(rename = "TEAM_1")]
+    Team1,
+    #[serde(rename = "TEAM_2")]
+    Team2,
+    #[serde(rename = "DRAW")]
+    Draw,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SeriesEarlyCompleteCommand {
+    pub expected_revision: i64,
+    pub outcome: SeriesEarlyCompletionOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesGameMutationResult {
+    pub series: SeriesGameMutationSeries,
+    pub confirmed_game_count: i64,
+    pub next_href: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesGameMutationSeries {
+    pub id: SeriesId,
+    pub status: SeriesStatus,
+    pub revision: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesResultSnapshot {
+    pub series: SeriesResultSeriesSnapshot,
+    pub teams: Vec<SeriesPickBanTeamSnapshot>,
+    pub games: Vec<SeriesResultGameSnapshot>,
+    pub score: SeriesResultScoreSnapshot,
+    pub capabilities: SeriesResultCapabilities,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesResultSeriesSnapshot {
+    pub id: SeriesId,
+    pub display_number: i64,
+    pub title: String,
+    pub best_of: i16,
+    pub hard_fearless: bool,
+    pub status: SeriesStatus,
+    pub revision: i64,
+    pub source_recruitment_id: RecruitmentId,
+    pub winning_team: Option<String>,
+    pub terminal_reason: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub ended_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesResultGameSnapshot {
+    pub id: GameId,
+    pub set_number: i16,
+    pub side_preset: String,
+    pub winner: String,
+    pub picks: BTreeMap<String, Option<String>>,
+    pub bans: SeriesPickBanBansSnapshot,
+    pub patch_version: Option<String>,
+    pub duration_seconds: Option<i32>,
+    pub mmr_changes: Vec<SeriesResultMmrChange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesResultMmrChange {
+    pub user_id: UserId,
+    pub lane: Lane,
+    pub delta: f64,
+    pub mmr_before: f64,
+    pub mmr_after: f64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesResultScoreSnapshot {
+    pub team_1: i64,
+    pub team_2: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesResultCapabilities {
+    pub can_revert_last_game: bool,
     pub can_delete: bool,
 }
 
@@ -551,12 +894,13 @@ pub async fn execute_recruitment_command(
 ) -> Result<RecruitmentSnapshot, BotWorkflowError> {
     validate_recruitment_command(&command)?;
 
-    if let BotRecruitmentCommand::Create { actor } = &command {
+    if let BotRecruitmentCommand::Create { actor, rules } = &command {
         let request_hash = request_hash(guild_id, &command)?;
         return execute_recruitment_create(
             pool,
             guild_id,
             RecruitmentCreateActor::Bot(actor.clone()),
+            *rules,
             IdempotencyPrincipalType::Bot,
             BOT_PRINCIPAL_ID,
             idempotency_key.as_str(),
@@ -605,14 +949,17 @@ pub async fn create_web_recruitment(
     pool: &PgPool,
     guild_id: &GuildId,
     actor_id: &UserId,
+    rules: RecruitmentSeriesRules,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<RecruitmentSnapshot, BotWorkflowError> {
-    let request_hash = request_hash(guild_id, &WebRecruitmentCreateRequest {})?;
+    validate_recruitment_series_rules(&rules)?;
+    let request_hash = request_hash(guild_id, &WebRecruitmentCreateRequest { rules })?;
     execute_recruitment_create(
         pool,
         guild_id,
         RecruitmentCreateActor::Session(actor_id.clone()),
+        rules,
         IdempotencyPrincipalType::User,
         actor_id.as_str(),
         idempotency_key,
@@ -878,6 +1225,227 @@ pub async fn delete_web_series(
     .await
 }
 
+pub async fn update_web_series_pick_ban(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    operation: SeriesPickBanOperation,
+    request_id: &RequestId,
+) -> Result<SeriesPickBanSnapshot, BotWorkflowError> {
+    validate_series_pick_ban_operation(&operation)?;
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected series revision must be non-negative",
+        ));
+    }
+
+    let command = WebSeriesPickBanCommand {
+        series_id,
+        expected_revision,
+        operation,
+    };
+    let guild_id = guild_id.clone();
+    let actor_id = actor_id.clone();
+    let request_id = request_id.0.clone();
+    let prepared = WebSeriesPickBanPrepared::new();
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let actor_id = actor_id.clone();
+            let request_id = request_id.clone();
+            let command = command.clone();
+            Box::pin(async move {
+                execute_web_series_pick_ban_attempt(
+                    transaction,
+                    &guild_id,
+                    &actor_id,
+                    &request_id,
+                    &command,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
+}
+
+pub async fn submit_web_series_game(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &RequestId,
+    command: SeriesGameSubmitCommand,
+) -> Result<SeriesGameMutationResult, BotWorkflowError> {
+    validate_series_game_submit_command(&command)?;
+    let command = WebSeriesGameSubmitCommand { series_id, command };
+    let request_hash = request_hash(guild_id, &command)?;
+    let guild_id = guild_id.clone();
+    let actor_id = actor_id.clone();
+    let idempotency_key = idempotency_key.to_owned();
+    let request_id = request_id.0.clone();
+    let prepared = WebSeriesGameMutationPrepared::new();
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let actor_id = actor_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let request_id = request_id.clone();
+            let request_hash = request_hash.clone();
+            let command = command.clone();
+            Box::pin(async move {
+                execute_web_series_game_submit_attempt(
+                    transaction,
+                    &guild_id,
+                    &actor_id,
+                    &idempotency_key,
+                    &request_id,
+                    &request_hash,
+                    &command,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
+}
+
+pub async fn revert_last_web_series_game(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &RequestId,
+    command: SeriesGameRevertCommand,
+) -> Result<SeriesGameMutationResult, BotWorkflowError> {
+    if command.expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected series revision must be non-negative",
+        ));
+    }
+    let command = WebSeriesGameRevertCommand { series_id, command };
+    let request_hash = request_hash(guild_id, &command)?;
+    let guild_id = guild_id.clone();
+    let actor_id = actor_id.clone();
+    let idempotency_key = idempotency_key.to_owned();
+    let request_id = request_id.0.clone();
+    let prepared = WebSeriesGameMutationPrepared::new();
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let actor_id = actor_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let request_id = request_id.clone();
+            let request_hash = request_hash.clone();
+            let command = command.clone();
+            Box::pin(async move {
+                execute_web_series_game_revert_attempt(
+                    transaction,
+                    &guild_id,
+                    &actor_id,
+                    &idempotency_key,
+                    &request_id,
+                    &request_hash,
+                    &command,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
+}
+
+pub async fn complete_web_series_early(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &RequestId,
+    command: SeriesEarlyCompleteCommand,
+) -> Result<SeriesGameMutationResult, BotWorkflowError> {
+    if command.expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected series revision must be non-negative",
+        ));
+    }
+    let command = WebSeriesEarlyCompleteCommand { series_id, command };
+    let request_hash = request_hash(guild_id, &command)?;
+    let guild_id = guild_id.clone();
+    let actor_id = actor_id.clone();
+    let idempotency_key = idempotency_key.to_owned();
+    let request_id = request_id.0.clone();
+    let prepared = WebSeriesEarlyCompletePrepared::new();
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let actor_id = actor_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let request_id = request_id.clone();
+            let request_hash = request_hash.clone();
+            let command = command.clone();
+            Box::pin(async move {
+                execute_web_series_early_complete_attempt(
+                    transaction,
+                    &guild_id,
+                    &actor_id,
+                    &idempotency_key,
+                    &request_id,
+                    &request_hash,
+                    &command,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
+}
+
+pub async fn get_series_result_snapshot(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    viewer_id: &UserId,
+) -> Result<SeriesResultSnapshot, BotWorkflowError> {
+    let mut transaction = begin(pool).await.map_err(BotWorkflowError::Database)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *transaction)
+        .await
+        .map_err(BotWorkflowError::Database)?;
+    let snapshot = series_result_snapshot(&mut transaction, guild_id, series_id, viewer_id)
+        .await
+        .map_err(AttemptError::into_public)?;
+    transaction
+        .commit()
+        .await
+        .map_err(BotWorkflowError::Database)?;
+    Ok(snapshot)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn execute_web_series_lifecycle(
     pool: &PgPool,
@@ -1013,6 +1581,7 @@ async fn execute_recruitment_create(
     pool: &PgPool,
     guild_id: &GuildId,
     actor: RecruitmentCreateActor,
+    rules: RecruitmentSeriesRules,
     principal_type: IdempotencyPrincipalType,
     principal_id: &str,
     idempotency_key: &str,
@@ -1031,6 +1600,7 @@ async fn execute_recruitment_create(
         move |transaction| {
             let guild_id = guild_id.clone();
             let actor = actor.clone();
+            let rules = rules;
             let principal_id = principal_id.clone();
             let idempotency_key = idempotency_key.clone();
             let request_id = request_id.clone();
@@ -1041,6 +1611,7 @@ async fn execute_recruitment_create(
                     transaction,
                     &guild_id,
                     &actor,
+                    rules,
                     principal_type,
                     &principal_id,
                     &idempotency_key,
@@ -1217,13 +1788,17 @@ async fn setup_guild_attempt(
     let config_revision = sqlx::query_scalar::<_, i64>(
         "INSERT INTO guild_config (
              guild_id, display_name, operator_role_id, recruitment_channel_id,
-             entry_channel_id, log_channel_id, is_externally_public, revision, updated_by, updated_at
-         ) VALUES ($1, $2, $3, NULL, NULL, NULL, false, 0, $4, $5)
+             entry_channel_id, result_channel_id, log_channel_id, is_externally_public, revision, updated_by, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, false, 0, $8, $9)
          RETURNING revision",
     )
     .bind(guild_id)
     .bind(command.guild_name.trim())
     .bind(&command.operator_role_id)
+    .bind(&command.recruitment_channel_id)
+    .bind(&command.entry_channel_id)
+    .bind(&command.result_channel_id)
+    .bind(&command.log_channel_id)
     .bind(&command.actor.id)
     .bind(prepared.now)
     .fetch_one(&mut **transaction)
@@ -2078,6 +2653,7 @@ async fn execute_web_series_create_attempt(
         IdempotencyDecision::Acquired(record_id) => record_id,
         IdempotencyDecision::Replay(result) => return Ok(result),
     };
+    let entry_channel_id = configured_entry_channel(transaction, guild_id).await?;
 
     // Preserve the common recruitment -> entry-draft lock order used by every entry mutation.
     let recruitment =
@@ -2122,14 +2698,14 @@ async fn execute_web_series_create_attempt(
     sqlx::query(
         "INSERT INTO series (
              guild_id, id, season_id, source_recruitment_id, display_number, title,
-             best_of, status, winning_team, terminal_reason, revision,
+             best_of, hard_fearless, status, winning_team, terminal_reason, revision,
              started_at, ended_at, created_by, end_card_channel_id, end_card_message_id,
              updated_by, updated_at, deleted_at
          ) VALUES (
              $1, $2, $3, $4, $5, $6,
-             $7, 'IN_PROGRESS', NULL, NULL, 0,
-             $8, NULL, $9, NULL, NULL,
-             $9, $8, NULL
+             $7, $8, 'IN_PROGRESS', NULL, NULL, 0,
+             $9, NULL, $10, NULL, NULL,
+             $10, $9, NULL
          )",
     )
     .bind(guild_id)
@@ -2138,7 +2714,8 @@ async fn execute_web_series_create_attempt(
     .bind(command.source_recruitment_id.as_uuid())
     .bind(display_number)
     .bind(&title)
-    .bind(SERIES_BEST_OF)
+    .bind(recruitment.best_of)
+    .bind(recruitment.hard_fearless)
     .bind(prepared.now)
     .bind(actor_id)
     .execute(&mut **transaction)
@@ -2185,6 +2762,38 @@ async fn execute_web_series_create_attempt(
     .await?;
     if converted.rows_affected() != 1 {
         return Err(AttemptError::InvariantViolation);
+    }
+
+    let converted_recruitment_snapshot =
+        recruitment_snapshot(transaction, guild_id, command.source_recruitment_id).await?;
+    enqueue_recruitment_message_update(
+        transaction,
+        guild_id,
+        &converted_recruitment_snapshot,
+        prepared.recruitment_message_notification_id,
+        prepared.now,
+    )
+    .await?;
+    if let Some(channel_id) = entry_channel_id.as_ref() {
+        let snapshot = entry_confirmation_snapshot(
+            transaction,
+            guild_id,
+            prepared.series_id,
+            display_number,
+            &title,
+            recruitment.best_of,
+            recruitment.hard_fearless,
+        )
+        .await?;
+        enqueue_entry_confirmation_notification(
+            transaction,
+            guild_id,
+            channel_id,
+            &snapshot,
+            prepared.entry_confirmation_notification_id,
+            prepared.now,
+        )
+        .await?;
     }
 
     let result = SeriesCreationResult {
@@ -2258,6 +2867,641 @@ async fn execute_web_series_create_attempt(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn execute_web_series_pick_ban_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    actor_id: &UserId,
+    request_id: &str,
+    command: &WebSeriesPickBanCommand,
+    prepared: WebSeriesPickBanPrepared,
+) -> Result<SeriesPickBanSnapshot, AttemptError> {
+    let operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id).await?;
+
+    let series = lock_series(transaction, guild_id, command.series_id).await?;
+    if series.revision != command.expected_revision {
+        return Err(AttemptError::SeriesRevisionConflict {
+            expected: command.expected_revision,
+            actual: series.revision,
+        });
+    }
+    ensure_series_in_progress(series.status)?;
+
+    let confirmed_game_count =
+        confirmed_series_game_count(transaction, guild_id, command.series_id).await?;
+    let set_number = next_series_set_number(confirmed_game_count, series.best_of)?;
+    let roster = locked_series_roster(transaction, guild_id, command.series_id).await?;
+    ensure_complete_series_roster_rows(&roster)?;
+    let input_id = ensure_locked_series_draft_input(
+        transaction,
+        guild_id,
+        command.series_id,
+        set_number,
+        prepared.input_id,
+        actor_id,
+        prepared.now,
+    )
+    .await?;
+    apply_series_pick_ban_operation(transaction, guild_id, input_id, &roster, &command.operation)
+        .await?;
+    let draft_updated = sqlx::query(
+        "UPDATE game_inputs
+         SET updated_by = $1, updated_at = $2
+         WHERE guild_id = $3 AND id = $4 AND status = 'DRAFT'",
+    )
+    .bind(actor_id)
+    .bind(prepared.now)
+    .bind(guild_id)
+    .bind(input_id)
+    .execute(&mut **transaction)
+    .await?;
+    if draft_updated.rows_affected() != 1 {
+        return Err(AttemptError::InvariantViolation);
+    }
+    validate_series_pick_ban_draft(
+        transaction,
+        guild_id,
+        command.series_id,
+        series.hard_fearless,
+    )
+    .await?;
+
+    let next_revision = increment_series_revision(
+        transaction,
+        guild_id,
+        command.series_id,
+        actor_id,
+        prepared.now,
+        SeriesStatus::InProgress,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    let snapshot =
+        series_pick_ban_snapshot(transaction, guild_id, command.series_id, actor_id).await?;
+    if snapshot.series.revision != next_revision {
+        return Err(AttemptError::InvariantViolation);
+    }
+    let series_id = command.series_id.to_string();
+    insert_audit(
+        transaction,
+        guild_id,
+        AuditInsert {
+            id: prepared.audit_id,
+            actor_id: actor_id.as_str(),
+            action: "SERIES_PICKBAN_UPDATED",
+            target_type: "SERIES_PICKBAN_DRAFT",
+            target_id: &series_id,
+            request_id,
+            before_summary: Some(json!({
+                "revision": series.revision,
+                "setNumber": set_number,
+                "hardFearless": series.hard_fearless,
+            })),
+            after_summary: Some(json!({
+                "revision": next_revision,
+                "operation": command.operation,
+            })),
+            now: prepared.now,
+        },
+    )
+    .await?;
+    insert_outbox(
+        transaction,
+        guild_id,
+        prepared.outbox_event_id,
+        format!("guild:{guild_id}:series:{}", command.series_id),
+        "SERIES",
+        &series_id,
+        next_revision,
+        "SERIES_PICKBAN_UPDATED",
+        json!({
+            "type": "invalidate",
+            "resourceId": command.series_id,
+            "revision": next_revision,
+        }),
+        prepared.now,
+    )
+    .await?;
+    Ok(snapshot)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_web_series_game_submit_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &str,
+    request_hash: &[u8],
+    command: &WebSeriesGameSubmitCommand,
+    prepared: WebSeriesGameMutationPrepared,
+) -> Result<SeriesGameMutationResult, AttemptError> {
+    let operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id).await?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let record_id = match acquire_idempotency::<SeriesGameMutationResult>(
+        transaction,
+        IdempotencyAcquire {
+            scope: &scope,
+            record_id: prepared.idempotency_record_id,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: actor_id.as_str(),
+            method: SERIES_GAME_SUBMIT_METHOD,
+            route_template: SERIES_GAME_SUBMIT_ROUTE,
+            key: idempotency_key,
+            request_hash,
+            now: prepared.now,
+        },
+    )
+    .await?
+    {
+        IdempotencyDecision::Acquired(record_id) => record_id,
+        IdempotencyDecision::Replay(result) => return Ok(result),
+    };
+
+    let series = lock_series(transaction, guild_id, command.series_id).await?;
+    if series.revision != command.command.expected_revision {
+        return Err(AttemptError::SeriesRevisionConflict {
+            expected: command.command.expected_revision,
+            actual: series.revision,
+        });
+    }
+    ensure_series_in_progress(series.status)?;
+    let roster = locked_series_roster(transaction, guild_id, command.series_id).await?;
+    ensure_complete_series_roster_rows(&roster)?;
+    let confirmed_game_count =
+        confirmed_series_game_count(transaction, guild_id, command.series_id).await?;
+    let expected_set_number = next_series_set_number(confirmed_game_count, series.best_of)?;
+    if command.command.set_number != expected_set_number {
+        return Err(AttemptError::SeriesSetNotCurrent {
+            expected: expected_set_number,
+            actual: command.command.set_number,
+        });
+    }
+    let input_id = ensure_locked_series_draft_input(
+        transaction,
+        guild_id,
+        command.series_id,
+        expected_set_number,
+        prepared.input_id,
+        actor_id,
+        prepared.now,
+    )
+    .await?;
+    replace_series_draft_from_submit(transaction, guild_id, input_id, &roster, &command.command)
+        .await?;
+    validate_series_pick_ban_draft(
+        transaction,
+        guild_id,
+        command.series_id,
+        series.hard_fearless,
+    )
+    .await?;
+
+    let input = sqlx::query_as::<_, SeriesPickBanGameInputRow>(
+        "SELECT id, set_number, side_preset, winning_side, patch_version
+         FROM game_inputs
+         WHERE guild_id = $1 AND id = $2 AND status = 'DRAFT'
+         FOR UPDATE",
+    )
+    .bind(guild_id)
+    .bind(input_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::InvariantViolation)?;
+    let winner = input
+        .winning_side
+        .as_deref()
+        .map(canonical_blue_red_side)
+        .transpose()?
+        .ok_or(AttemptError::InvalidGameResult)?;
+    let side_preset = canonical_side_preset(&input.side_preset)?;
+    let winner_team = winner_roster_team(&side_preset, &winner)?;
+
+    let picks = series_input_picks(transaction, guild_id, input_id, &roster).await?;
+    let bans = series_input_bans(transaction, guild_id, input_id).await?;
+    let season_id = series_season_id(transaction, guild_id, command.series_id).await?;
+    sqlx::query(
+        "INSERT INTO games (
+             guild_id, id, season_id, series_id, auction_match_id, source_input_id, game_number,
+             side_preset, winning_side, duration_seconds, patch_version, riot_match_id, status,
+             mmr_status, played_at, confirmed_by, confirmed_by_type, confirmed_at,
+             voided_by, voided_by_type, voided_at, void_reason
+         ) VALUES (
+             $1, $2, $3, $4, NULL, $5, $6,
+             $7, $8, NULL, $9, NULL, 'CONFIRMED', 'APPLIED', $10, $11, 'USER', $10,
+             NULL, NULL, NULL, NULL
+         )",
+    )
+    .bind(guild_id)
+    .bind(prepared.game_id.as_uuid())
+    .bind(season_id.as_uuid())
+    .bind(command.series_id.as_uuid())
+    .bind(input_id)
+    .bind(input.set_number)
+    .bind(&side_preset)
+    .bind(&winner)
+    .bind(&input.patch_version)
+    .bind(prepared.now)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    insert_series_game_participants(transaction, guild_id, prepared.game_id, &roster, &picks)
+        .await?;
+    insert_series_game_bans(transaction, guild_id, prepared.game_id, &bans).await?;
+    apply_series_game_mmr(
+        transaction,
+        guild_id,
+        season_id,
+        prepared.game_id,
+        &roster,
+        winner_team,
+        actor_id,
+        request_id,
+        prepared.now,
+    )
+    .await?;
+    let submitted = sqlx::query(
+        "UPDATE game_inputs
+         SET status = 'SUBMITTED', updated_by = $1, updated_at = $2
+         WHERE guild_id = $3 AND id = $4 AND status = 'DRAFT'",
+    )
+    .bind(actor_id)
+    .bind(prepared.now)
+    .bind(guild_id)
+    .bind(input_id)
+    .execute(&mut **transaction)
+    .await?;
+    if submitted.rows_affected() != 1 {
+        return Err(AttemptError::InvariantViolation);
+    }
+
+    let (team_1_score, team_2_score) =
+        confirmed_series_score(transaction, guild_id, command.series_id).await?;
+    let required_wins = i64::from(series.best_of / 2 + 1);
+    let (status, winning_team, terminal_reason, ended_at) = if team_1_score >= required_wins {
+        (
+            SeriesStatus::Completed,
+            Some("TEAM_1"),
+            Some("SCORE_REACHED"),
+            Some(prepared.now),
+        )
+    } else if team_2_score >= required_wins {
+        (
+            SeriesStatus::Completed,
+            Some("TEAM_2"),
+            Some("SCORE_REACHED"),
+            Some(prepared.now),
+        )
+    } else {
+        (SeriesStatus::InProgress, None, None, None)
+    };
+    let revision = increment_series_revision(
+        transaction,
+        guild_id,
+        command.series_id,
+        actor_id,
+        prepared.now,
+        status,
+        winning_team,
+        terminal_reason,
+        ended_at,
+    )
+    .await?;
+    let confirmed_game_count = confirmed_game_count + 1;
+    let result = SeriesGameMutationResult {
+        series: SeriesGameMutationSeries {
+            id: command.series_id,
+            status,
+            revision,
+        },
+        confirmed_game_count,
+        next_href: if status == SeriesStatus::Completed {
+            format!("/g/{guild_id}/series/{}/result", command.series_id)
+        } else {
+            format!("/g/{guild_id}/series/{}/pick-ban", command.series_id)
+        },
+    };
+    if status == SeriesStatus::Completed {
+        enqueue_series_result_notification_if_configured(
+            transaction,
+            guild_id,
+            command.series_id,
+            revision,
+            prepared.result_notification_id,
+            prepared.now,
+        )
+        .await?;
+    }
+    let series_id = command.series_id.to_string();
+    let game_id = prepared.game_id.to_string();
+    insert_audit(
+        transaction,
+        guild_id,
+        AuditInsert {
+            id: prepared.audit_id,
+            actor_id: actor_id.as_str(),
+            action: "SERIES_GAME_CONFIRMED",
+            target_type: "SERIES_GAME",
+            target_id: &game_id,
+            request_id,
+            before_summary: Some(json!({
+                "seriesId": command.series_id,
+                "seriesRevision": series.revision,
+                "setNumber": input.set_number,
+            })),
+            after_summary: Some(serde_json::to_value(&result)?),
+            now: prepared.now,
+        },
+    )
+    .await?;
+    insert_outbox(
+        transaction,
+        guild_id,
+        prepared.outbox_event_id,
+        format!("guild:{guild_id}:series:{}", command.series_id),
+        "SERIES",
+        &series_id,
+        revision,
+        "SERIES_GAME_CONFIRMED",
+        json!({
+            "type": "invalidate",
+            "resourceId": command.series_id,
+            "revision": revision,
+        }),
+        prepared.now,
+    )
+    .await?;
+    complete_idempotency(transaction, &scope, record_id, 201, &result, prepared.now).await?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_web_series_game_revert_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &str,
+    request_hash: &[u8],
+    command: &WebSeriesGameRevertCommand,
+    prepared: WebSeriesGameMutationPrepared,
+) -> Result<SeriesGameMutationResult, AttemptError> {
+    let operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id).await?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let record_id = match acquire_idempotency::<SeriesGameMutationResult>(
+        transaction,
+        IdempotencyAcquire {
+            scope: &scope,
+            record_id: prepared.idempotency_record_id,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: actor_id.as_str(),
+            method: SERIES_GAME_REVERT_METHOD,
+            route_template: SERIES_GAME_REVERT_ROUTE,
+            key: idempotency_key,
+            request_hash,
+            now: prepared.now,
+        },
+    )
+    .await?
+    {
+        IdempotencyDecision::Acquired(record_id) => record_id,
+        IdempotencyDecision::Replay(result) => return Ok(result),
+    };
+    let series = lock_series(transaction, guild_id, command.series_id).await?;
+    if series.revision != command.command.expected_revision {
+        return Err(AttemptError::SeriesRevisionConflict {
+            expected: command.command.expected_revision,
+            actual: series.revision,
+        });
+    }
+    ensure_series_game_revertible(series.status)?;
+    let reverted = void_last_confirmed_series_game(
+        transaction,
+        guild_id,
+        command.series_id,
+        actor_id,
+        request_id,
+        prepared.now,
+    )
+    .await?;
+    let revision = increment_series_revision(
+        transaction,
+        guild_id,
+        command.series_id,
+        actor_id,
+        prepared.now,
+        SeriesStatus::InProgress,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    let confirmed_game_count =
+        confirmed_series_game_count(transaction, guild_id, command.series_id).await?;
+    let result = SeriesGameMutationResult {
+        series: SeriesGameMutationSeries {
+            id: command.series_id,
+            status: SeriesStatus::InProgress,
+            revision,
+        },
+        confirmed_game_count,
+        next_href: format!("/g/{guild_id}/series/{}/pick-ban", command.series_id),
+    };
+    let series_id = command.series_id.to_string();
+    let game_id = reverted.game_id.to_string();
+    insert_audit(
+        transaction,
+        guild_id,
+        AuditInsert {
+            id: prepared.audit_id,
+            actor_id: actor_id.as_str(),
+            action: "SERIES_GAME_REVERTED",
+            target_type: "SERIES_GAME",
+            target_id: &game_id,
+            request_id,
+            before_summary: Some(json!({
+                "seriesId": command.series_id,
+                "seriesRevision": series.revision,
+                "setNumber": reverted.set_number,
+            })),
+            after_summary: Some(serde_json::to_value(&result)?),
+            now: prepared.now,
+        },
+    )
+    .await?;
+    insert_outbox(
+        transaction,
+        guild_id,
+        prepared.outbox_event_id,
+        format!("guild:{guild_id}:series:{}", command.series_id),
+        "SERIES",
+        &series_id,
+        revision,
+        "SERIES_GAME_REVERTED",
+        json!({
+            "type": "invalidate",
+            "resourceId": command.series_id,
+            "revision": revision,
+        }),
+        prepared.now,
+    )
+    .await?;
+    complete_idempotency(transaction, &scope, record_id, 200, &result, prepared.now).await?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_web_series_early_complete_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &str,
+    request_hash: &[u8],
+    command: &WebSeriesEarlyCompleteCommand,
+    prepared: WebSeriesEarlyCompletePrepared,
+) -> Result<SeriesGameMutationResult, AttemptError> {
+    let operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id).await?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let record_id = match acquire_idempotency::<SeriesGameMutationResult>(
+        transaction,
+        IdempotencyAcquire {
+            scope: &scope,
+            record_id: prepared.idempotency_record_id,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: actor_id.as_str(),
+            method: SERIES_EARLY_COMPLETE_METHOD,
+            route_template: SERIES_EARLY_COMPLETE_ROUTE,
+            key: idempotency_key,
+            request_hash,
+            now: prepared.now,
+        },
+    )
+    .await?
+    {
+        IdempotencyDecision::Acquired(record_id) => record_id,
+        IdempotencyDecision::Replay(result) => return Ok(result),
+    };
+
+    let series = lock_series(transaction, guild_id, command.series_id).await?;
+    if series.revision != command.command.expected_revision {
+        return Err(AttemptError::SeriesRevisionConflict {
+            expected: command.command.expected_revision,
+            actual: series.revision,
+        });
+    }
+    ensure_series_in_progress(series.status)?;
+
+    let confirmed_game_count =
+        confirmed_series_game_count(transaction, guild_id, command.series_id).await?;
+    if !can_early_complete_series(series.best_of, confirmed_game_count) {
+        return Err(AttemptError::SeriesEarlyCompletionUnavailable {
+            best_of: series.best_of,
+            confirmed_game_count,
+        });
+    }
+    let (team_1_score, team_2_score) =
+        confirmed_series_score(transaction, guild_id, command.series_id).await?;
+    let (winning_team, terminal_reason) = match command.command.outcome {
+        SeriesEarlyCompletionOutcome::Team1 => (Some("TEAM_1"), "EARLY_WIN"),
+        SeriesEarlyCompletionOutcome::Team2 => (Some("TEAM_2"), "EARLY_WIN"),
+        SeriesEarlyCompletionOutcome::Draw => {
+            if team_1_score != team_2_score {
+                return Err(AttemptError::SeriesEarlyDrawRequiresTiedScore {
+                    team_1_score,
+                    team_2_score,
+                });
+            }
+            (None, "EARLY_DRAW")
+        }
+    };
+    let revision = increment_series_revision(
+        transaction,
+        guild_id,
+        command.series_id,
+        actor_id,
+        prepared.now,
+        SeriesStatus::Completed,
+        winning_team,
+        Some(terminal_reason),
+        Some(prepared.now),
+    )
+    .await?;
+    let result = SeriesGameMutationResult {
+        series: SeriesGameMutationSeries {
+            id: command.series_id,
+            status: SeriesStatus::Completed,
+            revision,
+        },
+        confirmed_game_count,
+        next_href: format!("/g/{guild_id}/series/{}/result", command.series_id),
+    };
+    enqueue_series_result_notification_if_configured(
+        transaction,
+        guild_id,
+        command.series_id,
+        revision,
+        prepared.result_notification_id,
+        prepared.now,
+    )
+    .await?;
+    let series_id = command.series_id.to_string();
+    insert_audit(
+        transaction,
+        guild_id,
+        AuditInsert {
+            id: prepared.audit_id,
+            actor_id: actor_id.as_str(),
+            action: "SERIES_EARLY_COMPLETED",
+            target_type: "SERIES",
+            target_id: &series_id,
+            request_id,
+            before_summary: Some(json!({
+                "seriesRevision": series.revision,
+                "bestOf": series.best_of,
+                "confirmedGameCount": confirmed_game_count,
+                "score": { "team1": team_1_score, "team2": team_2_score },
+            })),
+            after_summary: Some(json!({
+                "seriesRevision": revision,
+                "status": "COMPLETED",
+                "outcome": command.command.outcome,
+                "winningTeam": winning_team,
+                "terminalReason": terminal_reason,
+                "confirmedGameCount": confirmed_game_count,
+                "nextHref": result.next_href,
+            })),
+            now: prepared.now,
+        },
+    )
+    .await?;
+    insert_outbox(
+        transaction,
+        guild_id,
+        prepared.outbox_event_id,
+        format!("guild:{guild_id}:series:{}", command.series_id),
+        "SERIES",
+        &series_id,
+        revision,
+        "SERIES_EARLY_COMPLETED",
+        json!({
+            "type": "invalidate",
+            "resourceId": command.series_id,
+            "revision": revision,
+        }),
+        prepared.now,
+    )
+    .await?;
+    complete_idempotency(transaction, &scope, record_id, 200, &result, prepared.now).await?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn execute_web_series_lifecycle_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -2307,15 +3551,21 @@ async fn execute_web_series_lifecycle_attempt(
             actual: series.revision,
         });
     }
-    ensure_series_in_progress(series.status)?;
+    ensure_series_game_revertible(series.status)?;
     ensure_series_source_converted(recruitment.status)?;
 
     let confirmed_game_count =
         confirmed_series_game_count(transaction, guild_id, command.series_id).await?;
-    if confirmed_game_count > 0 {
-        return Err(AttemptError::SeriesHasConfirmedGames {
-            count: confirmed_game_count,
-        });
+    for _ in 0..confirmed_game_count {
+        void_last_confirmed_series_game(
+            transaction,
+            guild_id,
+            command.series_id,
+            actor_id,
+            request_id,
+            prepared.now,
+        )
+        .await?;
     }
 
     let series_revision = series
@@ -2409,6 +3659,7 @@ async fn execute_web_series_lifecycle_attempt(
             before_summary: Some(json!({
                 "seriesRevision": series.revision,
                 "seriesStatus": series.status.as_str(),
+                "confirmedGameCount": confirmed_game_count,
                 "sourceRecruitmentId": source_recruitment_id,
                 "sourceRecruitmentRevision": recruitment.revision,
                 "sourceRecruitmentStatus": recruitment.status.as_str(),
@@ -2416,6 +3667,7 @@ async fn execute_web_series_lifecycle_attempt(
             after_summary: Some(json!({
                 "seriesRevision": series_revision,
                 "seriesStatus": "CANCELLED",
+                "revertedGameCount": confirmed_game_count,
                 "sourceRecruitmentId": source_recruitment_id,
                 "sourceRecruitmentRevision": recruitment_revision,
                 "sourceRecruitmentStatus": metadata.source_status,
@@ -2469,6 +3721,7 @@ async fn execute_recruitment_create_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
     actor: &RecruitmentCreateActor,
+    rules: RecruitmentSeriesRules,
     principal_type: IdempotencyPrincipalType,
     principal_id: &str,
     idempotency_key: &str,
@@ -2513,6 +3766,7 @@ async fn execute_recruitment_create_attempt(
         transaction,
         guild_id,
         &actor_id,
+        rules,
         prepared.recruitment_id,
         prepared.now,
     )
@@ -2575,6 +3829,7 @@ async fn insert_recruitment(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
     actor_id: &UserId,
+    rules: RecruitmentSeriesRules,
     recruitment_id: RecruitmentId,
     now: OffsetDateTime,
 ) -> Result<RecruitmentSnapshot, AttemptError> {
@@ -2603,9 +3858,9 @@ async fn insert_recruitment(
 
     sqlx::query(
         "INSERT INTO recruitments (
-             guild_id, id, season_id, display_number, title, target_count, status,
-             revision, channel_id, message_id, created_by, created_at, updated_by, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', 0, NULL, NULL, $7, $8, $7, $8)",
+             guild_id, id, season_id, display_number, title, target_count, best_of, hard_fearless,
+             status, revision, channel_id, message_id, created_by, created_at, updated_by, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPEN', 0, NULL, NULL, $9, $10, $9, $10)",
     )
     .bind(guild_id)
     .bind(recruitment_id.as_uuid())
@@ -2613,6 +3868,8 @@ async fn insert_recruitment(
     .bind(display_number)
     .bind(title)
     .bind(RECRUITMENT_TARGET_COUNT)
+    .bind(rules.best_of)
+    .bind(rules.hard_fearless)
     .bind(actor_id)
     .bind(now)
     .execute(&mut **transaction)
@@ -2778,6 +4035,8 @@ async fn entry_draft_snapshot(
                 recruitment.title,
                 recruitment.status,
                 recruitment.target_count,
+                recruitment.best_of,
+                recruitment.hard_fearless,
                 recruitment.revision,
                 recruitment.updated_at,
                 recruitment.created_by,
@@ -2993,6 +4252,8 @@ async fn entry_draft_snapshot(
             title: recruitment.title,
             status: recruitment.status,
             target_count: recruitment.target_count,
+            best_of: recruitment.best_of,
+            hard_fearless: recruitment.hard_fearless,
             revision: recruitment.revision,
             updated_at: recruitment.updated_at,
         },
@@ -3032,7 +4293,8 @@ async fn series_pick_ban_snapshot(
     viewer_id: &UserId,
 ) -> Result<SeriesPickBanSnapshot, AttemptError> {
     let series = sqlx::query_as::<_, SeriesPickBanSeriesRow>(
-        "SELECT id, display_number, title, best_of, status, revision, source_recruitment_id, updated_at
+        "SELECT id, display_number, title, best_of, hard_fearless, status, revision,
+                source_recruitment_id, updated_at
          FROM series
          WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL",
     )
@@ -3043,6 +4305,189 @@ async fn series_pick_ban_snapshot(
     .ok_or(AttemptError::SeriesNotFound)?;
     ensure_series_in_progress(series.status)?;
 
+    let (teams, player_ids) = series_pick_ban_teams(transaction, guild_id, series_id).await?;
+    let confirmed_game_count =
+        confirmed_series_game_count(transaction, guild_id, series_id).await?;
+    let next_set_number =
+        i16::try_from(confirmed_game_count + 1).map_err(|_| AttemptError::InvariantViolation)?;
+    if next_set_number > series.best_of {
+        return Err(AttemptError::InvariantViolation);
+    }
+    let draft = sqlx::query_as::<_, SeriesPickBanGameInputRow>(
+        "SELECT id, set_number, side_preset, winning_side, patch_version
+         FROM game_inputs
+         WHERE guild_id = $1
+           AND series_id = $2
+           AND set_number = $3
+           AND status = 'DRAFT'",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .bind(next_set_number)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let current_game = match draft {
+        Some(draft) => {
+            series_pick_ban_game_snapshot(transaction, guild_id, &draft, &player_ids).await?
+        }
+        None => empty_series_pick_ban_game(next_set_number, &player_ids),
+    };
+    let games =
+        confirmed_series_game_snapshots(transaction, guild_id, series_id, &player_ids).await?;
+    let can_edit = is_active_session_operator(transaction, guild_id, viewer_id).await?;
+
+    Ok(SeriesPickBanSnapshot {
+        series: SeriesPickBanSeriesSnapshot {
+            id: SeriesId::from_uuid(series.id),
+            display_number: series.display_number,
+            title: series.title,
+            best_of: series.best_of,
+            hard_fearless: series.hard_fearless,
+            status: series.status,
+            revision: series.revision,
+            source_recruitment_id: RecruitmentId::from_uuid(series.source_recruitment_id),
+            updated_at: series.updated_at,
+        },
+        teams,
+        current_game,
+        games,
+        capabilities: SeriesPickBanCapabilities {
+            can_edit,
+            can_submit: can_edit,
+            can_revert_last_game: can_edit && confirmed_game_count > 0,
+            can_early_complete: can_edit
+                && can_early_complete_series(series.best_of, confirmed_game_count),
+            can_revert: can_edit,
+            can_delete: can_edit,
+        },
+    })
+}
+
+async fn series_result_snapshot(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    viewer_id: &UserId,
+) -> Result<SeriesResultSnapshot, AttemptError> {
+    let series = sqlx::query_as::<_, SeriesResultSeriesRow>(
+        "SELECT id, display_number, title, best_of, hard_fearless, status, revision, source_recruitment_id,
+                winning_team, terminal_reason, started_at, ended_at
+         FROM series
+         WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::SeriesNotFound)?;
+    if series.status != SeriesStatus::Completed {
+        return Err(AttemptError::SeriesResultUnavailable(series.status));
+    }
+
+    let (teams, player_ids) = series_pick_ban_teams(transaction, guild_id, series_id).await?;
+    let game_rows = sqlx::query_as::<_, SeriesResultGameRow>(
+        "SELECT game.id,
+                game.source_input_id,
+                game.game_number AS set_number,
+                game.side_preset,
+                game.winning_side,
+                game.patch_version,
+                game.duration_seconds
+         FROM games AS game
+         WHERE game.guild_id = $1
+           AND game.series_id = $2
+           AND game.status = 'CONFIRMED'
+         ORDER BY game.game_number",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut games = Vec::with_capacity(game_rows.len());
+    for row in game_rows {
+        let input = SeriesPickBanGameInputRow {
+            id: row.source_input_id,
+            set_number: row.set_number,
+            side_preset: row.side_preset,
+            winning_side: Some(row.winning_side.clone()),
+            patch_version: row.patch_version.clone(),
+        };
+        let draft =
+            series_pick_ban_game_snapshot(transaction, guild_id, &input, &player_ids).await?;
+        let winner = draft.winner.ok_or(AttemptError::InvariantViolation)?;
+        let mmr_changes = sqlx::query_as::<_, SeriesResultMmrChangeRow>(
+            "SELECT user_id, lane, delta, mmr_before, mmr_after
+             FROM mmr_ledger_entries
+             WHERE guild_id = $1
+               AND game_id = $2
+               AND source_type = 'GAME_RESULT'
+             ORDER BY CASE lane
+                          WHEN 'TOP' THEN 1
+                          WHEN 'JUNGLE' THEN 2
+                          WHEN 'MID' THEN 3
+                          WHEN 'BOTTOM' THEN 4
+                          WHEN 'SUPPORT' THEN 5
+                      END,
+                      user_id",
+        )
+        .bind(guild_id)
+        .bind(row.id)
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .map(|change| SeriesResultMmrChange {
+            user_id: change.user_id,
+            lane: change.lane,
+            delta: change.delta,
+            mmr_before: change.mmr_before,
+            mmr_after: change.mmr_after,
+        })
+        .collect();
+        games.push(SeriesResultGameSnapshot {
+            id: GameId::from_uuid(row.id),
+            set_number: row.set_number,
+            side_preset: draft.side_preset,
+            winner,
+            picks: draft.picks,
+            bans: draft.bans,
+            patch_version: row.patch_version,
+            duration_seconds: row.duration_seconds,
+            mmr_changes,
+        });
+    }
+    let (team_1, team_2) = confirmed_series_score(transaction, guild_id, series_id).await?;
+    let is_operator = is_active_session_operator(transaction, guild_id, viewer_id).await?;
+
+    Ok(SeriesResultSnapshot {
+        series: SeriesResultSeriesSnapshot {
+            id: SeriesId::from_uuid(series.id),
+            display_number: series.display_number,
+            title: series.title,
+            best_of: series.best_of,
+            hard_fearless: series.hard_fearless,
+            status: series.status,
+            revision: series.revision,
+            source_recruitment_id: RecruitmentId::from_uuid(series.source_recruitment_id),
+            winning_team: series.winning_team,
+            terminal_reason: series.terminal_reason,
+            started_at: series.started_at,
+            ended_at: series.ended_at,
+        },
+        teams,
+        games,
+        score: SeriesResultScoreSnapshot { team_1, team_2 },
+        capabilities: SeriesResultCapabilities {
+            can_revert_last_game: is_operator,
+            can_delete: is_operator,
+        },
+    })
+}
+
+async fn series_pick_ban_teams(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+) -> Result<(Vec<SeriesPickBanTeamSnapshot>, BTreeSet<String>), AttemptError> {
     let participant_rows = sqlx::query_as::<_, SeriesPickBanParticipantRow>(
         "SELECT participant.team,
                 participant.user_id AS id,
@@ -3161,57 +4606,7 @@ async fn series_pick_ban_snapshot(
                 .map(|player| player.id.as_str().to_owned())
         })
         .collect::<BTreeSet<_>>();
-
-    // The first pick-ban slice exposes only the active input. Completed-game ledger projection
-    // remains a later endpoint, while the confirmed count still drives its lifecycle guards.
-    let confirmed_game_count =
-        confirmed_series_game_count(transaction, guild_id, series_id).await?;
-    let next_set_number =
-        i16::try_from(confirmed_game_count + 1).map_err(|_| AttemptError::InvariantViolation)?;
-    if next_set_number > series.best_of {
-        return Err(AttemptError::InvariantViolation);
-    }
-    let draft = sqlx::query_as::<_, SeriesPickBanGameInputRow>(
-        "SELECT id, set_number, side_preset, winning_side, patch_version
-         FROM game_inputs
-         WHERE guild_id = $1
-           AND series_id = $2
-           AND set_number = $3
-           AND status = 'DRAFT'",
-    )
-    .bind(guild_id)
-    .bind(series_id.as_uuid())
-    .bind(next_set_number)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    let current_game = match draft {
-        Some(draft) => {
-            series_pick_ban_game_snapshot(transaction, guild_id, &draft, &player_ids).await?
-        }
-        None => empty_series_pick_ban_game(next_set_number, &player_ids),
-    };
-    let can_change_lifecycle = is_active_session_operator(transaction, guild_id, viewer_id).await?
-        && confirmed_game_count == 0;
-
-    Ok(SeriesPickBanSnapshot {
-        series: SeriesPickBanSeriesSnapshot {
-            id: SeriesId::from_uuid(series.id),
-            display_number: series.display_number,
-            title: series.title,
-            best_of: series.best_of,
-            status: series.status,
-            revision: series.revision,
-            source_recruitment_id: RecruitmentId::from_uuid(series.source_recruitment_id),
-            updated_at: series.updated_at,
-        },
-        teams,
-        current_game,
-        games: Vec::new(),
-        capabilities: SeriesPickBanCapabilities {
-            can_revert: can_change_lifecycle,
-            can_delete: can_change_lifecycle,
-        },
-    })
+    Ok((teams, player_ids))
 }
 
 async fn series_pick_ban_game_snapshot(
@@ -3277,6 +4672,35 @@ async fn series_pick_ban_game_snapshot(
     Ok(snapshot)
 }
 
+async fn confirmed_series_game_snapshots(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    player_ids: &BTreeSet<String>,
+) -> Result<Vec<SeriesPickBanGameSnapshot>, AttemptError> {
+    let inputs = sqlx::query_as::<_, SeriesPickBanGameInputRow>(
+        "SELECT input.id, input.set_number, input.side_preset, input.winning_side, input.patch_version
+         FROM games AS game
+         JOIN game_inputs AS input
+           ON input.guild_id = game.guild_id AND input.id = game.source_input_id
+         WHERE game.guild_id = $1 AND game.series_id = $2 AND game.status = 'CONFIRMED'
+         ORDER BY game.game_number",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut games = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let game = series_pick_ban_game_snapshot(transaction, guild_id, &input, player_ids).await?;
+        if game.winner.is_none() {
+            return Err(AttemptError::InvariantViolation);
+        }
+        games.push(game);
+    }
+    Ok(games)
+}
+
 fn empty_series_pick_ban_game(
     set_number: i16,
     player_ids: &BTreeSet<String>,
@@ -3336,7 +4760,7 @@ async fn recruitment_snapshot(
     recruitment_id: RecruitmentId,
 ) -> Result<RecruitmentSnapshot, AttemptError> {
     let recruitment = sqlx::query_as::<_, RecruitmentProjectionRow>(
-        "SELECT id, display_number, title, status, target_count, revision,
+        "SELECT id, display_number, title, status, target_count, best_of, hard_fearless, revision,
                 channel_id, message_id, created_by, updated_at
          FROM recruitments
          WHERE guild_id = $1 AND id = $2",
@@ -3594,6 +5018,475 @@ async fn require_recruitment_channel(
     .ok_or(AttemptError::RecruitmentChannelNotConfigured)
 }
 
+async fn configured_entry_channel(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+) -> Result<Option<DiscordChannelId>, AttemptError> {
+    sqlx::query_scalar::<_, Option<DiscordChannelId>>(
+        "SELECT entry_channel_id
+         FROM guild_config
+         WHERE guild_id = $1",
+    )
+    .bind(guild_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::GuildNotConfigured)
+}
+
+async fn configured_series_result_channel(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+) -> Result<Option<DiscordChannelId>, AttemptError> {
+    sqlx::query_scalar::<_, Option<DiscordChannelId>>(
+        "SELECT result_channel_id
+         FROM guild_config
+         WHERE guild_id = $1",
+    )
+    .bind(guild_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::GuildNotConfigured)
+}
+
+async fn entry_confirmation_snapshot(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    display_number: i64,
+    title: &str,
+    best_of: i16,
+    hard_fearless: bool,
+) -> Result<EntryConfirmationSnapshot, AttemptError> {
+    let rows = sqlx::query_as::<_, EntryConfirmationParticipantRow>(
+        "SELECT participant.team,
+                participant.user_id AS id,
+                participant.lane,
+                member.display_name
+         FROM series_participants AS participant
+         JOIN guild_members AS member
+           ON member.guild_id = participant.guild_id
+          AND member.user_id = participant.user_id
+         WHERE participant.guild_id = $1 AND participant.series_id = $2
+         ORDER BY CASE participant.team
+                      WHEN 'TEAM_1' THEN 1
+                      WHEN 'TEAM_2' THEN 2
+                  END,
+                  CASE participant.lane
+                      WHEN 'TOP' THEN 1
+                      WHEN 'JUNGLE' THEN 2
+                      WHEN 'MID' THEN 3
+                      WHEN 'BOTTOM' THEN 4
+                      WHEN 'SUPPORT' THEN 5
+                  END",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    let mut team_1 = Vec::with_capacity(5);
+    let mut team_2 = Vec::with_capacity(5);
+    for row in rows {
+        let player = EntryConfirmationPlayerSnapshot {
+            id: row.id,
+            display_name: row.display_name,
+            lane: row.lane,
+        };
+        match row.team.as_str() {
+            "TEAM_1" => team_1.push(player),
+            "TEAM_2" => team_2.push(player),
+            _ => return Err(AttemptError::InvariantViolation),
+        }
+    }
+    if team_1.len() != 5 || team_2.len() != 5 {
+        return Err(AttemptError::InvariantViolation);
+    }
+
+    Ok(EntryConfirmationSnapshot {
+        series: EntryConfirmationSeriesSnapshot {
+            id: series_id,
+            display_number,
+            title: title.to_owned(),
+            best_of,
+            hard_fearless,
+        },
+        teams: vec![
+            EntryConfirmationTeamSnapshot {
+                team: "TEAM_1".to_owned(),
+                name: "1팀".to_owned(),
+                players: team_1,
+            },
+            EntryConfirmationTeamSnapshot {
+                team: "TEAM_2".to_owned(),
+                name: "2팀".to_owned(),
+                players: team_2,
+            },
+        ],
+        links: EntryConfirmationLinksSnapshot {
+            pick_ban: format!("/g/{guild_id}/series/{series_id}/pick-ban"),
+        },
+    })
+}
+
+async fn enqueue_entry_confirmation_notification(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    channel_id: &DiscordChannelId,
+    snapshot: &EntryConfirmationSnapshot,
+    notification_id: NotificationId,
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    let payload =
+        serde_json::to_value(notification_outbox::EntryConfirmationNotificationPayload {
+            schema_version: ENTRY_CONFIRMATION_SCHEMA_VERSION,
+            series_id: snapshot.series.id.clone(),
+            snapshot: serde_json::to_value(snapshot)?,
+        })?;
+    let deduplication_key = format!("series:{}:entry-confirmation", snapshot.series.id);
+    notification_outbox::enqueue(
+        transaction,
+        &EnqueueNotification {
+            id: notification_id,
+            guild_id,
+            deduplication_key: &deduplication_key,
+            channel_id,
+            notification_type: ENTRY_CONFIRMATION_CREATE_TYPE,
+            payload: &payload,
+            created_at: now,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn enqueue_series_result_notification_if_configured(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    series_revision: i64,
+    notification_id: NotificationId,
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    let Some(channel_id) = configured_series_result_channel(transaction, guild_id).await? else {
+        return Ok(());
+    };
+    let snapshot = series_result_notification_snapshot(transaction, guild_id, series_id).await?;
+    enqueue_series_result_notification(
+        transaction,
+        guild_id,
+        &channel_id,
+        &snapshot,
+        series_revision,
+        notification_id,
+        now,
+    )
+    .await
+}
+
+async fn series_result_notification_snapshot(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+) -> Result<SeriesResultNotificationSnapshot, AttemptError> {
+    let series = sqlx::query_as::<_, SeriesResultNotificationSeriesRow>(
+        "SELECT id, display_number, title, best_of, hard_fearless, winning_team, terminal_reason
+         FROM series
+         WHERE guild_id = $1
+           AND id = $2
+           AND status = 'COMPLETED'
+           AND deleted_at IS NULL",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::InvariantViolation)?;
+    let terminal_reason = series
+        .terminal_reason
+        .ok_or(AttemptError::InvariantViolation)?;
+    let teams = series_result_notification_teams(transaction, guild_id, series_id).await?;
+    let game_rows = sqlx::query_as::<_, SeriesResultNotificationGameRow>(
+        "SELECT id, game_number AS set_number, side_preset, winning_side, patch_version
+         FROM games
+         WHERE guild_id = $1 AND series_id = $2 AND status = 'CONFIRMED'
+         ORDER BY game_number",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut participants_by_game = game_rows
+        .iter()
+        .map(|game| (game.id, HashMap::new()))
+        .collect::<HashMap<_, HashMap<_, _>>>();
+    let participant_rows = sqlx::query_as::<_, SeriesResultNotificationGameParticipantRow>(
+        "SELECT participant.game_id,
+                participant.team,
+                participant.user_id AS id,
+                participant.lane,
+                participant.champion_id
+         FROM game_participants AS participant
+         JOIN games AS game
+           ON game.guild_id = participant.guild_id
+          AND game.id = participant.game_id
+         WHERE game.guild_id = $1
+           AND game.series_id = $2
+           AND game.status = 'CONFIRMED'
+         ORDER BY game.game_number,
+                  CASE participant.team
+                      WHEN 'TEAM_1' THEN 1
+                      WHEN 'TEAM_2' THEN 2
+                  END,
+                  CASE participant.lane
+                      WHEN 'TOP' THEN 1
+                      WHEN 'JUNGLE' THEN 2
+                      WHEN 'MID' THEN 3
+                      WHEN 'BOTTOM' THEN 4
+                      WHEN 'SUPPORT' THEN 5
+                  END",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+    for row in participant_rows {
+        let participants = participants_by_game
+            .get_mut(&row.game_id)
+            .ok_or(AttemptError::InvariantViolation)?;
+        if participants.insert(row.id.clone(), row).is_some() {
+            return Err(AttemptError::InvariantViolation);
+        }
+    }
+
+    let mut bans_by_game = game_rows
+        .iter()
+        .map(|game| {
+            (
+                game.id,
+                SeriesResultNotificationGameBansSnapshot {
+                    blue: vec![None; 5],
+                    red: vec![None; 5],
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let ban_rows = sqlx::query_as::<_, SeriesResultNotificationGameBanRow>(
+        "SELECT ban.game_id, ban.side, ban.slot, ban.champion_id
+         FROM game_bans AS ban
+         JOIN games AS game
+           ON game.guild_id = ban.guild_id
+          AND game.id = ban.game_id
+         WHERE game.guild_id = $1
+           AND game.series_id = $2
+           AND game.status = 'CONFIRMED'
+         ORDER BY game.game_number,
+                  CASE ban.side
+                      WHEN 'BLUE' THEN 1
+                      WHEN 'RED' THEN 2
+                  END,
+                  ban.slot",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+    for ban in ban_rows {
+        let index = usize::try_from(
+            ban.slot
+                .checked_sub(1)
+                .ok_or(AttemptError::InvariantViolation)?,
+        )
+        .map_err(|_| AttemptError::InvariantViolation)?;
+        let bans = bans_by_game
+            .get_mut(&ban.game_id)
+            .ok_or(AttemptError::InvariantViolation)?;
+        let slots = match ban.side.as_str() {
+            "BLUE" => &mut bans.blue,
+            "RED" => &mut bans.red,
+            _ => return Err(AttemptError::InvariantViolation),
+        };
+        let slot = slots
+            .get_mut(index)
+            .ok_or(AttemptError::InvariantViolation)?;
+        if slot.replace(ban.champion_id).is_some() {
+            return Err(AttemptError::InvariantViolation);
+        }
+    }
+
+    let team_1 = teams.first().ok_or(AttemptError::InvariantViolation)?;
+    let team_2 = teams.get(1).ok_or(AttemptError::InvariantViolation)?;
+    let mut games = Vec::with_capacity(game_rows.len());
+    for game in game_rows {
+        let winner = match winner_roster_team(&game.side_preset, &game.winning_side)? {
+            RosterTeam::Team1 => "TEAM_1",
+            RosterTeam::Team2 => "TEAM_2",
+        };
+        let side_preset = canonical_side_preset(&game.side_preset)?;
+        let mut participants = participants_by_game
+            .remove(&game.id)
+            .ok_or(AttemptError::InvariantViolation)?;
+        let team_1_game = series_result_notification_game_team(team_1, &mut participants)?;
+        let team_2_game = series_result_notification_game_team(team_2, &mut participants)?;
+        if !participants.is_empty() {
+            return Err(AttemptError::InvariantViolation);
+        }
+        let bans = bans_by_game
+            .remove(&game.id)
+            .ok_or(AttemptError::InvariantViolation)?;
+        games.push(SeriesResultNotificationGameSnapshot {
+            set_number: game.set_number,
+            winner: winner.to_owned(),
+            side_preset,
+            team_1: team_1_game,
+            team_2: team_2_game,
+            bans,
+            patch_version: game.patch_version,
+        });
+    }
+    if !participants_by_game.is_empty() || !bans_by_game.is_empty() {
+        return Err(AttemptError::InvariantViolation);
+    }
+    let (team_1, team_2) = confirmed_series_score(transaction, guild_id, series_id).await?;
+
+    Ok(SeriesResultNotificationSnapshot {
+        series: SeriesResultNotificationSeriesSnapshot {
+            id: SeriesId::from_uuid(series.id),
+            display_number: series.display_number,
+            title: series.title,
+            best_of: series.best_of,
+            hard_fearless: series.hard_fearless,
+            winning_team: series.winning_team,
+            terminal_reason,
+        },
+        teams,
+        score: SeriesResultNotificationScoreSnapshot { team_1, team_2 },
+        games,
+        links: SeriesResultNotificationLinksSnapshot {
+            result: format!("/g/{guild_id}/series/{series_id}/result"),
+        },
+    })
+}
+
+async fn series_result_notification_teams(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+) -> Result<Vec<SeriesResultNotificationTeamSnapshot>, AttemptError> {
+    let rows = sqlx::query_as::<_, SeriesResultNotificationRosterRow>(
+        "SELECT participant.team,
+                participant.user_id AS id,
+                participant.lane,
+                member.display_name
+         FROM series_participants AS participant
+         JOIN guild_members AS member
+           ON member.guild_id = participant.guild_id
+          AND member.user_id = participant.user_id
+         WHERE participant.guild_id = $1
+           AND participant.series_id = $2
+         ORDER BY CASE participant.team
+                      WHEN 'TEAM_1' THEN 1
+                      WHEN 'TEAM_2' THEN 2
+                  END,
+                  CASE participant.lane
+                      WHEN 'TOP' THEN 1
+                      WHEN 'JUNGLE' THEN 2
+                      WHEN 'MID' THEN 3
+                      WHEN 'BOTTOM' THEN 4
+                      WHEN 'SUPPORT' THEN 5
+                  END",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut team_1 = Vec::with_capacity(5);
+    let mut team_2 = Vec::with_capacity(5);
+    for row in rows {
+        let player = SeriesResultNotificationPlayerSnapshot {
+            id: row.id,
+            display_name: row.display_name,
+            lane: row.lane,
+        };
+        match row.team.as_str() {
+            "TEAM_1" => team_1.push(player),
+            "TEAM_2" => team_2.push(player),
+            _ => return Err(AttemptError::InvariantViolation),
+        }
+    }
+    if team_1.len() != 5 || team_2.len() != 5 {
+        return Err(AttemptError::InvariantViolation);
+    }
+    Ok(vec![
+        SeriesResultNotificationTeamSnapshot {
+            team: "TEAM_1".to_owned(),
+            name: "1팀".to_owned(),
+            players: team_1,
+        },
+        SeriesResultNotificationTeamSnapshot {
+            team: "TEAM_2".to_owned(),
+            name: "2팀".to_owned(),
+            players: team_2,
+        },
+    ])
+}
+
+fn series_result_notification_game_team(
+    team: &SeriesResultNotificationTeamSnapshot,
+    participants: &mut HashMap<UserId, SeriesResultNotificationGameParticipantRow>,
+) -> Result<SeriesResultNotificationGameTeamSnapshot, AttemptError> {
+    let mut picks = Vec::with_capacity(team.players.len());
+    for player in &team.players {
+        let participant = participants
+            .remove(&player.id)
+            .ok_or(AttemptError::InvariantViolation)?;
+        if participant.team != team.team || participant.lane != player.lane {
+            return Err(AttemptError::InvariantViolation);
+        }
+        picks.push(SeriesResultNotificationGamePickSnapshot {
+            id: player.id.clone(),
+            display_name: player.display_name.clone(),
+            lane: player.lane,
+            champion_id: participant.champion_id,
+        });
+    }
+    Ok(SeriesResultNotificationGameTeamSnapshot {
+        team: team.team.clone(),
+        name: team.name.clone(),
+        picks,
+    })
+}
+
+async fn enqueue_series_result_notification(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    channel_id: &DiscordChannelId,
+    snapshot: &SeriesResultNotificationSnapshot,
+    series_revision: i64,
+    notification_id: NotificationId,
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    let payload = serde_json::to_value(notification_outbox::SeriesResultNotificationPayload {
+        schema_version: SERIES_RESULT_SCHEMA_VERSION,
+        series_id: snapshot.series.id.clone(),
+        snapshot: serde_json::to_value(snapshot)?,
+    })?;
+    let deduplication_key = format!("series:{}:result:{series_revision}", snapshot.series.id);
+    notification_outbox::enqueue(
+        transaction,
+        &EnqueueNotification {
+            id: notification_id,
+            guild_id,
+            deduplication_key: &deduplication_key,
+            channel_id,
+            notification_type: SERIES_RESULT_CREATE_TYPE,
+            payload: &payload,
+            created_at: now,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
 async fn enqueue_web_recruitment_message_notification(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -3807,7 +5700,7 @@ async fn lock_recruitment(
     recruitment_id: RecruitmentId,
 ) -> Result<RecruitmentLockRow, AttemptError> {
     sqlx::query_as::<_, RecruitmentLockRow>(
-        "SELECT season_id, status, target_count, revision, created_by
+        "SELECT season_id, status, target_count, best_of, hard_fearless, revision, created_by
          FROM recruitments
          WHERE guild_id = $1 AND id = $2
          FOR UPDATE",
@@ -3843,7 +5736,7 @@ async fn lock_series(
     series_id: SeriesId,
 ) -> Result<SeriesLockRow, AttemptError> {
     sqlx::query_as::<_, SeriesLockRow>(
-        "SELECT source_recruitment_id, status, revision
+        "SELECT source_recruitment_id, best_of, hard_fearless, status, revision
          FROM series
          WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL
          FOR UPDATE",
@@ -3869,6 +5762,970 @@ async fn confirmed_series_game_count(
     .bind(series_id.as_uuid())
     .fetch_one(&mut **transaction)
     .await?)
+}
+
+async fn locked_series_roster(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+) -> Result<Vec<SeriesRosterRow>, AttemptError> {
+    Ok(sqlx::query_as::<_, SeriesRosterRow>(
+        "SELECT user_id, team, lane
+         FROM series_participants
+         WHERE guild_id = $1 AND series_id = $2
+         ORDER BY user_id, lane
+         FOR UPDATE",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+fn ensure_complete_series_roster_rows(roster: &[SeriesRosterRow]) -> Result<(), AttemptError> {
+    if roster.len() != 10 {
+        return Err(AttemptError::InvariantViolation);
+    }
+    let users = roster
+        .iter()
+        .map(|row| row.user_id.clone())
+        .collect::<HashSet<_>>();
+    if users.len() != roster.len() {
+        return Err(AttemptError::InvariantViolation);
+    }
+    for team in ["TEAM_1", "TEAM_2"] {
+        let lanes = roster
+            .iter()
+            .filter(|row| row.team == team)
+            .map(|row| row.lane)
+            .collect::<HashSet<_>>();
+        if lanes.len() != 5
+            || !lanes.contains(&Lane::Top)
+            || !lanes.contains(&Lane::Jungle)
+            || !lanes.contains(&Lane::Mid)
+            || !lanes.contains(&Lane::Bottom)
+            || !lanes.contains(&Lane::Support)
+        {
+            return Err(AttemptError::InvariantViolation);
+        }
+    }
+    if roster
+        .iter()
+        .any(|row| !matches!(row.team.as_str(), "TEAM_1" | "TEAM_2"))
+    {
+        return Err(AttemptError::InvariantViolation);
+    }
+    Ok(())
+}
+
+fn next_series_set_number(confirmed_game_count: i64, best_of: i16) -> Result<i16, AttemptError> {
+    let next =
+        i16::try_from(confirmed_game_count + 1).map_err(|_| AttemptError::InvariantViolation)?;
+    if next < 1 || next > best_of {
+        return Err(AttemptError::SeriesNoCurrentSet);
+    }
+    Ok(next)
+}
+
+fn can_early_complete_series(best_of: i16, confirmed_game_count: i64) -> bool {
+    matches!(best_of, 3 | 5) && confirmed_game_count > 0
+}
+
+async fn ensure_locked_series_draft_input(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    set_number: i16,
+    input_id: Uuid,
+    actor_id: &UserId,
+    now: OffsetDateTime,
+) -> Result<Uuid, AttemptError> {
+    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id
+         FROM game_inputs
+         WHERE guild_id = $1
+           AND series_id = $2
+           AND set_number = $3
+           AND status = 'DRAFT'
+         FOR UPDATE",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .bind(set_number)
+    .fetch_optional(&mut **transaction)
+    .await?
+    {
+        return Ok(id);
+    }
+    sqlx::query(
+        "INSERT INTO game_inputs (
+             guild_id, id, series_id, auction_match_id, set_number, side_preset,
+             winning_side, patch_version, status, updated_by, updated_at
+         ) VALUES ($1, $2, $3, NULL, $4, 'DEFAULT', NULL, NULL, 'DRAFT', $5, $6)",
+    )
+    .bind(guild_id)
+    .bind(input_id)
+    .bind(series_id.as_uuid())
+    .bind(set_number)
+    .bind(actor_id)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(input_id)
+}
+
+async fn apply_series_pick_ban_operation(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    input_id: Uuid,
+    roster: &[SeriesRosterRow],
+    operation: &SeriesPickBanOperation,
+) -> Result<(), AttemptError> {
+    match operation {
+        SeriesPickBanOperation::SetSide { side_preset } => {
+            canonical_side_preset(side_preset)?;
+            let updated = sqlx::query(
+                "UPDATE game_inputs SET side_preset = $1
+                 WHERE guild_id = $2 AND id = $3 AND status = 'DRAFT'",
+            )
+            .bind(side_preset)
+            .bind(guild_id)
+            .bind(input_id)
+            .execute(&mut **transaction)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(AttemptError::InvariantViolation);
+            }
+        }
+        SeriesPickBanOperation::SetPick {
+            player_id,
+            champion_id,
+        } => {
+            ensure_roster_player(roster, player_id)?;
+            validate_champion_id(champion_id)?;
+            sqlx::query(
+                "INSERT INTO game_input_picks (guild_id, game_input_id, user_id, champion_id)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (guild_id, game_input_id, user_id)
+                 DO UPDATE SET champion_id = EXCLUDED.champion_id",
+            )
+            .bind(guild_id)
+            .bind(input_id)
+            .bind(player_id)
+            .bind(champion_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        SeriesPickBanOperation::ClearPick { player_id } => {
+            ensure_roster_player(roster, player_id)?;
+            sqlx::query(
+                "DELETE FROM game_input_picks
+                 WHERE guild_id = $1 AND game_input_id = $2 AND user_id = $3",
+            )
+            .bind(guild_id)
+            .bind(input_id)
+            .bind(player_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        SeriesPickBanOperation::SetBan {
+            side,
+            slot,
+            champion_id,
+        } => {
+            canonical_blue_red_side(side)?;
+            ensure_ban_slot(*slot)?;
+            validate_champion_id(champion_id)?;
+            sqlx::query(
+                "INSERT INTO game_input_bans (guild_id, game_input_id, side, slot, champion_id)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (guild_id, game_input_id, side, slot)
+                 DO UPDATE SET champion_id = EXCLUDED.champion_id",
+            )
+            .bind(guild_id)
+            .bind(input_id)
+            .bind(side)
+            .bind(slot)
+            .bind(champion_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        SeriesPickBanOperation::ClearBan { side, slot } => {
+            canonical_blue_red_side(side)?;
+            ensure_ban_slot(*slot)?;
+            sqlx::query(
+                "DELETE FROM game_input_bans
+                 WHERE guild_id = $1 AND game_input_id = $2 AND side = $3 AND slot = $4",
+            )
+            .bind(guild_id)
+            .bind(input_id)
+            .bind(side)
+            .bind(slot)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        SeriesPickBanOperation::ApplyBulk { items } => {
+            for item in items {
+                apply_series_pick_ban_bulk_item(transaction, guild_id, input_id, roster, item)
+                    .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn apply_series_pick_ban_bulk_item(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    input_id: Uuid,
+    roster: &[SeriesRosterRow],
+    item: &SeriesPickBanBulkItem,
+) -> Result<(), AttemptError> {
+    match item {
+        SeriesPickBanBulkItem::SetPick {
+            player_id,
+            champion_id,
+        } => {
+            ensure_roster_player(roster, player_id)?;
+            validate_champion_id(champion_id)?;
+            sqlx::query(
+                "INSERT INTO game_input_picks (guild_id, game_input_id, user_id, champion_id)
+				 VALUES ($1, $2, $3, $4)
+				 ON CONFLICT (guild_id, game_input_id, user_id)
+				 DO UPDATE SET champion_id = EXCLUDED.champion_id",
+            )
+            .bind(guild_id)
+            .bind(input_id)
+            .bind(player_id)
+            .bind(champion_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        SeriesPickBanBulkItem::SetBan {
+            side,
+            slot,
+            champion_id,
+        } => {
+            canonical_blue_red_side(side)?;
+            ensure_ban_slot(*slot)?;
+            validate_champion_id(champion_id)?;
+            sqlx::query(
+                "INSERT INTO game_input_bans (guild_id, game_input_id, side, slot, champion_id)
+				 VALUES ($1, $2, $3, $4, $5)
+				 ON CONFLICT (guild_id, game_input_id, side, slot)
+				 DO UPDATE SET champion_id = EXCLUDED.champion_id",
+            )
+            .bind(guild_id)
+            .bind(input_id)
+            .bind(side)
+            .bind(slot)
+            .bind(champion_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn replace_series_draft_from_submit(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    input_id: Uuid,
+    roster: &[SeriesRosterRow],
+    command: &SeriesGameSubmitCommand,
+) -> Result<(), AttemptError> {
+    canonical_side_preset(&command.side_preset)?;
+    canonical_blue_red_side(&command.winner)?;
+    validate_patch_version(command.patch_version.as_deref())?;
+    if let Some(picks) = command.picks.as_ref() {
+        validate_submit_picks(picks, roster)?;
+        sqlx::query("DELETE FROM game_input_picks WHERE guild_id = $1 AND game_input_id = $2")
+            .bind(guild_id)
+            .bind(input_id)
+            .execute(&mut **transaction)
+            .await?;
+        for (user_id, champion_id) in picks {
+            if let Some(champion_id) = champion_id {
+                sqlx::query(
+                    "INSERT INTO game_input_picks (guild_id, game_input_id, user_id, champion_id)
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(guild_id)
+                .bind(input_id)
+                .bind(user_id)
+                .bind(champion_id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+        }
+    }
+    if let Some(bans) = command.bans.as_ref() {
+        validate_submit_bans(bans)?;
+        sqlx::query("DELETE FROM game_input_bans WHERE guild_id = $1 AND game_input_id = $2")
+            .bind(guild_id)
+            .bind(input_id)
+            .execute(&mut **transaction)
+            .await?;
+        insert_series_input_bans(transaction, guild_id, input_id, bans).await?;
+    }
+    let updated = sqlx::query(
+        "UPDATE game_inputs
+         SET side_preset = $1, winning_side = $2, patch_version = $3
+         WHERE guild_id = $4 AND id = $5 AND status = 'DRAFT'",
+    )
+    .bind(&command.side_preset)
+    .bind(&command.winner)
+    .bind(&command.patch_version)
+    .bind(guild_id)
+    .bind(input_id)
+    .execute(&mut **transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AttemptError::InvariantViolation);
+    }
+    Ok(())
+}
+
+async fn insert_series_input_bans(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    input_id: Uuid,
+    bans: &SeriesPickBanBansSnapshot,
+) -> Result<(), AttemptError> {
+    for (side, slots) in [("BLUE", &bans.blue), ("RED", &bans.red)] {
+        for (index, champion_id) in slots.iter().enumerate() {
+            if let Some(champion_id) = champion_id {
+                let slot =
+                    i16::try_from(index + 1).map_err(|_| AttemptError::InvariantViolation)?;
+                sqlx::query(
+                    "INSERT INTO game_input_bans (guild_id, game_input_id, side, slot, champion_id)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(guild_id)
+                .bind(input_id)
+                .bind(side)
+                .bind(slot)
+                .bind(champion_id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn validate_series_pick_ban_draft(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    hard_fearless: bool,
+) -> Result<(), AttemptError> {
+    let picks = sqlx::query_scalar::<_, String>(
+        "SELECT pick.champion_id
+		 FROM game_input_picks AS pick
+		 JOIN game_inputs AS input
+		   ON input.guild_id = pick.guild_id
+		  AND input.id = pick.game_input_id
+		 WHERE input.guild_id = $1
+		   AND input.series_id = $2
+		   AND input.status = 'DRAFT'
+		 ORDER BY pick.champion_id, pick.user_id",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+    let bans = sqlx::query_scalar::<_, String>(
+        "SELECT ban.champion_id
+		 FROM game_input_bans AS ban
+		 JOIN game_inputs AS input
+		   ON input.guild_id = ban.guild_id
+		  AND input.id = ban.game_input_id
+		 WHERE input.guild_id = $1
+		   AND input.series_id = $2
+		   AND input.status = 'DRAFT'
+		 ORDER BY ban.champion_id, ban.side, ban.slot",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    let mut seen = HashSet::with_capacity(picks.len() + bans.len());
+    for champion_id in picks.iter().chain(&bans) {
+        if !seen.insert(champion_id.as_str()) {
+            return Err(AttemptError::SeriesGameChampionDuplicate {
+                champion_id: champion_id.clone(),
+            });
+        }
+    }
+    if !hard_fearless || picks.is_empty() {
+        return Ok(());
+    }
+
+    let used = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT participant.champion_id
+		 FROM game_participants AS participant
+		 JOIN games AS game
+		   ON game.guild_id = participant.guild_id
+		  AND game.id = participant.game_id
+		 WHERE game.guild_id = $1
+		   AND game.series_id = $2
+		   AND game.status = 'CONFIRMED'
+		   AND participant.champion_id IS NOT NULL",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect::<HashSet<_>>();
+    for champion_id in picks {
+        if used.contains(&champion_id) {
+            return Err(AttemptError::SeriesHardFearlessChampionUsed { champion_id });
+        }
+    }
+    Ok(())
+}
+
+async fn series_input_picks(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    input_id: Uuid,
+    roster: &[SeriesRosterRow],
+) -> Result<BTreeMap<String, Option<String>>, AttemptError> {
+    let player_ids = roster
+        .iter()
+        .map(|player| player.user_id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let input = SeriesPickBanGameInputRow {
+        id: input_id,
+        set_number: 1,
+        side_preset: "DEFAULT".to_owned(),
+        winning_side: None,
+        patch_version: None,
+    };
+    Ok(
+        series_pick_ban_game_snapshot(transaction, guild_id, &input, &player_ids)
+            .await?
+            .picks,
+    )
+}
+
+async fn series_input_bans(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    input_id: Uuid,
+) -> Result<SeriesPickBanBansSnapshot, AttemptError> {
+    let rows = sqlx::query_as::<_, SeriesPickBanBanRow>(
+        "SELECT side, slot, champion_id
+         FROM game_input_bans
+         WHERE guild_id = $1 AND game_input_id = $2",
+    )
+    .bind(guild_id)
+    .bind(input_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut bans = SeriesPickBanBansSnapshot {
+        blue: vec![None; 5],
+        red: vec![None; 5],
+    };
+    for row in rows {
+        let index = usize::try_from(
+            row.slot
+                .checked_sub(1)
+                .ok_or(AttemptError::InvariantViolation)?,
+        )
+        .map_err(|_| AttemptError::InvariantViolation)?;
+        let slot = match row.side.as_str() {
+            "BLUE" => bans.blue.get_mut(index),
+            "RED" => bans.red.get_mut(index),
+            _ => return Err(AttemptError::InvariantViolation),
+        }
+        .ok_or(AttemptError::InvariantViolation)?;
+        if slot.replace(row.champion_id).is_some() {
+            return Err(AttemptError::InvariantViolation);
+        }
+    }
+    Ok(bans)
+}
+
+async fn insert_series_game_participants(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    game_id: GameId,
+    roster: &[SeriesRosterRow],
+    picks: &BTreeMap<String, Option<String>>,
+) -> Result<(), AttemptError> {
+    for player in roster {
+        let champion_id = picks
+            .get(player.user_id.as_str())
+            .ok_or(AttemptError::InvariantViolation)?;
+        sqlx::query(
+            "INSERT INTO game_participants (guild_id, game_id, user_id, team, lane, champion_id)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(guild_id)
+        .bind(game_id.as_uuid())
+        .bind(&player.user_id)
+        .bind(&player.team)
+        .bind(player.lane)
+        .bind(champion_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn insert_series_game_bans(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    game_id: GameId,
+    bans: &SeriesPickBanBansSnapshot,
+) -> Result<(), AttemptError> {
+    for (side, slots) in [("BLUE", &bans.blue), ("RED", &bans.red)] {
+        for (index, champion_id) in slots.iter().enumerate() {
+            if let Some(champion_id) = champion_id {
+                let slot =
+                    i16::try_from(index + 1).map_err(|_| AttemptError::InvariantViolation)?;
+                sqlx::query(
+                    "INSERT INTO game_bans (guild_id, game_id, side, slot, champion_id)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(guild_id)
+                .bind(game_id.as_uuid())
+                .bind(side)
+                .bind(slot)
+                .bind(champion_id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn apply_series_game_mmr(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    season_id: SeasonId,
+    game_id: GameId,
+    roster: &[SeriesRosterRow],
+    winner: RosterTeam,
+    actor_id: &UserId,
+    request_id: &str,
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    let locked_rows = mmr::ensure_and_lock_mmr_rows(
+        transaction,
+        guild_id,
+        season_id,
+        roster.iter().map(|player| MmrLaneKey {
+            user_id: player.user_id.clone(),
+            lane: player.lane,
+        }),
+        now,
+    )
+    .await?;
+    let mmr_by_key = locked_rows
+        .into_iter()
+        .map(|row| ((row.key.user_id.clone(), row.key.lane), row))
+        .collect::<HashMap<_, _>>();
+    if mmr_by_key.len() != roster.len() {
+        return Err(AttemptError::InvariantViolation);
+    }
+
+    let mut matchups = Vec::with_capacity(5);
+    for lane in [
+        Lane::Top,
+        Lane::Jungle,
+        Lane::Mid,
+        Lane::Bottom,
+        Lane::Support,
+    ] {
+        let team_1 = roster
+            .iter()
+            .find(|player| player.team == "TEAM_1" && player.lane == lane)
+            .ok_or(AttemptError::InvariantViolation)?;
+        let team_2 = roster
+            .iter()
+            .find(|player| player.team == "TEAM_2" && player.lane == lane)
+            .ok_or(AttemptError::InvariantViolation)?;
+        let team_1_mmr = mmr_by_key
+            .get(&(team_1.user_id.clone(), lane))
+            .ok_or(AttemptError::InvariantViolation)?
+            .mmr;
+        let team_2_mmr = mmr_by_key
+            .get(&(team_2.user_id.clone(), lane))
+            .ok_or(AttemptError::InvariantViolation)?
+            .mmr;
+        matchups.push(LaneMatchup {
+            lane,
+            team_1: MatchupPlayer {
+                user_id: team_1.user_id.clone(),
+                mmr: team_1_mmr,
+            },
+            team_2: MatchupPlayer {
+                user_id: team_2.user_id.clone(),
+                mmr: team_2_mmr,
+            },
+        });
+    }
+
+    for result in apply_game_elo(matchups, winner) {
+        for (update, won) in [
+            (result.team_1, winner == RosterTeam::Team1),
+            (result.team_2, winner == RosterTeam::Team2),
+        ] {
+            let locked = mmr_by_key
+                .get(&(update.user_id.clone(), result.lane))
+                .ok_or(AttemptError::InvariantViolation)?;
+            if locked.mmr != update.mmr_before {
+                return Err(AttemptError::InvariantViolation);
+            }
+            let lane_revision = locked
+                .revision
+                .checked_add(1)
+                .ok_or(AttemptError::InvariantViolation)?;
+            let games_played = locked
+                .games_played
+                .checked_add(1)
+                .ok_or(AttemptError::InvariantViolation)?;
+            let wins = locked
+                .wins
+                .checked_add(i32::from(won))
+                .ok_or(AttemptError::InvariantViolation)?;
+            sqlx::query(
+                "INSERT INTO mmr_ledger_entries (
+                     guild_id, id, season_id, user_id, lane, lane_revision, source_type,
+                     source_id, game_id, opponent_user_id, mmr_before, mmr_after, delta,
+                     games_played_delta, wins_delta, reverses_entry_id, reversed_source_type,
+                     actor_type, actor_id, note, request_id, created_at
+                 ) VALUES (
+                     $1, $2, $3, $4, $5, $6, 'GAME_RESULT',
+                     $7, $7, $8, $9, $10, $11,
+                     1, $12, NULL, NULL, 'USER', $13, NULL, $14, $15
+                 )",
+            )
+            .bind(guild_id)
+            .bind(Uuid::now_v7())
+            .bind(season_id.as_uuid())
+            .bind(&update.user_id)
+            .bind(result.lane)
+            .bind(lane_revision)
+            .bind(game_id.as_uuid())
+            .bind(&update.opponent_user_id)
+            .bind(update.mmr_before)
+            .bind(update.mmr_after)
+            .bind(update.delta)
+            .bind(if won { 1_i16 } else { 0_i16 })
+            .bind(actor_id)
+            .bind(request_id)
+            .bind(now)
+            .execute(&mut **transaction)
+            .await?;
+            let updated = sqlx::query(
+                "UPDATE user_lane_mmr
+                 SET mmr = $1, games_played = $2, wins = $3, revision = $4, updated_at = $5
+                 WHERE guild_id = $6 AND season_id = $7 AND user_id = $8 AND lane = $9",
+            )
+            .bind(update.mmr_after)
+            .bind(games_played)
+            .bind(wins)
+            .bind(lane_revision)
+            .bind(now)
+            .bind(guild_id)
+            .bind(season_id.as_uuid())
+            .bind(&update.user_id)
+            .bind(result.lane)
+            .execute(&mut **transaction)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(AttemptError::InvariantViolation);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn confirmed_series_score(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+) -> Result<(i64, i64), AttemptError> {
+    Ok(sqlx::query_as::<_, (i64, i64)>(
+        "SELECT
+             count(*) FILTER (
+                 WHERE (side_preset = 'DEFAULT' AND winning_side = 'BLUE')
+                    OR (side_preset = 'SWAPPED' AND winning_side = 'RED')
+             ) AS team_1_score,
+             count(*) FILTER (
+                 WHERE (side_preset = 'DEFAULT' AND winning_side = 'RED')
+                    OR (side_preset = 'SWAPPED' AND winning_side = 'BLUE')
+             ) AS team_2_score
+         FROM games
+         WHERE guild_id = $1 AND series_id = $2 AND status = 'CONFIRMED'",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+async fn series_season_id(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+) -> Result<SeasonId, AttemptError> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT season_id FROM series WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .map(SeasonId::from_uuid)
+    .ok_or(AttemptError::SeriesNotFound)
+}
+
+async fn increment_series_revision(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    actor_id: &UserId,
+    now: OffsetDateTime,
+    status: SeriesStatus,
+    winning_team: Option<&str>,
+    terminal_reason: Option<&str>,
+    ended_at: Option<OffsetDateTime>,
+) -> Result<i64, AttemptError> {
+    sqlx::query_scalar::<_, i64>(
+        "UPDATE series
+         SET status = $1,
+             winning_team = $2,
+             terminal_reason = $3,
+             ended_at = $4,
+             revision = revision + 1,
+             updated_by = $5,
+             updated_at = $6
+         WHERE guild_id = $7 AND id = $8
+         RETURNING revision",
+    )
+    .bind(status)
+    .bind(winning_team)
+    .bind(terminal_reason)
+    .bind(ended_at)
+    .bind(actor_id)
+    .bind(now)
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::InvariantViolation)
+}
+
+fn winner_roster_team(side_preset: &str, winner: &str) -> Result<RosterTeam, AttemptError> {
+    match (side_preset, winner) {
+        ("DEFAULT", "BLUE") | ("SWAPPED", "RED") => Ok(RosterTeam::Team1),
+        ("DEFAULT", "RED") | ("SWAPPED", "BLUE") => Ok(RosterTeam::Team2),
+        _ => Err(AttemptError::InvalidGameResult),
+    }
+}
+
+async fn void_last_confirmed_series_game(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    series_id: SeriesId,
+    actor_id: &UserId,
+    request_id: &str,
+    now: OffsetDateTime,
+) -> Result<VoidedSeriesGame, AttemptError> {
+    let game = sqlx::query_as::<_, ConfirmedSeriesGameRow>(
+        "SELECT id, season_id, source_input_id, game_number
+         FROM games
+         WHERE guild_id = $1 AND series_id = $2 AND status = 'CONFIRMED'
+         ORDER BY game_number DESC
+         LIMIT 1
+         FOR UPDATE",
+    )
+    .bind(guild_id)
+    .bind(series_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::SeriesNoConfirmedGames)?;
+    // Ledger rows are append-only. The locked game and MMR rows serialize this reversal.
+    let ledger_rows = sqlx::query_as::<_, GameResultLedgerRow>(
+        "SELECT id, user_id, lane, lane_revision, opponent_user_id, mmr_before, mmr_after,
+                delta, games_played_delta, wins_delta
+         FROM mmr_ledger_entries
+         WHERE guild_id = $1 AND game_id = $2 AND source_type = 'GAME_RESULT'
+         ORDER BY user_id, lane",
+    )
+    .bind(guild_id)
+    .bind(game.id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if ledger_rows.len() != 10 {
+        return Err(AttemptError::InvariantViolation);
+    }
+    let locked_rows = mmr::ensure_and_lock_mmr_rows(
+        transaction,
+        guild_id,
+        SeasonId::from_uuid(game.season_id),
+        ledger_rows.iter().map(|row| MmrLaneKey {
+            user_id: row.user_id.clone(),
+            lane: row.lane,
+        }),
+        now,
+    )
+    .await?;
+    let current_by_key = locked_rows
+        .into_iter()
+        .map(|row| ((row.key.user_id.clone(), row.key.lane), row))
+        .collect::<HashMap<_, _>>();
+    for entry in &ledger_rows {
+        let current = current_by_key
+            .get(&(entry.user_id.clone(), entry.lane))
+            .ok_or(AttemptError::InvariantViolation)?;
+        let has_blocking_later_change = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM mmr_ledger_entries AS later
+                 WHERE later.guild_id = $1
+                   AND later.season_id = $2
+                   AND later.user_id = $3
+                   AND later.lane = $4
+                   AND later.lane_revision > $5
+                   AND (
+                       later.source_type NOT IN ('GAME_RESULT', 'GAME_REVERSAL')
+                       OR (
+                           later.source_type = 'GAME_RESULT'
+                           AND NOT EXISTS (
+                               SELECT 1
+                               FROM mmr_ledger_entries AS reversal
+                               WHERE reversal.guild_id = later.guild_id
+                                 AND reversal.reverses_entry_id = later.id
+                                 AND reversal.source_type = 'GAME_REVERSAL'
+                           )
+                       )
+                   )
+             )",
+        )
+        .bind(guild_id)
+        .bind(game.season_id)
+        .bind(&entry.user_id)
+        .bind(entry.lane)
+        .bind(entry.lane_revision)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if current.mmr != entry.mmr_after
+            || current.games_played < i32::from(entry.games_played_delta)
+            || current.wins < i32::from(entry.wins_delta)
+            || has_blocking_later_change
+        {
+            return Err(AttemptError::SeriesGameMmrHistoryAdvanced);
+        }
+    }
+    for entry in ledger_rows {
+        let current = current_by_key
+            .get(&(entry.user_id.clone(), entry.lane))
+            .ok_or(AttemptError::InvariantViolation)?;
+        let next_revision = current
+            .revision
+            .checked_add(1)
+            .ok_or(AttemptError::InvariantViolation)?;
+        let games_played = current
+            .games_played
+            .checked_sub(i32::from(entry.games_played_delta))
+            .ok_or(AttemptError::InvariantViolation)?;
+        let wins = current
+            .wins
+            .checked_sub(i32::from(entry.wins_delta))
+            .ok_or(AttemptError::InvariantViolation)?;
+        sqlx::query(
+            "INSERT INTO mmr_ledger_entries (
+                 guild_id, id, season_id, user_id, lane, lane_revision, source_type,
+                 source_id, game_id, opponent_user_id, mmr_before, mmr_after, delta,
+                 games_played_delta, wins_delta, reverses_entry_id, reversed_source_type,
+                 actor_type, actor_id, note, request_id, created_at
+             ) VALUES (
+                 $1, $2, $3, $4, $5, $6, 'GAME_REVERSAL',
+                 $7, $7, $8, $9, $10, $11,
+                 $12, $13, $14, 'GAME_RESULT', 'USER', $15, NULL, $16, $17
+             )",
+        )
+        .bind(guild_id)
+        .bind(Uuid::now_v7())
+        .bind(game.season_id)
+        .bind(&entry.user_id)
+        .bind(entry.lane)
+        .bind(next_revision)
+        .bind(game.id)
+        .bind(&entry.opponent_user_id)
+        .bind(current.mmr)
+        .bind(entry.mmr_before)
+        .bind(-entry.delta)
+        .bind(-entry.games_played_delta)
+        .bind(-entry.wins_delta)
+        .bind(entry.id)
+        .bind(actor_id)
+        .bind(request_id)
+        .bind(now)
+        .execute(&mut **transaction)
+        .await?;
+        let updated = sqlx::query(
+            "UPDATE user_lane_mmr
+             SET mmr = $1, games_played = $2, wins = $3, revision = $4, updated_at = $5
+             WHERE guild_id = $6 AND season_id = $7 AND user_id = $8 AND lane = $9",
+        )
+        .bind(entry.mmr_before)
+        .bind(games_played)
+        .bind(wins)
+        .bind(next_revision)
+        .bind(now)
+        .bind(guild_id)
+        .bind(game.season_id)
+        .bind(&entry.user_id)
+        .bind(entry.lane)
+        .execute(&mut **transaction)
+        .await?;
+        if updated.rows_affected() != 1 {
+            return Err(AttemptError::InvariantViolation);
+        }
+    }
+    let voided = sqlx::query(
+        "UPDATE games
+         SET status = 'VOIDED', mmr_status = 'REVERSED', voided_by = $1,
+             voided_by_type = 'USER', voided_at = $2, void_reason = 'OPERATOR_REVERT'
+         WHERE guild_id = $3 AND id = $4 AND status = 'CONFIRMED'",
+    )
+    .bind(actor_id)
+    .bind(now)
+    .bind(guild_id)
+    .bind(game.id)
+    .execute(&mut **transaction)
+    .await?;
+    if voided.rows_affected() != 1 {
+        return Err(AttemptError::InvariantViolation);
+    }
+    let superseded = sqlx::query(
+        "UPDATE game_inputs
+         SET status = 'SUPERSEDED', updated_by = $1, updated_at = $2
+         WHERE guild_id = $3 AND id = $4 AND status = 'SUBMITTED'",
+    )
+    .bind(actor_id)
+    .bind(now)
+    .bind(guild_id)
+    .bind(game.source_input_id)
+    .execute(&mut **transaction)
+    .await?;
+    if superseded.rows_affected() != 1 {
+        return Err(AttemptError::InvariantViolation);
+    }
+    Ok(VoidedSeriesGame {
+        game_id: GameId::from_uuid(game.id),
+        set_number: game.game_number,
+    })
 }
 
 async fn lock_entry_draft(
@@ -4407,6 +7264,9 @@ fn validate_registration_input(input: &RegisterGuildMemberInput) -> Result<(), B
 
 fn validate_recruitment_command(command: &BotRecruitmentCommand) -> Result<(), BotWorkflowError> {
     validate_actor(command.actor())?;
+    if let BotRecruitmentCommand::Create { rules, .. } = command {
+        validate_recruitment_series_rules(rules)?;
+    }
     if let BotRecruitmentCommand::Join { participant, .. } = command {
         validate_actor(participant)?;
     }
@@ -4414,6 +7274,18 @@ fn validate_recruitment_command(command: &BotRecruitmentCommand) -> Result<(), B
         validate_lanes(lanes)?;
     }
     Ok(())
+}
+
+fn validate_recruitment_series_rules(
+    rules: &RecruitmentSeriesRules,
+) -> Result<(), BotWorkflowError> {
+    if matches!(rules.best_of, 1 | 3 | 5) {
+        Ok(())
+    } else {
+        Err(BotWorkflowError::InvalidRecruitmentBestOf {
+            received: rules.best_of,
+        })
+    }
 }
 
 fn validate_actor(actor: &BotActor) -> Result<(), BotWorkflowError> {
@@ -4432,6 +7304,187 @@ fn validate_lanes(lanes: &[Lane]) -> Result<(), BotWorkflowError> {
     let unique: HashSet<Lane> = lanes.iter().copied().collect();
     if unique.len() != lanes.len() {
         return Err(BotWorkflowError::InvalidPreferredLanes);
+    }
+    Ok(())
+}
+
+fn validate_series_pick_ban_operation(
+    operation: &SeriesPickBanOperation,
+) -> Result<(), BotWorkflowError> {
+    let valid = match operation {
+        SeriesPickBanOperation::SetSide { side_preset } => {
+            matches!(side_preset.as_str(), "DEFAULT" | "SWAPPED")
+        }
+        SeriesPickBanOperation::SetPick { champion_id, .. } => is_valid_champion_id(champion_id),
+        SeriesPickBanOperation::ClearPick { .. } => true,
+        SeriesPickBanOperation::SetBan {
+            side,
+            slot,
+            champion_id,
+        } => {
+            matches!(side.as_str(), "BLUE" | "RED")
+                && (1..=5).contains(slot)
+                && is_valid_champion_id(champion_id)
+        }
+        SeriesPickBanOperation::ClearBan { side, slot } => {
+            matches!(side.as_str(), "BLUE" | "RED") && (1..=5).contains(slot)
+        }
+        SeriesPickBanOperation::ApplyBulk { items } => validate_series_pick_ban_bulk_items(items),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(BotWorkflowError::InvalidCommand(
+            "series pick-ban operation is invalid",
+        ))
+    }
+}
+
+fn validate_series_pick_ban_bulk_items(items: &[SeriesPickBanBulkItem]) -> bool {
+    if items.is_empty() || items.len() > 20 {
+        return false;
+    }
+
+    let mut pick_players = HashSet::with_capacity(items.len());
+    let mut ban_slots = HashSet::with_capacity(items.len());
+    for item in items {
+        match item {
+            SeriesPickBanBulkItem::SetPick {
+                player_id,
+                champion_id,
+            } => {
+                if !is_valid_champion_id(champion_id) || !pick_players.insert(player_id) {
+                    return false;
+                }
+            }
+            SeriesPickBanBulkItem::SetBan {
+                side,
+                slot,
+                champion_id,
+            } => {
+                if !matches!(side.as_str(), "BLUE" | "RED")
+                    || !(1..=5).contains(slot)
+                    || !is_valid_champion_id(champion_id)
+                    || !ban_slots.insert((side.as_str(), *slot))
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn validate_series_game_submit_command(
+    command: &SeriesGameSubmitCommand,
+) -> Result<(), BotWorkflowError> {
+    if command.expected_revision < 0
+        || !(1..=5).contains(&command.set_number)
+        || !matches!(command.side_preset.as_str(), "DEFAULT" | "SWAPPED")
+        || !matches!(command.winner.as_str(), "BLUE" | "RED")
+        || !is_valid_patch_version(command.patch_version.as_deref())
+    {
+        return Err(BotWorkflowError::InvalidCommand(
+            "series game submit command is invalid",
+        ));
+    }
+    if let Some(picks) = command.picks.as_ref() {
+        if picks
+            .values()
+            .flatten()
+            .any(|champion| !is_valid_champion_id(champion))
+        {
+            return Err(BotWorkflowError::InvalidCommand(
+                "series game submit champions are invalid",
+            ));
+        }
+    }
+    if let Some(bans) = command.bans.as_ref() {
+        if bans.blue.len() != 5
+            || bans.red.len() != 5
+            || bans
+                .blue
+                .iter()
+                .chain(&bans.red)
+                .flatten()
+                .any(|champion| !is_valid_champion_id(champion))
+        {
+            return Err(BotWorkflowError::InvalidCommand(
+                "series game submit bans are invalid",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_valid_champion_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_CHAMPION_ID_BYTES
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn is_valid_patch_version(value: Option<&str>) -> bool {
+    value.is_none_or(|value| !value.is_empty() && value.len() <= MAX_PATCH_VERSION_BYTES)
+}
+
+fn validate_champion_id(value: &str) -> Result<(), AttemptError> {
+    is_valid_champion_id(value)
+        .then_some(())
+        .ok_or(AttemptError::InvalidGameResult)
+}
+
+fn validate_patch_version(value: Option<&str>) -> Result<(), AttemptError> {
+    is_valid_patch_version(value)
+        .then_some(())
+        .ok_or(AttemptError::InvalidGameResult)
+}
+
+fn ensure_roster_player(roster: &[SeriesRosterRow], user_id: &UserId) -> Result<(), AttemptError> {
+    roster
+        .iter()
+        .any(|player| player.user_id == *user_id)
+        .then_some(())
+        .ok_or(AttemptError::SeriesPickBanPlayerNotInRoster)
+}
+
+fn ensure_ban_slot(slot: i16) -> Result<(), AttemptError> {
+    (1..=5)
+        .contains(&slot)
+        .then_some(())
+        .ok_or(AttemptError::InvalidGameResult)
+}
+
+fn validate_submit_picks(
+    picks: &BTreeMap<UserId, Option<String>>,
+    roster: &[SeriesRosterRow],
+) -> Result<(), AttemptError> {
+    let expected = roster
+        .iter()
+        .map(|player| player.user_id.clone())
+        .collect::<BTreeSet<_>>();
+    let actual = picks.keys().cloned().collect::<BTreeSet<_>>();
+    if actual != expected
+        || picks
+            .values()
+            .flatten()
+            .any(|champion| !is_valid_champion_id(champion))
+    {
+        return Err(AttemptError::InvalidGameResult);
+    }
+    Ok(())
+}
+
+fn validate_submit_bans(bans: &SeriesPickBanBansSnapshot) -> Result<(), AttemptError> {
+    if bans.blue.len() != 5
+        || bans.red.len() != 5
+        || bans
+            .blue
+            .iter()
+            .chain(&bans.red)
+            .flatten()
+            .any(|champion| !is_valid_champion_id(champion))
+    {
+        return Err(AttemptError::InvalidGameResult);
     }
     Ok(())
 }
@@ -4497,6 +7550,14 @@ fn ensure_series_source_converted(status: RecruitmentStatus) -> Result<(), Attem
 
 fn ensure_series_in_progress(status: SeriesStatus) -> Result<(), AttemptError> {
     if status == SeriesStatus::InProgress {
+        Ok(())
+    } else {
+        Err(AttemptError::SeriesNotInProgress(status))
+    }
+}
+
+fn ensure_series_game_revertible(status: SeriesStatus) -> Result<(), AttemptError> {
+    if matches!(status, SeriesStatus::InProgress | SeriesStatus::Completed) {
         Ok(())
     } else {
         Err(AttemptError::SeriesNotInProgress(status))
@@ -4707,6 +7768,8 @@ struct WebSeriesCreatePrepared {
     audit_id: Uuid,
     recruitment_outbox_event_id: OutboxEventId,
     series_outbox_event_id: OutboxEventId,
+    recruitment_message_notification_id: NotificationId,
+    entry_confirmation_notification_id: NotificationId,
 }
 
 impl WebSeriesCreatePrepared {
@@ -4718,6 +7781,8 @@ impl WebSeriesCreatePrepared {
             audit_id: Uuid::now_v7(),
             recruitment_outbox_event_id: OutboxEventId::new(),
             series_outbox_event_id: OutboxEventId::new(),
+            recruitment_message_notification_id: NotificationId::new(),
+            entry_confirmation_notification_id: NotificationId::new(),
         }
     }
 }
@@ -4744,6 +7809,71 @@ impl WebSeriesLifecyclePrepared {
 }
 
 #[derive(Clone, Copy)]
+struct WebSeriesPickBanPrepared {
+    now: OffsetDateTime,
+    input_id: Uuid,
+    audit_id: Uuid,
+    outbox_event_id: OutboxEventId,
+}
+
+impl WebSeriesPickBanPrepared {
+    fn new() -> Self {
+        Self {
+            now: OffsetDateTime::now_utc(),
+            input_id: Uuid::now_v7(),
+            audit_id: Uuid::now_v7(),
+            outbox_event_id: OutboxEventId::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WebSeriesGameMutationPrepared {
+    now: OffsetDateTime,
+    idempotency_record_id: IdempotencyRecordId,
+    game_id: GameId,
+    input_id: Uuid,
+    audit_id: Uuid,
+    outbox_event_id: OutboxEventId,
+    result_notification_id: NotificationId,
+}
+
+impl WebSeriesGameMutationPrepared {
+    fn new() -> Self {
+        Self {
+            now: OffsetDateTime::now_utc(),
+            idempotency_record_id: IdempotencyRecordId::new(),
+            game_id: GameId::new(),
+            input_id: Uuid::now_v7(),
+            audit_id: Uuid::now_v7(),
+            outbox_event_id: OutboxEventId::new(),
+            result_notification_id: NotificationId::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WebSeriesEarlyCompletePrepared {
+    now: OffsetDateTime,
+    idempotency_record_id: IdempotencyRecordId,
+    audit_id: Uuid,
+    outbox_event_id: OutboxEventId,
+    result_notification_id: NotificationId,
+}
+
+impl WebSeriesEarlyCompletePrepared {
+    fn new() -> Self {
+        Self {
+            now: OffsetDateTime::now_utc(),
+            idempotency_record_id: IdempotencyRecordId::new(),
+            audit_id: Uuid::now_v7(),
+            outbox_event_id: OutboxEventId::new(),
+            result_notification_id: NotificationId::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct CommandMetadata {
     method: &'static str,
     route_template: &'static str,
@@ -4755,7 +7885,7 @@ struct CommandMetadata {
 impl BotRecruitmentCommand {
     fn actor(&self) -> &BotActor {
         match self {
-            Self::Create { actor }
+            Self::Create { actor, .. }
             | Self::BindMessage { actor, .. }
             | Self::Join { actor, .. }
             | Self::Leave { actor, .. }
@@ -4833,7 +7963,9 @@ impl RecruitmentCreateActor {
 }
 
 #[derive(Serialize)]
-struct WebRecruitmentCreateRequest {}
+struct WebRecruitmentCreateRequest {
+    rules: RecruitmentSeriesRules,
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -4888,6 +8020,38 @@ struct WebSeriesLifecycleCommand {
     series_id: SeriesId,
     expected_revision: i64,
     action: SeriesLifecycleAction,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSeriesPickBanCommand {
+    series_id: SeriesId,
+    expected_revision: i64,
+    operation: SeriesPickBanOperation,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSeriesGameSubmitCommand {
+    series_id: SeriesId,
+    #[serde(flatten)]
+    command: SeriesGameSubmitCommand,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSeriesGameRevertCommand {
+    series_id: SeriesId,
+    #[serde(flatten)]
+    command: SeriesGameRevertCommand,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSeriesEarlyCompleteCommand {
+    series_id: SeriesId,
+    #[serde(flatten)]
+    command: SeriesEarlyCompleteCommand,
 }
 
 #[derive(Clone, Serialize)]
@@ -5039,6 +8203,8 @@ struct RecruitmentLockRow {
     season_id: Uuid,
     status: RecruitmentStatus,
     target_count: i16,
+    best_of: i16,
+    hard_fearless: bool,
     revision: i64,
     created_by: UserId,
 }
@@ -5046,6 +8212,8 @@ struct RecruitmentLockRow {
 #[derive(Debug, FromRow)]
 struct SeriesLockRow {
     source_recruitment_id: RecruitmentId,
+    best_of: i16,
+    hard_fearless: bool,
     status: SeriesStatus,
     revision: i64,
 }
@@ -5057,6 +8225,8 @@ struct RecruitmentProjectionRow {
     title: String,
     status: RecruitmentStatus,
     target_count: i16,
+    best_of: i16,
+    hard_fearless: bool,
     revision: i64,
     channel_id: Option<DiscordChannelId>,
     message_id: Option<DiscordMessageId>,
@@ -5072,6 +8242,8 @@ impl RecruitmentProjectionRow {
             title: self.title,
             status: self.status,
             target_count: self.target_count,
+            best_of: self.best_of,
+            hard_fearless: self.hard_fearless,
             revision: self.revision,
             channel_id: self.channel_id,
             message_id: self.message_id,
@@ -5100,6 +8272,8 @@ struct EntryDraftRecruitmentRow {
     title: String,
     status: RecruitmentStatus,
     target_count: i16,
+    best_of: i16,
+    hard_fearless: bool,
     revision: i64,
     updated_at: OffsetDateTime,
     created_by: UserId,
@@ -5160,10 +8334,100 @@ struct SeriesPickBanSeriesRow {
     display_number: i64,
     title: String,
     best_of: i16,
+    hard_fearless: bool,
     status: SeriesStatus,
     revision: i64,
     source_recruitment_id: Uuid,
     updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultSeriesRow {
+    id: Uuid,
+    display_number: i64,
+    title: String,
+    best_of: i16,
+    hard_fearless: bool,
+    status: SeriesStatus,
+    revision: i64,
+    source_recruitment_id: Uuid,
+    winning_team: Option<String>,
+    terminal_reason: Option<String>,
+    started_at: OffsetDateTime,
+    ended_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultNotificationSeriesRow {
+    id: Uuid,
+    display_number: i64,
+    title: String,
+    best_of: i16,
+    hard_fearless: bool,
+    winning_team: Option<String>,
+    terminal_reason: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultGameRow {
+    id: Uuid,
+    source_input_id: Uuid,
+    set_number: i16,
+    side_preset: String,
+    winning_side: String,
+    patch_version: Option<String>,
+    duration_seconds: Option<i32>,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultNotificationGameRow {
+    id: Uuid,
+    set_number: i16,
+    side_preset: String,
+    winning_side: String,
+    patch_version: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultNotificationRosterRow {
+    team: String,
+    id: UserId,
+    lane: Lane,
+    display_name: String,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultNotificationGameParticipantRow {
+    game_id: Uuid,
+    team: String,
+    id: UserId,
+    lane: Lane,
+    champion_id: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultNotificationGameBanRow {
+    game_id: Uuid,
+    side: String,
+    slot: i16,
+    champion_id: String,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesResultMmrChangeRow {
+    user_id: UserId,
+    lane: Lane,
+    delta: f64,
+    mmr_before: f64,
+    mmr_after: f64,
+}
+
+#[derive(Debug, FromRow)]
+struct EntryConfirmationParticipantRow {
+    team: String,
+    id: UserId,
+    lane: Lane,
+    display_name: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -5203,6 +8467,41 @@ struct SeriesPickBanBanRow {
     side: String,
     slot: i16,
     champion_id: String,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesRosterRow {
+    user_id: UserId,
+    team: String,
+    lane: Lane,
+}
+
+#[derive(Debug, FromRow)]
+struct ConfirmedSeriesGameRow {
+    id: Uuid,
+    season_id: Uuid,
+    source_input_id: Uuid,
+    game_number: i16,
+}
+
+#[derive(Debug, FromRow)]
+struct GameResultLedgerRow {
+    id: Uuid,
+    user_id: UserId,
+    lane: Lane,
+    lane_revision: i64,
+    opponent_user_id: UserId,
+    mmr_before: f64,
+    mmr_after: f64,
+    delta: f64,
+    games_played_delta: i16,
+    wins_delta: i16,
+}
+
+#[derive(Debug)]
+struct VoidedSeriesGame {
+    game_id: GameId,
+    set_number: i16,
 }
 
 #[derive(Debug, FromRow)]
@@ -5308,8 +8607,38 @@ enum AttemptError {
     SeriesRevisionConflict { expected: i64, actual: i64 },
     #[error("series source recruitment must be CONVERTED, but is {0}")]
     SeriesSourceNotConverted(RecruitmentStatus),
-    #[error("series has {count} confirmed games")]
-    SeriesHasConfirmedGames { count: i64 },
+    #[error("series has no current draft set")]
+    SeriesNoCurrentSet,
+    #[error("series game set mismatch: expected {expected}, actual {actual}")]
+    SeriesSetNotCurrent { expected: i16, actual: i16 },
+    #[error("series game result input is invalid")]
+    InvalidGameResult,
+    #[error("the same champion appears more than once in the game input: {champion_id}")]
+    SeriesGameChampionDuplicate { champion_id: String },
+    #[error("a hard fearless champion was already picked in this series: {champion_id}")]
+    SeriesHardFearlessChampionUsed { champion_id: String },
+    #[error("pick-ban player is not in the frozen series roster")]
+    SeriesPickBanPlayerNotInRoster,
+    #[error("series has no confirmed game to revert")]
+    SeriesNoConfirmedGames,
+    #[error(
+        "series early completion requires BO3 or BO5 with at least one confirmed game: best_of={best_of}, confirmed_game_count={confirmed_game_count}"
+    )]
+    SeriesEarlyCompletionUnavailable {
+        best_of: i16,
+        confirmed_game_count: i64,
+    },
+    #[error(
+        "series early draw requires a tied score: team_1_score={team_1_score}, team_2_score={team_2_score}"
+    )]
+    SeriesEarlyDrawRequiresTiedScore {
+        team_1_score: i64,
+        team_2_score: i64,
+    },
+    #[error("a later MMR change prevents this game from being reversed safely")]
+    SeriesGameMmrHistoryAdvanced,
+    #[error("series result is unavailable while status is {0}")]
+    SeriesResultUnavailable(SeriesStatus),
     #[error("entry draft must assign all joined participants before series creation")]
     EntryDraftIncomplete {
         joined: i64,
@@ -5405,8 +8734,38 @@ impl AttemptError {
             Self::SeriesSourceNotConverted(status) => {
                 BotWorkflowError::SeriesSourceNotConverted(status)
             }
-            Self::SeriesHasConfirmedGames { count } => {
-                BotWorkflowError::SeriesHasConfirmedGames { count }
+            Self::SeriesNoCurrentSet => BotWorkflowError::SeriesNoCurrentSet,
+            Self::SeriesSetNotCurrent { expected, actual } => {
+                BotWorkflowError::SeriesSetNotCurrent { expected, actual }
+            }
+            Self::InvalidGameResult => BotWorkflowError::InvalidGameResult,
+            Self::SeriesGameChampionDuplicate { champion_id } => {
+                BotWorkflowError::SeriesGameChampionDuplicate { champion_id }
+            }
+            Self::SeriesHardFearlessChampionUsed { champion_id } => {
+                BotWorkflowError::SeriesHardFearlessChampionUsed { champion_id }
+            }
+            Self::SeriesPickBanPlayerNotInRoster => {
+                BotWorkflowError::SeriesPickBanPlayerNotInRoster
+            }
+            Self::SeriesNoConfirmedGames => BotWorkflowError::SeriesNoConfirmedGames,
+            Self::SeriesEarlyCompletionUnavailable {
+                best_of,
+                confirmed_game_count,
+            } => BotWorkflowError::SeriesEarlyCompletionUnavailable {
+                best_of,
+                confirmed_game_count,
+            },
+            Self::SeriesEarlyDrawRequiresTiedScore {
+                team_1_score,
+                team_2_score,
+            } => BotWorkflowError::SeriesEarlyDrawRequiresTiedScore {
+                team_1_score,
+                team_2_score,
+            },
+            Self::SeriesGameMmrHistoryAdvanced => BotWorkflowError::SeriesGameMmrHistoryAdvanced,
+            Self::SeriesResultUnavailable(status) => {
+                BotWorkflowError::SeriesResultUnavailable(status)
             }
             Self::EntryDraftIncomplete {
                 joined,
@@ -5435,6 +8794,8 @@ impl AttemptError {
 pub enum BotWorkflowError {
     #[error("bot workflow command is invalid: {0}")]
     InvalidCommand(&'static str),
+    #[error("recruitment best-of must be 1, 3, or 5, received {received}")]
+    InvalidRecruitmentBestOf { received: i16 },
     #[error("guild was not found")]
     GuildNotFound,
     #[error("guild is not active: {0}")]
@@ -5495,8 +8856,38 @@ pub enum BotWorkflowError {
     SeriesRevisionConflict { expected: i64, actual: i64 },
     #[error("series source recruitment must be CONVERTED, but is {0}")]
     SeriesSourceNotConverted(RecruitmentStatus),
-    #[error("series has {count} confirmed games")]
-    SeriesHasConfirmedGames { count: i64 },
+    #[error("series has no current draft set")]
+    SeriesNoCurrentSet,
+    #[error("series game set mismatch: expected {expected}, actual {actual}")]
+    SeriesSetNotCurrent { expected: i16, actual: i16 },
+    #[error("series game result input is invalid")]
+    InvalidGameResult,
+    #[error("the same champion appears more than once in the game input: {champion_id}")]
+    SeriesGameChampionDuplicate { champion_id: String },
+    #[error("a hard fearless champion was already picked in this series: {champion_id}")]
+    SeriesHardFearlessChampionUsed { champion_id: String },
+    #[error("pick-ban player is not in the frozen series roster")]
+    SeriesPickBanPlayerNotInRoster,
+    #[error("series has no confirmed game to revert")]
+    SeriesNoConfirmedGames,
+    #[error(
+        "series early completion requires BO3 or BO5 with at least one confirmed game: best_of={best_of}, confirmed_game_count={confirmed_game_count}"
+    )]
+    SeriesEarlyCompletionUnavailable {
+        best_of: i16,
+        confirmed_game_count: i64,
+    },
+    #[error(
+        "series early draw requires a tied score: team_1_score={team_1_score}, team_2_score={team_2_score}"
+    )]
+    SeriesEarlyDrawRequiresTiedScore {
+        team_1_score: i64,
+        team_2_score: i64,
+    },
+    #[error("a later MMR change prevents this game from being reversed safely")]
+    SeriesGameMmrHistoryAdvanced,
+    #[error("series result is unavailable while status is {0}")]
+    SeriesResultUnavailable(SeriesStatus),
     #[error("entry draft must assign all joined participants before series creation")]
     EntryDraftIncomplete {
         joined: i64,
@@ -5550,6 +8941,7 @@ mod tests {
         let commands = [
             BotRecruitmentCommand::Create {
                 actor: operator.clone(),
+                rules: RecruitmentSeriesRules::default(),
             },
             BotRecruitmentCommand::BindMessage {
                 actor: operator.clone(),
@@ -5597,6 +8989,84 @@ mod tests {
         assert!(validate_lanes(&[Lane::Top]).is_ok());
         assert!(validate_lanes(&[]).is_err());
         assert!(validate_lanes(&[Lane::Mid, Lane::Mid]).is_err());
+    }
+
+    #[test]
+    fn recruitment_rules_are_bounded_and_defaulted() {
+        assert_eq!(RecruitmentSeriesRules::default().best_of, 3);
+        assert!(!RecruitmentSeriesRules::default().hard_fearless);
+        assert!(
+            validate_recruitment_series_rules(&RecruitmentSeriesRules {
+                best_of: 1,
+                hard_fearless: false,
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_recruitment_series_rules(&RecruitmentSeriesRules {
+                best_of: 3,
+                hard_fearless: true,
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_recruitment_series_rules(&RecruitmentSeriesRules {
+                best_of: 5,
+                hard_fearless: false,
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_recruitment_series_rules(&RecruitmentSeriesRules {
+                best_of: 2,
+                hard_fearless: false,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn early_completion_requires_a_played_bo3_or_bo5() {
+        assert!(!can_early_complete_series(1, 1));
+        assert!(!can_early_complete_series(3, 0));
+        assert!(can_early_complete_series(3, 1));
+        assert!(can_early_complete_series(5, 1));
+    }
+
+    #[test]
+    fn pick_ban_bulk_is_bounded_and_only_accepts_semantic_set_items() {
+        let member = UserId::from(&user_id("100000000000000001"));
+        let set_pick = SeriesPickBanBulkItem::SetPick {
+            player_id: member,
+            champion_id: "Ahri".to_owned(),
+        };
+        assert!(validate_series_pick_ban_bulk_items(&[set_pick.clone()]));
+        assert!(!validate_series_pick_ban_bulk_items(&[]));
+        assert!(!validate_series_pick_ban_bulk_items(&vec![
+            set_pick.clone();
+            21
+        ]));
+        assert!(!validate_series_pick_ban_bulk_items(&[
+            set_pick.clone(),
+            set_pick.clone(),
+        ]));
+        assert!(
+            serde_json::from_value::<SeriesPickBanOperation>(json!({
+                "type": "APPLY_BULK",
+                "items": [{
+                    "type": "CLEAR_PICK",
+                    "playerId": "100000000000000001"
+                }]
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<SeriesPickBanOperation>(json!({
+                "type": "SET_HARD_FEARLESS",
+                "hardFearless": true
+            }))
+            .is_err()
+        );
     }
 
     #[test]

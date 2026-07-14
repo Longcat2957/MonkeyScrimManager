@@ -7,11 +7,18 @@ import {
 	type MonkeyBotApiClient
 } from '../api/client.js';
 import {
+	entryConfirmationNotificationPayloadSchema,
 	recruitmentMessageNotificationPayloadSchema,
+	seriesResultNotificationPayloadSchema,
 	type BotNotification,
 	type NackNotificationRequest
 } from '../api/contracts.js';
+import { renderEntryConfirmationMessage } from './entry-confirmation-message.js';
 import { renderRecruitmentMessage } from './recruitment-message.js';
+import {
+	renderSeriesResultMessage,
+	type SeriesResultImageResolver
+} from './series-result-message.js';
 
 const DEFAULT_CLAIM_LIMIT = 20;
 
@@ -33,6 +40,7 @@ export interface BotNotificationRelayOptions {
 	webOrigin: URL;
 	pollIntervalMs: number;
 	claimLimit?: number;
+	resultImageResolver?: SeriesResultImageResolver;
 }
 
 export function installBotNotificationRelay(
@@ -52,6 +60,7 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 	readonly #webOrigin: URL;
 	readonly #pollIntervalMs: number;
 	readonly #claimLimit: number;
+	readonly #resultImageResolver: SeriesResultImageResolver | undefined;
 	readonly #abortController = new AbortController();
 	#timer: NodeJS.Timeout | null = null;
 	#activePoll: Promise<void> | null = null;
@@ -88,6 +97,7 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 		this.#webOrigin = options.webOrigin;
 		this.#pollIntervalMs = options.pollIntervalMs;
 		this.#claimLimit = claimLimit;
+		this.#resultImageResolver = options.resultImageResolver;
 		client.on(Events.ClientReady, this.#onClientReady);
 	}
 
@@ -132,32 +142,141 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 	}
 
 	async #deliver(notification: BotNotification): Promise<void> {
-		const payload = recruitmentMessageNotificationPayloadSchema.safeParse(notification.payload);
-		if (!payload.success) {
-			await this.#nack(notification, {
-				kind: 'HTTP',
-				status: 422,
-				message: 'Recruitment notification payload does not match schema version 1'
-			});
-			return;
-		}
-
 		switch (notification.type) {
 			case 'RECRUITMENT_MESSAGE_CREATE':
-				await this.#createRecruitmentMessage(notification, payload.data.snapshot);
-				return;
 			case 'RECRUITMENT_MESSAGE_UPDATE':
-				await this.#updateRecruitmentMessage(notification, payload.data.snapshot);
+			case 'RECRUITMENT_MESSAGE_DELETE': {
+				const payload = recruitmentMessageNotificationPayloadSchema.safeParse(notification.payload);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message: 'Recruitment notification payload does not match schema version 1'
+					});
+					return;
+				}
+
+				switch (notification.type) {
+					case 'RECRUITMENT_MESSAGE_CREATE':
+						await this.#createRecruitmentMessage(notification, payload.data.snapshot);
+						return;
+					case 'RECRUITMENT_MESSAGE_UPDATE':
+						await this.#updateRecruitmentMessage(notification, payload.data.snapshot);
+						return;
+					case 'RECRUITMENT_MESSAGE_DELETE':
+						await this.#deleteRecruitmentMessage(notification, payload.data.snapshot);
+						return;
+				}
 				return;
-			case 'RECRUITMENT_MESSAGE_DELETE':
-				await this.#deleteRecruitmentMessage(notification, payload.data.snapshot);
+			}
+			case 'ENTRY_CONFIRMATION_CREATE': {
+				const payload = entryConfirmationNotificationPayloadSchema.safeParse(notification.payload);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message: 'Entry confirmation payload does not match schema version 1'
+					});
+					return;
+				}
+				await this.#createEntryConfirmation(notification, payload.data.snapshot);
 				return;
+			}
+			case 'SERIES_RESULT_CREATE': {
+				const payload = seriesResultNotificationPayloadSchema.safeParse(notification.payload);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message:
+							'Series result notification payload does not match supported schema versions 1 or 2'
+					});
+					return;
+				}
+				await this.#createSeriesResult(notification, payload.data.snapshot);
+				return;
+			}
 			default:
 				await this.#nack(notification, {
 					kind: 'HTTP',
 					status: 422,
 					message: `Unsupported bot notification type: ${notification.type}`
 				});
+		}
+	}
+
+	async #createSeriesResult(
+		notification: BotNotification,
+		snapshot: ReturnType<typeof seriesResultNotificationPayloadSchema.parse>['snapshot']
+	): Promise<void> {
+		let messageId: string;
+		try {
+			const channel = await this.#sendableGuildChannel(notification.channelId);
+			const messageOptions = await renderSeriesResultMessage(
+				snapshot,
+				this.#webOrigin,
+				this.#resultImageResolver ? { resolveImages: this.#resultImageResolver } : {}
+			);
+			const message = await channel.send({
+				...messageOptions,
+				nonce: notification.discordNonce,
+				enforceNonce: true
+			});
+			messageId = message.id;
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+			return;
+		}
+
+		try {
+			await this.#acknowledge(notification, messageId);
+			this.#logger.info(
+				{
+					notificationId: notification.id,
+					guildId: notification.guildId,
+					channelId: notification.channelId,
+					messageId
+				},
+				'Series result Discord message created'
+			);
+		} catch (error) {
+			// The stable Discord nonce makes a delivery retry safe when the API acknowledgement is lost.
+			await this.#nack(notification, failureFor(error));
+		}
+	}
+
+	async #createEntryConfirmation(
+		notification: BotNotification,
+		snapshot: ReturnType<typeof entryConfirmationNotificationPayloadSchema.parse>['snapshot']
+	): Promise<void> {
+		let messageId: string;
+		try {
+			const channel = await this.#sendableGuildChannel(notification.channelId);
+			const message = await channel.send({
+				...renderEntryConfirmationMessage(snapshot, this.#webOrigin),
+				nonce: notification.discordNonce,
+				enforceNonce: true
+			});
+			messageId = message.id;
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+			return;
+		}
+
+		try {
+			await this.#acknowledge(notification, messageId);
+			this.#logger.info(
+				{
+					notificationId: notification.id,
+					guildId: notification.guildId,
+					channelId: notification.channelId,
+					messageId
+				},
+				'Entry confirmation Discord message created'
+			);
+		} catch (error) {
+			// The stable Discord nonce makes a delivery retry safe when the API acknowledgement is lost.
+			await this.#nack(notification, failureFor(error));
 		}
 	}
 
@@ -275,7 +394,7 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 		if (!channel || !channel.isSendable() || channel.isDMBased()) {
 			throw new NotificationHttpError(
 				404,
-				`Configured recruitment channel ${channelId} is unavailable`
+				`Configured Discord channel ${channelId} is unavailable`
 			);
 		}
 		return channel;

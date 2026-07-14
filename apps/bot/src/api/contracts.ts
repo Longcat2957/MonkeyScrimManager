@@ -25,6 +25,10 @@ export const setupGuildRequestSchema = z
 		guildName: z.string().min(1).max(100),
 		guildIconHash: z.string().min(1).nullable(),
 		operatorRoleId: discordSnowflakeSchema,
+		recruitmentChannelId: discordSnowflakeSchema,
+		entryChannelId: discordSnowflakeSchema.nullable(),
+		resultChannelId: discordSnowflakeSchema.nullable(),
+		logChannelId: discordSnowflakeSchema.nullable(),
 		seasonName: z.string().min(1).max(100)
 	})
 	.strict();
@@ -124,13 +128,17 @@ export const recruitmentParticipantSchema = z
 	})
 	.strict();
 
+export const seriesBestOfSchema = z.union([z.literal(1), z.literal(3), z.literal(5)]);
+
 export const recruitmentSchema = z
 	.object({
 		id: uuidSchema,
 		displayNumber: z.number().int().positive(),
 		title: z.string().min(1),
-		status: z.enum(['OPEN', 'CLOSED', 'CANCELLED']),
+		status: z.enum(['OPEN', 'CLOSED', 'CONVERTED', 'CANCELLED']),
 		targetCount: z.literal(10),
+		bestOf: seriesBestOfSchema,
+		hardFearless: z.boolean(),
 		revision: z.number().int().nonnegative(),
 		channelId: discordSnowflakeSchema.nullable(),
 		messageId: discordSnowflakeSchema.nullable(),
@@ -153,7 +161,9 @@ export const recruitmentSnapshotSchema = z
 
 export const createRecruitmentRequestSchema = z
 	.object({
-		actor: actorSchema
+		actor: actorSchema,
+		bestOf: seriesBestOfSchema,
+		hardFearless: z.boolean()
 	})
 	.strict();
 
@@ -202,6 +212,377 @@ export const recruitmentMessageNotificationPayloadSchema = z
 		snapshot: recruitmentSnapshotSchema
 	})
 	.strict();
+
+const entryConfirmationPlayerSchema = z
+	.object({
+		id: recruitmentParticipantIdSchema,
+		displayName: z.string().min(1).max(100),
+		lane: laneSchema
+	})
+	.strict();
+
+const entryConfirmationTeamSchema = z
+	.object({
+		team: z.enum(['TEAM_1', 'TEAM_2']),
+		name: z.string().min(1).max(100),
+		players: z.array(entryConfirmationPlayerSchema).length(5)
+	})
+	.strict();
+
+export const entryConfirmationSnapshotSchema = z
+	.object({
+		series: z
+			.object({
+				id: uuidSchema,
+				displayNumber: z.number().int().positive(),
+				title: z.string().min(1).max(200),
+				bestOf: seriesBestOfSchema,
+				hardFearless: z.boolean()
+			})
+			.strict(),
+		teams: z.array(entryConfirmationTeamSchema).length(2),
+		links: z.object({ pickBan: z.string().startsWith('/g/') }).strict()
+	})
+	.strict();
+
+export const entryConfirmationNotificationPayloadSchema = z
+	.object({
+		schemaVersion: z.literal(1),
+		seriesId: uuidSchema,
+		snapshot: entryConfirmationSnapshotSchema
+	})
+	.strict();
+
+const seriesResultTeamSchema = z.enum(['TEAM_1', 'TEAM_2']);
+const seriesResultSidePresetSchema = z.enum(['DEFAULT', 'SWAPPED']);
+const seriesResultTerminalReasonSchema = z.enum(['SCORE_REACHED', 'EARLY_WIN', 'EARLY_DRAW']);
+const seriesResultChampionIdSchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.regex(/^[A-Za-z0-9]+$/);
+
+const seriesResultSeriesSchema = z
+	.object({
+		id: uuidSchema,
+		displayNumber: z.number().int().positive(),
+		title: z.string().min(1).max(200),
+		bestOf: seriesBestOfSchema,
+		hardFearless: z.boolean(),
+		winningTeam: seriesResultTeamSchema.nullable(),
+		terminalReason: seriesResultTerminalReasonSchema
+	})
+	.strict();
+
+const seriesResultScoreSchema = z
+	.object({
+		team1: z.number().int().nonnegative(),
+		team2: z.number().int().nonnegative()
+	})
+	.strict();
+
+const seriesResultLinksSchema = z.object({ result: z.string().startsWith('/g/') }).strict();
+
+const seriesResultCompactGameSchema = z
+	.object({
+		setNumber: z.number().int().positive(),
+		winner: seriesResultTeamSchema
+	})
+	.strict();
+
+export const seriesResultNotificationV1SnapshotSchema = z
+	.object({
+		series: seriesResultSeriesSchema,
+		score: seriesResultScoreSchema,
+		games: z.array(seriesResultCompactGameSchema).min(1).max(5),
+		links: seriesResultLinksSchema
+	})
+	.strict()
+	.superRefine(validateSeriesResultOutcome);
+
+const seriesResultNotificationPlayerSchema = z
+	.object({
+		id: recruitmentParticipantIdSchema,
+		displayName: z.string().min(1).max(100),
+		lane: laneSchema
+	})
+	.strict();
+
+const seriesResultNotificationTeamSchema = z
+	.object({
+		team: seriesResultTeamSchema,
+		name: z.string().min(1).max(100),
+		players: z.array(seriesResultNotificationPlayerSchema).length(5)
+	})
+	.strict();
+
+const seriesResultNotificationGamePickSchema = seriesResultNotificationPlayerSchema
+	.extend({ championId: seriesResultChampionIdSchema.nullable() })
+	.strict();
+
+const seriesResultNotificationGameTeamSchema = z
+	.object({
+		team: seriesResultTeamSchema,
+		name: z.string().min(1).max(100),
+		picks: z.array(seriesResultNotificationGamePickSchema).length(5)
+	})
+	.strict();
+
+const seriesResultNotificationFullGameSchema = z
+	.object({
+		setNumber: z.number().int().positive(),
+		winner: seriesResultTeamSchema,
+		sidePreset: seriesResultSidePresetSchema,
+		team1: seriesResultNotificationGameTeamSchema,
+		team2: seriesResultNotificationGameTeamSchema,
+		bans: z
+			.object({
+				blue: z.array(seriesResultChampionIdSchema.nullable()).length(5),
+				red: z.array(seriesResultChampionIdSchema.nullable()).length(5)
+			})
+			.strict(),
+		patchVersion: z.string().min(1).max(32).nullable()
+	})
+	.strict();
+
+export const seriesResultNotificationV2SnapshotSchema = z
+	.object({
+		series: seriesResultSeriesSchema,
+		teams: z.array(seriesResultNotificationTeamSchema).length(2),
+		score: seriesResultScoreSchema,
+		games: z.array(seriesResultNotificationFullGameSchema).min(1).max(5),
+		links: seriesResultLinksSchema
+	})
+	.strict()
+	.superRefine((snapshot, context) => {
+		validateSeriesResultOutcome(snapshot, context);
+		validateSeriesResultFullSnapshot(snapshot, context);
+	});
+
+// Kept as the compact schema name so existing v1 callers and pending rows remain valid.
+export const seriesResultNotificationSnapshotSchema = seriesResultNotificationV1SnapshotSchema;
+
+export const seriesResultNotificationV1PayloadSchema = z
+	.object({
+		schemaVersion: z.literal(1),
+		seriesId: uuidSchema,
+		snapshot: seriesResultNotificationV1SnapshotSchema
+	})
+	.strict()
+	.superRefine(validateSeriesResultPayload);
+
+export const seriesResultNotificationV2PayloadSchema = z
+	.object({
+		schemaVersion: z.literal(2),
+		seriesId: uuidSchema,
+		snapshot: seriesResultNotificationV2SnapshotSchema
+	})
+	.strict()
+	.superRefine(validateSeriesResultPayload);
+
+export const seriesResultNotificationPayloadSchema = z.discriminatedUnion('schemaVersion', [
+	seriesResultNotificationV1PayloadSchema,
+	seriesResultNotificationV2PayloadSchema
+]);
+
+function validateSeriesResultOutcome(
+	snapshot: {
+		series: {
+			bestOf: 1 | 3 | 5;
+			winningTeam: 'TEAM_1' | 'TEAM_2' | null;
+			terminalReason: 'SCORE_REACHED' | 'EARLY_WIN' | 'EARLY_DRAW';
+		};
+		score: { team1: number; team2: number };
+		games: ReadonlyArray<{ setNumber: number; winner: 'TEAM_1' | 'TEAM_2' }>;
+	},
+	context: z.RefinementCtx
+): void {
+	if (snapshot.games.length > snapshot.series.bestOf) {
+		context.addIssue({
+			code: 'custom',
+			path: ['games'],
+			message: 'confirmed game count cannot exceed the series best-of'
+		});
+	}
+
+	let team1Wins = 0;
+	let team2Wins = 0;
+	for (const [index, game] of snapshot.games.entries()) {
+		if (game.setNumber !== index + 1) {
+			context.addIssue({
+				code: 'custom',
+				path: ['games', index, 'setNumber'],
+				message: 'confirmed sets must be sequentially numbered from one'
+			});
+		}
+		if (game.winner === 'TEAM_1') team1Wins += 1;
+		else team2Wins += 1;
+	}
+	if (snapshot.score.team1 !== team1Wins || snapshot.score.team2 !== team2Wins) {
+		context.addIssue({
+			code: 'custom',
+			path: ['score'],
+			message: 'series score must match the confirmed set outcomes'
+		});
+	}
+
+	const requiredWins = Math.floor(snapshot.series.bestOf / 2) + 1;
+	if (snapshot.series.terminalReason === 'EARLY_DRAW') {
+		if (snapshot.series.winningTeam !== null || snapshot.score.team1 !== snapshot.score.team2) {
+			context.addIssue({
+				code: 'custom',
+				path: ['series'],
+				message: 'an early draw must have no winning team and a tied score'
+			});
+		}
+		return;
+	}
+
+	if (snapshot.series.winningTeam === null) {
+		context.addIssue({
+			code: 'custom',
+			path: ['series', 'winningTeam'],
+			message: 'a completed series result must identify a winning team'
+		});
+		return;
+	}
+	if (
+		snapshot.series.terminalReason === 'SCORE_REACHED' &&
+		(snapshot.series.winningTeam === 'TEAM_1' ? snapshot.score.team1 : snapshot.score.team2) <
+			requiredWins
+	) {
+		context.addIssue({
+			code: 'custom',
+			path: ['score'],
+			message: 'a score-reached result must contain the required winning score'
+		});
+	}
+}
+
+function validateSeriesResultFullSnapshot(
+	snapshot: z.infer<typeof seriesResultNotificationV2SnapshotSchema>,
+	context: z.RefinementCtx
+): void {
+	const rosterByTeam = new Map(snapshot.teams.map((team) => [team.team, team]));
+	for (const teamId of ['TEAM_1', 'TEAM_2'] as const) {
+		if (!rosterByTeam.has(teamId)) {
+			context.addIssue({
+				code: 'custom',
+				path: ['teams'],
+				message: `series result roster must include ${teamId}`
+			});
+		}
+	}
+	if (rosterByTeam.size !== snapshot.teams.length) {
+		context.addIssue({
+			code: 'custom',
+			path: ['teams'],
+			message: 'series result roster teams must be unique'
+		});
+	}
+
+	const rosterPlayerIds = snapshot.teams.flatMap((team) => team.players.map((player) => player.id));
+	if (new Set(rosterPlayerIds).size !== rosterPlayerIds.length) {
+		context.addIssue({
+			code: 'custom',
+			path: ['teams'],
+			message: 'series result roster players must be unique'
+		});
+	}
+	for (const [teamIndex, team] of snapshot.teams.entries()) {
+		const lanes = team.players.map((player) => player.lane);
+		if (new Set(lanes).size !== lanes.length) {
+			context.addIssue({
+				code: 'custom',
+				path: ['teams', teamIndex, 'players'],
+				message: 'series result roster lanes must be unique per team'
+			});
+		}
+	}
+
+	for (const [gameIndex, game] of snapshot.games.entries()) {
+		validateSeriesResultGameTeam(
+			game.team1,
+			rosterByTeam.get('TEAM_1'),
+			'TEAM_1',
+			gameIndex,
+			'team1',
+			context
+		);
+		validateSeriesResultGameTeam(
+			game.team2,
+			rosterByTeam.get('TEAM_2'),
+			'TEAM_2',
+			gameIndex,
+			'team2',
+			context
+		);
+	}
+}
+
+function validateSeriesResultGameTeam(
+	gameTeam: z.infer<typeof seriesResultNotificationGameTeamSchema>,
+	rosterTeam: z.infer<typeof seriesResultNotificationTeamSchema> | undefined,
+	expectedTeam: 'TEAM_1' | 'TEAM_2',
+	gameIndex: number,
+	field: 'team1' | 'team2',
+	context: z.RefinementCtx
+): void {
+	if (gameTeam.team !== expectedTeam) {
+		context.addIssue({
+			code: 'custom',
+			path: ['games', gameIndex, field, 'team'],
+			message: `${field} must describe ${expectedTeam}`
+		});
+	}
+	if (!rosterTeam) return;
+	if (gameTeam.name !== rosterTeam.name) {
+		context.addIssue({
+			code: 'custom',
+			path: ['games', gameIndex, field, 'name'],
+			message: `${field} name must match the immutable series roster`
+		});
+	}
+
+	const rosterById = new Map(rosterTeam.players.map((player) => [player.id, player]));
+	const pickIds = gameTeam.picks.map((pick) => pick.id);
+	if (
+		new Set(pickIds).size !== pickIds.length ||
+		pickIds.some((id) => !rosterById.has(id)) ||
+		rosterTeam.players.some((player) => !pickIds.includes(player.id))
+	) {
+		context.addIssue({
+			code: 'custom',
+			path: ['games', gameIndex, field, 'picks'],
+			message: `${field} picks must contain every immutable roster player exactly once`
+		});
+		return;
+	}
+	for (const [pickIndex, pick] of gameTeam.picks.entries()) {
+		const rosterPlayer = rosterById.get(pick.id);
+		if (!rosterPlayer) continue;
+		if (pick.displayName !== rosterPlayer.displayName || pick.lane !== rosterPlayer.lane) {
+			context.addIssue({
+				code: 'custom',
+				path: ['games', gameIndex, field, 'picks', pickIndex],
+				message: `${field} pick identity must match the immutable series roster`
+			});
+		}
+	}
+}
+
+function validateSeriesResultPayload(
+	payload: { seriesId: string; snapshot: { series: { id: string } } },
+	context: z.RefinementCtx
+): void {
+	if (payload.seriesId !== payload.snapshot.series.id) {
+		context.addIssue({
+			code: 'custom',
+			path: ['seriesId'],
+			message: 'seriesId must match snapshot.series.id'
+		});
+	}
+}
 
 export const botNotificationSchema = z
 	.object({
@@ -360,6 +741,19 @@ export type SetPreferredLanesRequest = z.infer<typeof setPreferredLanesRequestSc
 export type RecruitmentMessageNotificationPayload = z.infer<
 	typeof recruitmentMessageNotificationPayloadSchema
 >;
+export type EntryConfirmationSnapshot = z.infer<typeof entryConfirmationSnapshotSchema>;
+export type EntryConfirmationNotificationPayload = z.infer<
+	typeof entryConfirmationNotificationPayloadSchema
+>;
+export type SeriesResultNotificationV1Snapshot = z.infer<
+	typeof seriesResultNotificationV1SnapshotSchema
+>;
+export type SeriesResultNotificationV2Snapshot = z.infer<
+	typeof seriesResultNotificationV2SnapshotSchema
+>;
+export type SeriesResultNotificationSnapshot =
+	SeriesResultNotificationV1Snapshot | SeriesResultNotificationV2Snapshot;
+export type SeriesResultNotificationPayload = z.infer<typeof seriesResultNotificationPayloadSchema>;
 export type BotNotification = z.infer<typeof botNotificationSchema>;
 export type ClaimNotificationsRequest = z.infer<typeof claimNotificationsRequestSchema>;
 export type ClaimNotificationsData = z.infer<typeof claimNotificationsDataSchema>;

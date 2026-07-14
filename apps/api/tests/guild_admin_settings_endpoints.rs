@@ -44,6 +44,7 @@ const RECRUITMENT_CHANNEL_ID: &str = "400000000000000001";
 const ENTRY_CHANNEL_ID: &str = "400000000000000002";
 const LOG_CHANNEL_ID: &str = "400000000000000003";
 const REPLACEMENT_CHANNEL_ID: &str = "400000000000000004";
+const RESULT_CHANNEL_ID: &str = "400000000000000005";
 const STALE_CHANNEL_ID: &str = "400000000000000099";
 const UNKNOWN_CHANNEL_ID: &str = "499999999999999999";
 const DISCORD_CLIENT_ID: &str = "900000000000000001";
@@ -210,6 +211,7 @@ async fn run_flow() -> TestResult {
             "operatorRoleId": OLD_OPERATOR_ROLE_ID,
             "recruitmentChannelId": STALE_CHANNEL_ID,
             "entryChannelId": null,
+            "resultChannelId": null,
             "logChannelId": null,
             "isExternallyPublic": false
         })
@@ -232,8 +234,24 @@ async fn run_flow() -> TestResult {
         json!([
             {"id": RECRUITMENT_CHANNEL_ID, "name": "내전-모집", "parentName": "MonkeyBot"},
             {"id": ENTRY_CHANNEL_ID, "name": "내전-엔트리", "parentName": "MonkeyBot"},
-            {"id": LOG_CHANNEL_ID, "name": "내전-운영-로그", "parentName": null}
+            {"id": LOG_CHANNEL_ID, "name": "내전-운영-로그", "parentName": null},
+            {"id": RESULT_CHANNEL_ID, "name": "내전-결과", "parentName": "MonkeyBot"}
         ])
+    );
+
+    sqlx::query(
+        "UPDATE guild_config
+         SET recruitment_channel_id = NULL
+         WHERE guild_id = $1",
+    )
+    .bind(GUILD_ID)
+    .execute(&pool)
+    .await?;
+    let legacy_null_recruitment = operator_get(&app, &settings_path).await?;
+    assert_eq!(legacy_null_recruitment.status(), StatusCode::OK);
+    assert!(
+        body_json(legacy_null_recruitment).await?["data"]["settings"]["recruitmentChannelId"]
+            .is_null()
     );
 
     let update = update_body(0);
@@ -261,6 +279,7 @@ async fn run_flow() -> TestResult {
             "operatorRoleId": NEW_OPERATOR_ROLE_ID,
             "recruitmentChannelId": RECRUITMENT_CHANNEL_ID,
             "entryChannelId": ENTRY_CHANNEL_ID,
+            "resultChannelId": RESULT_CHANNEL_ID,
             "logChannelId": LOG_CHANNEL_ID,
             "isExternallyPublic": true,
             "expectedRevision": 0,
@@ -270,8 +289,31 @@ async fn run_flow() -> TestResult {
     .await?;
     assert_eq!(season_field.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
+    let mut missing_recruitment_channel_body = update.clone();
+    missing_recruitment_channel_body["recruitmentChannelId"] = Value::Null;
+    let missing_recruitment_channel =
+        browser_mutation(&app, &settings_path, missing_recruitment_channel_body).await?;
+    assert_eq!(
+        missing_recruitment_channel.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let missing_recruitment_channel = body_json(missing_recruitment_channel).await?;
+    assert_eq!(
+        missing_recruitment_channel["error"]["code"],
+        "recruitment_channel_required"
+    );
+    assert_eq!(
+        missing_recruitment_channel["error"]["message"],
+        "모집 채널은 반드시 설정해야 합니다."
+    );
+    assert_eq!(
+        missing_recruitment_channel["error"]["details"],
+        json!({ "field": "recruitmentChannelId" })
+    );
+    assert_eq!(audit_count(&pool).await?, 0);
+
     let mut invalid_channel_body = update.clone();
-    invalid_channel_body["entryChannelId"] = json!(UNKNOWN_CHANNEL_ID);
+    invalid_channel_body["resultChannelId"] = json!(UNKNOWN_CHANNEL_ID);
     let invalid_channel = browser_mutation(&app, &settings_path, invalid_channel_body).await?;
     assert_eq!(invalid_channel.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let invalid_channel = body_json(invalid_channel).await?;
@@ -281,7 +323,7 @@ async fn run_flow() -> TestResult {
     );
     assert_eq!(
         invalid_channel["error"]["details"]["field"],
-        "entryChannelId"
+        "resultChannelId"
     );
 
     let mut managed_role_body = update.clone();
@@ -302,6 +344,10 @@ async fn run_flow() -> TestResult {
     assert_eq!(
         updated["data"]["settings"]["entryChannelId"],
         ENTRY_CHANNEL_ID
+    );
+    assert_eq!(
+        updated["data"]["settings"]["resultChannelId"],
+        RESULT_CHANNEL_ID
     );
 
     let stale = browser_mutation(&app, &settings_path, update).await?;
@@ -343,6 +389,7 @@ async fn run_flow() -> TestResult {
             "operatorRoleId": NEW_OPERATOR_ROLE_ID,
             "recruitmentChannelId": RECRUITMENT_CHANNEL_ID,
             "entryChannelId": ENTRY_CHANNEL_ID,
+            "resultChannelId": RESULT_CHANNEL_ID,
             "logChannelId": LOG_CHANNEL_ID,
             "isExternallyPublic": true,
             "expectedRevision": 1
@@ -391,6 +438,13 @@ fn catalog_body() -> Value {
                 "parentName": null,
                 "position": 2,
                 "kind": "ANNOUNCEMENT"
+            },
+            {
+                "id": RESULT_CHANNEL_ID,
+                "name": "내전-결과",
+                "parentName": "MonkeyBot",
+                "position": 3,
+                "kind": "TEXT"
             }
         ]
     })
@@ -402,6 +456,7 @@ fn update_body(expected_revision: i64) -> Value {
         "operatorRoleId": NEW_OPERATOR_ROLE_ID,
         "recruitmentChannelId": RECRUITMENT_CHANNEL_ID,
         "entryChannelId": ENTRY_CHANNEL_ID,
+        "resultChannelId": RESULT_CHANNEL_ID,
         "logChannelId": LOG_CHANNEL_ID,
         "isExternallyPublic": true,
         "expectedRevision": expected_revision
@@ -521,9 +576,9 @@ async fn seed_guild(pool: &PgPool) -> TestResult {
     sqlx::query(
         "INSERT INTO guild_config (
              guild_id, display_name, operator_role_id, recruitment_channel_id,
-             entry_channel_id, log_channel_id, is_externally_public, revision,
+             entry_channel_id, result_channel_id, log_channel_id, is_externally_public, revision,
              updated_by, updated_at
-         ) VALUES ($1, 'Stored Guild', $2, $3, NULL, NULL, false, 0, $4, $5)",
+         ) VALUES ($1, 'Stored Guild', $2, $3, NULL, NULL, NULL, false, 0, $4, $5)",
     )
     .bind(GUILD_ID)
     .bind(OLD_OPERATOR_ROLE_ID)
@@ -578,13 +633,14 @@ async fn assert_persisted_settings_and_audit(pool: &PgPool) -> TestResult {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
             bool,
             i64,
             Option<String>,
         ),
     >(
         "SELECT display_name, operator_role_id, recruitment_channel_id, entry_channel_id,
-                log_channel_id, is_externally_public, revision, updated_by
+                result_channel_id, log_channel_id, is_externally_public, revision, updated_by
          FROM guild_config WHERE guild_id = $1",
     )
     .bind(GUILD_ID)
@@ -597,6 +653,7 @@ async fn assert_persisted_settings_and_audit(pool: &PgPool) -> TestResult {
             NEW_OPERATOR_ROLE_ID.to_owned(),
             Some(RECRUITMENT_CHANNEL_ID.to_owned()),
             Some(ENTRY_CHANNEL_ID.to_owned()),
+            Some(RESULT_CHANNEL_ID.to_owned()),
             Some(LOG_CHANNEL_ID.to_owned()),
             true,
             1,
@@ -617,9 +674,10 @@ async fn assert_persisted_settings_and_audit(pool: &PgPool) -> TestResult {
     assert_eq!(target_type.as_deref(), Some("GUILD_CONFIG"));
     assert_eq!(target_id.as_deref(), Some(GUILD_ID));
     assert_eq!(before["displayName"], "Stored Guild");
-    assert_eq!(before["recruitmentChannelId"], STALE_CHANNEL_ID);
+    assert!(before["recruitmentChannelId"].is_null());
     assert_eq!(after["displayName"], "Updated Guild");
     assert_eq!(after["entryChannelId"], ENTRY_CHANNEL_ID);
+    assert_eq!(after["resultChannelId"], RESULT_CHANNEL_ID);
     Ok(())
 }
 
