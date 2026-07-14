@@ -1,4 +1,9 @@
-import type { ChatInputCommandInteraction, Guild, Interaction } from 'discord.js';
+import {
+	ChannelType,
+	type ChatInputCommandInteraction,
+	type Guild,
+	type Interaction
+} from 'discord.js';
 import type { Logger } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -163,7 +168,18 @@ function setupInteraction(): {
 		},
 		options: {
 			getRole: () => ({ id: '300000000000000001', managed: false }),
-			getString: () => null
+			getString: () => null,
+			getChannel: (name: string) =>
+				name === '모집채널'
+					? {
+							id: '500000000000000001',
+							guildId: guild.id,
+							type: ChannelType.GuildText,
+							isDMBased: () => false,
+							isTextBased: () => true,
+							isSendable: () => true
+						}
+					: null
 		},
 		context: 0,
 		authorizingIntegrationOwners: {},
@@ -214,6 +230,10 @@ function recruitInteraction(): {
 			username: 'Longcat',
 			globalName: 'Longcat',
 			avatar: null
+		},
+		options: {
+			getInteger: () => null,
+			getBoolean: () => null
 		},
 		context: 0,
 		authorizingIntegrationOwners: {},

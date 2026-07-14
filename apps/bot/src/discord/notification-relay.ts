@@ -7,12 +7,17 @@ import {
 	type MonkeyBotApiClient
 } from '../api/client.js';
 import {
+	auctionTournamentResultDeleteNotificationPayloadSchema,
+	auctionTournamentResultNotificationPayloadSchema,
+	auctionRecruitmentMessageNotificationPayloadSchema,
 	entryConfirmationNotificationPayloadSchema,
 	recruitmentMessageNotificationPayloadSchema,
 	seriesResultNotificationPayloadSchema,
 	type BotNotification,
 	type NackNotificationRequest
 } from '../api/contracts.js';
+import { renderAuctionRecruitmentMessage } from './auction-recruitment-message.js';
+import { renderAuctionTournamentResultMessage } from './auction-tournament-result-message.js';
 import { renderEntryConfirmationMessage } from './entry-confirmation-message.js';
 import { renderRecruitmentMessage } from './recruitment-message.js';
 import {
@@ -25,6 +30,7 @@ const DEFAULT_CLAIM_LIMIT = 20;
 type NotificationApi = Pick<
 	MonkeyBotApiClient,
 	| 'acknowledgeNotification'
+	| 'acknowledgeAuctionRecruitmentMessage'
 	| 'acknowledgeRecruitmentMessage'
 	| 'claimNotifications'
 	| 'nackNotification'
@@ -169,6 +175,34 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 				}
 				return;
 			}
+			case 'AUCTION_RECRUITMENT_MESSAGE_CREATE':
+			case 'AUCTION_RECRUITMENT_MESSAGE_UPDATE':
+			case 'AUCTION_RECRUITMENT_MESSAGE_DELETE': {
+				const payload = auctionRecruitmentMessageNotificationPayloadSchema.safeParse(
+					notification.payload
+				);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message: 'Auction recruitment notification payload does not match schema version 1 or 2'
+					});
+					return;
+				}
+
+				switch (notification.type) {
+					case 'AUCTION_RECRUITMENT_MESSAGE_CREATE':
+						await this.#createAuctionRecruitmentMessage(notification, payload.data.snapshot);
+						return;
+					case 'AUCTION_RECRUITMENT_MESSAGE_UPDATE':
+						await this.#updateAuctionRecruitmentMessage(notification, payload.data.snapshot);
+						return;
+					case 'AUCTION_RECRUITMENT_MESSAGE_DELETE':
+						await this.#deleteAuctionRecruitmentMessage(notification, payload.data.snapshot);
+						return;
+				}
+				return;
+			}
 			case 'ENTRY_CONFIRMATION_CREATE': {
 				const payload = entryConfirmationNotificationPayloadSchema.safeParse(notification.payload);
 				if (!payload.success) {
@@ -194,6 +228,62 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 					return;
 				}
 				await this.#createSeriesResult(notification, payload.data.snapshot);
+				return;
+			}
+			case 'AUCTION_TOURNAMENT_RESULT_CREATE': {
+				const payload = auctionTournamentResultNotificationPayloadSchema.safeParse(
+					notification.payload
+				);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message:
+							'Auction tournament result notification payload does not match schema version 1'
+					});
+					return;
+				}
+				if (
+					payload.data.guildId !== notification.guildId ||
+					payload.data.channelId !== notification.channelId
+				) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message:
+							'Auction tournament result notification routing does not match its claimed notification'
+					});
+					return;
+				}
+				await this.#createAuctionTournamentResult(notification, payload.data);
+				return;
+			}
+			case 'AUCTION_TOURNAMENT_RESULT_DELETE': {
+				const payload = auctionTournamentResultDeleteNotificationPayloadSchema.safeParse(
+					notification.payload
+				);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message:
+							'Auction tournament result deletion payload does not match schema version 1'
+					});
+					return;
+				}
+				if (
+					payload.data.guildId !== notification.guildId ||
+					payload.data.channelId !== notification.channelId
+				) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message:
+							'Auction tournament result deletion routing does not match its claimed notification'
+					});
+					return;
+				}
+				await this.#deleteAuctionTournamentResult(notification, payload.data);
 				return;
 			}
 			default:
@@ -241,6 +331,64 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 			);
 		} catch (error) {
 			// The stable Discord nonce makes a delivery retry safe when the API acknowledgement is lost.
+			await this.#nack(notification, failureFor(error));
+		}
+	}
+
+	async #createAuctionTournamentResult(
+		notification: BotNotification,
+		payload: ReturnType<typeof auctionTournamentResultNotificationPayloadSchema.parse>
+	): Promise<void> {
+		let messageId: string;
+		try {
+			const channel = await this.#sendableGuildChannel(notification.channelId);
+			const message = await channel.send({
+				...renderAuctionTournamentResultMessage(payload),
+				nonce: notification.discordNonce,
+				enforceNonce: true
+			});
+			messageId = message.id;
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+			return;
+		}
+
+		try {
+			await this.#acknowledge(notification, messageId);
+			this.#logger.info(
+				{
+					notificationId: notification.id,
+					guildId: notification.guildId,
+					channelId: notification.channelId,
+					messageId,
+					tournamentId: payload.tournamentId
+				},
+				'Auction tournament result Discord message created'
+			);
+		} catch (error) {
+			// The stable Discord nonce makes a delivery retry safe when the API acknowledgement is lost.
+			await this.#nack(notification, failureFor(error));
+		}
+	}
+
+	async #deleteAuctionTournamentResult(
+		notification: BotNotification,
+		payload: ReturnType<typeof auctionTournamentResultDeleteNotificationPayloadSchema.parse>
+	): Promise<void> {
+		const messageId = payload.discordMessageId;
+		try {
+			const message = await this.#recruitmentMessage(notification.channelId, messageId);
+			await message.delete();
+		} catch (error) {
+			if (!isUnknownDiscordMessage(error)) {
+				await this.#nack(notification, failureFor(error));
+				return;
+			}
+		}
+
+		try {
+			await this.#acknowledge(notification, messageId);
+		} catch (error) {
 			await this.#nack(notification, failureFor(error));
 		}
 	}
@@ -356,6 +504,109 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 				kind: 'HTTP',
 				status: 422,
 				message: 'Recruitment message deletion is missing a Discord message ID'
+			});
+			return;
+		}
+
+		try {
+			const message = await this.#recruitmentMessage(notification.channelId, messageId);
+			await message.delete();
+		} catch (error) {
+			if (!isUnknownDiscordMessage(error)) {
+				await this.#nack(notification, failureFor(error));
+				return;
+			}
+		}
+
+		try {
+			await this.#acknowledge(notification, messageId);
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+		}
+	}
+
+	async #createAuctionRecruitmentMessage(
+		notification: BotNotification,
+		snapshot: ReturnType<
+			typeof auctionRecruitmentMessageNotificationPayloadSchema.parse
+		>['snapshot']
+	): Promise<void> {
+		let messageId: string;
+		try {
+			const channel = await this.#sendableGuildChannel(notification.channelId);
+			const message = await channel.send({
+				...renderAuctionRecruitmentMessage(snapshot, this.#webOrigin),
+				nonce: notification.discordNonce,
+				enforceNonce: true
+			});
+			messageId = message.id;
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+			return;
+		}
+
+		try {
+			await this.#api.acknowledgeAuctionRecruitmentMessage(
+				{
+					instanceId: this.#instanceId,
+					notificationId: notification.id,
+					leaseToken: notification.leaseToken,
+					discordMessageId: messageId
+				},
+				{ signal: this.#abortController.signal }
+			);
+			this.#logger.info(
+				{
+					notificationId: notification.id,
+					guildId: notification.guildId,
+					channelId: notification.channelId,
+					messageId
+				},
+				'Auction recruitment Discord message created'
+			);
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+		}
+	}
+
+	async #updateAuctionRecruitmentMessage(
+		notification: BotNotification,
+		snapshot: ReturnType<
+			typeof auctionRecruitmentMessageNotificationPayloadSchema.parse
+		>['snapshot']
+	): Promise<void> {
+		const messageId = snapshot.recruitment.messageId;
+		if (!messageId) {
+			await this.#nack(notification, {
+				kind: 'HTTP',
+				status: 422,
+				message: 'Auction recruitment message update is missing a Discord message ID'
+			});
+			return;
+		}
+
+		try {
+			const message = await this.#recruitmentMessage(notification.channelId, messageId);
+			const rendered = renderAuctionRecruitmentMessage(snapshot, this.#webOrigin);
+			await message.edit({ embeds: rendered.embeds, components: rendered.components });
+			await this.#acknowledge(notification, messageId);
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+		}
+	}
+
+	async #deleteAuctionRecruitmentMessage(
+		notification: BotNotification,
+		snapshot: ReturnType<
+			typeof auctionRecruitmentMessageNotificationPayloadSchema.parse
+		>['snapshot']
+	): Promise<void> {
+		const messageId = snapshot.recruitment.messageId;
+		if (!messageId) {
+			await this.#nack(notification, {
+				kind: 'HTTP',
+				status: 422,
+				message: 'Auction recruitment message deletion is missing a Discord message ID'
 			});
 			return;
 		}

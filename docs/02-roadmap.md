@@ -56,7 +56,8 @@ lineup, game, MMR 원장은 PostgreSQL에만 둔다.
 - 일반 내전과 경매 내전 모두 guild MMR에 반영한다.
 - 경매는 TEN_PERSON 2팀과 TWENTY_PERSON 4팀을 지원한다.
 - bestOf storage는 1, 3, 5를 지원한다. 일반 내전 모집은 생성 시 BO1/BO3/BO5와 하드 피어리스를
-  선택하고, series는 그 설정을 immutable snapshot으로 복사한다. 경매 match는 현재 BO3다.
+  선택하고, series는 그 설정을 immutable snapshot으로 복사한다. 경매 모집도 결승 BO1/BO3/BO5와 하드
+  피어리스를 선택하며, 20인은 4강과 결승 BO를 독립적으로 저장해 tournament/match snapshot으로 복사한다.
 - series/recruitment와 tournament/auction recruitment는 별도 ID와 unique FK다.
 - custom match 결과에서 KDA/CS는 필수 입력이 아니다.
 - 중요한 mutation은 expectedRevision과 PostgreSQL transaction을 사용한다.

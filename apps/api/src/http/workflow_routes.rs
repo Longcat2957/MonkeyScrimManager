@@ -11,7 +11,10 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 use crate::{
-    domain::{AuctionTournamentStatus, GuildId, RecruitmentId, RecruitmentStatus, SeriesId},
+    domain::{
+        AuctionMatchId, AuctionRecruitmentId, AuctionTournamentId, AuctionTournamentStatus,
+        GuildId, RecruitmentId, RecruitmentStatus, SeriesId,
+    },
     error::{self, ApiError},
     http::extractors::AuthenticatedSession,
     repository::{
@@ -111,6 +114,7 @@ struct AuctionRecruitmentData {
     display_number: i64,
     title: String,
     format: &'static str,
+    rules: AuctionRecruitmentRulesData,
     participant_count: i16,
     joined_participant_count: i64,
     team_count: i16,
@@ -118,6 +122,14 @@ struct AuctionRecruitmentData {
     revision: i64,
     updated_at: String,
     href: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionRecruitmentRulesData {
+    hard_fearless: bool,
+    semifinal_best_of: Option<i16>,
+    final_best_of: i16,
 }
 
 #[derive(Serialize)]
@@ -382,6 +394,46 @@ pub async fn auction_recruitments(
     Ok(error::success(StatusCode::OK, &request_id, data))
 }
 
+pub async fn auction_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_auction_recruitment_snapshot(
+        pool,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| auction_recruitment_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn auction_setup_draft(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_auction_setup_draft_snapshot(
+        pool,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| auction_setup_draft_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
 pub async fn auction_tournaments(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -405,6 +457,85 @@ pub async fn auction_tournaments(
     let data = map_auction_tournament_page(page, &guild_id, &request_id)?;
 
     Ok(error::success(StatusCode::OK, &request_id, data))
+}
+
+pub async fn auction_tournament_draft(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, tournament_id)): Path<(GuildId, AuctionTournamentId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_auction_tournament_draft_snapshot(
+        pool,
+        &guild_id,
+        tournament_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| auction_tournament_draft_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn auction_tournament_bracket(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, tournament_id)): Path<(GuildId, AuctionTournamentId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_auction_tournament_bracket_snapshot(
+        pool,
+        &guild_id,
+        tournament_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| auction_tournament_bracket_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn auction_tournament_result(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, tournament_id)): Path<(GuildId, AuctionTournamentId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_auction_tournament_result_snapshot(
+        pool,
+        &guild_id,
+        tournament_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| auction_tournament_result_snapshot_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn auction_match(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, match_id)): Path<(GuildId, AuctionMatchId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_auction_match_snapshot(
+        pool,
+        &guild_id,
+        match_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| auction_match_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
 }
 
 async fn require_guild_access(
@@ -535,16 +666,38 @@ fn map_auction_recruitment_page(
         .into_iter()
         .map(|record| {
             let id = record.id.to_string();
+            let href = match record.status {
+                RecruitmentStatus::Open => {
+                    format!("/g/{}/auction/recruitments/{id}", guild_id.as_str())
+                }
+                RecruitmentStatus::Closed => {
+                    format!("/g/{}/auction/recruitments/{id}/draft", guild_id.as_str())
+                }
+                RecruitmentStatus::Converted | RecruitmentStatus::Cancelled => {
+                    return Err(ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        request_id,
+                        "invalid_auction_recruitment_projection",
+                        "경매 모집 상태를 처리하지 못했습니다.",
+                        None,
+                    ));
+                }
+            };
             Ok(AuctionRecruitmentData {
-                href: format!("/g/{}/auction/recruitments/{id}/draft", guild_id.as_str()),
+                href,
                 id,
                 display_number: record.display_number,
                 title: record.title,
                 format: record.format.as_str(),
+                rules: AuctionRecruitmentRulesData {
+                    hard_fearless: record.hard_fearless,
+                    semifinal_best_of: record.semifinal_best_of,
+                    final_best_of: record.final_best_of,
+                },
                 participant_count: record.target_count,
                 joined_participant_count: record.participant_count,
                 team_count: record.team_count,
-                status: "CLOSED",
+                status: record.status.as_str(),
                 revision: record.revision,
                 updated_at: format_timestamp(record.updated_at, request_id)?,
             })
@@ -578,21 +731,27 @@ fn map_auction_tournament(
     request_id: &RequestId,
 ) -> Result<AuctionTournamentData, ApiError> {
     let id = record.id.to_string();
-    let href_suffix = match record.status {
-        AuctionTournamentStatus::Bidding => "draft",
-        AuctionTournamentStatus::BracketSetup => "bracket",
+    let href = match record.status {
+        AuctionTournamentStatus::Bidding => {
+            format!("/g/{}/auction/tournaments/{id}/draft", guild_id.as_str())
+        }
+        AuctionTournamentStatus::BracketSetup => {
+            format!("/g/{}/auction/tournaments/{id}/bracket", guild_id.as_str())
+        }
         AuctionTournamentStatus::InGame => {
-            if record
+            if let Some(next_match) = record
                 .next_match
                 .as_ref()
-                .is_some_and(|next| matches!(next.status.as_str(), "READY" | "IN_PROGRESS"))
+                .filter(|next| matches!(next.status.as_str(), "READY" | "IN_PROGRESS"))
             {
-                "bracket?view=result"
+                format!("/g/{}/auction/matches/{}", guild_id.as_str(), next_match.id)
             } else {
-                "bracket"
+                format!("/g/{}/auction/tournaments/{id}/bracket", guild_id.as_str())
             }
         }
-        AuctionTournamentStatus::Completed | AuctionTournamentStatus::Cancelled => "result",
+        AuctionTournamentStatus::Completed | AuctionTournamentStatus::Cancelled => {
+            format!("/g/{}/auction/tournaments/{id}/result", guild_id.as_str())
+        }
     };
     let next_match = record
         .next_match
@@ -611,10 +770,7 @@ fn map_auction_tournament(
     };
 
     Ok(AuctionTournamentData {
-        href: format!(
-            "/g/{}/auction/tournaments/{id}/{href_suffix}",
-            guild_id.as_str()
-        ),
+        href,
         id,
         display_number: record.display_number,
         title: record.title,
@@ -778,6 +934,219 @@ fn recruitment_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -
     }
 }
 
+fn auction_recruitment_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::RecruitmentNotFound | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 경매 모집을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "auction recruitment snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
+fn auction_setup_draft_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::RecruitmentNotFound
+        | BotWorkflowError::AuctionSetupDraftNotEditable(_)
+        | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 경매 팀장 설정을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "auction setup draft snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
+fn auction_tournament_draft_snapshot_error(
+    error: BotWorkflowError,
+    request_id: &RequestId,
+) -> ApiError {
+    match error {
+        BotWorkflowError::AuctionTournamentNotFound
+        | BotWorkflowError::MembershipRequired
+        | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 경매 내전을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "auction tournament draft snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
+fn auction_tournament_bracket_snapshot_error(
+    error: BotWorkflowError,
+    request_id: &RequestId,
+) -> ApiError {
+    match error {
+        BotWorkflowError::AuctionTournamentNotFound
+        | BotWorkflowError::MembershipRequired
+        | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 경매 내전을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "auction tournament bracket snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
+fn auction_tournament_result_snapshot_error(
+    error: BotWorkflowError,
+    request_id: &RequestId,
+) -> ApiError {
+    match error {
+        BotWorkflowError::AuctionTournamentNotFound
+        | BotWorkflowError::MembershipRequired
+        | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 경매 내전을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentResultUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_result_unavailable",
+            "진행 중, 완료 또는 취소된 경매 내전에서만 기록을 확인할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "auction tournament result snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "경매 내전 결과를 불러오는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
+fn auction_match_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::AuctionMatchNotFound
+        | BotWorkflowError::MembershipRequired
+        | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 경매 경기를 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchTeamsPending => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_teams_pending",
+            "이 경기는 아직 양 팀이 확정되지 않았습니다.",
+            None,
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "auction match snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "경매 경기 정보를 불러오는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
 fn series_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
     match error {
         BotWorkflowError::SeriesNotFound
@@ -883,5 +1252,22 @@ mod tests {
             br#"{"updatedAtNanos":1,"id":"01900000-0000-7000-8000-000000000001","extra":true}"#,
         );
         assert!(decode_cursor(&unknown_field).is_err());
+    }
+
+    #[test]
+    fn auction_recruitment_rules_are_serialized_under_a_nested_rules_field() {
+        let rules = AuctionRecruitmentRulesData {
+            hard_fearless: true,
+            semifinal_best_of: Some(1),
+            final_best_of: 5,
+        };
+        assert_eq!(
+            serde_json::to_value(rules).expect("auction rules serialize"),
+            serde_json::json!({
+                "hardFearless": true,
+                "semifinalBestOf": 1,
+                "finalBestOf": 5,
+            })
+        );
     }
 }

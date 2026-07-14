@@ -28,3 +28,34 @@ export function parseRecruitmentCustomId(customId: string): RecruitmentComponent
 		recruitmentId
 	};
 }
+
+export type AuctionRecruitmentButtonAction = 'join' | 'leave';
+
+export interface AuctionRecruitmentComponentId {
+	action: AuctionRecruitmentButtonAction | 'lane';
+	recruitmentId: string;
+}
+
+export function auctionRecruitmentCustomId(
+	action: AuctionRecruitmentComponentId['action'],
+	recruitmentId: string
+): string {
+	if (!UUID_PATTERN.test(recruitmentId)) {
+		throw new Error('auction recruitment custom ID requires a UUID');
+	}
+	return `auction-recruit:${action}:${recruitmentId}`;
+}
+
+export function parseAuctionRecruitmentCustomId(
+	customId: string
+): AuctionRecruitmentComponentId | null {
+	const [prefix, action, recruitmentId, extra] = customId.split(':');
+	if (prefix !== 'auction-recruit' || extra !== undefined || !recruitmentId) return null;
+	if (!['join', 'leave', 'lane'].includes(action ?? '')) return null;
+	if (!UUID_PATTERN.test(recruitmentId)) return null;
+
+	return {
+		action: action as AuctionRecruitmentComponentId['action'],
+		recruitmentId
+	};
+}

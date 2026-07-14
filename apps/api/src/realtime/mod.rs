@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     config::{Config, Environment},
-    domain::{GuildId, RecruitmentId, UserId},
+    domain::{AuctionRecruitmentId, GuildId, RecruitmentId, UserId},
     infrastructure::postgres::begin,
     repository::{outbox, workflow},
 };
@@ -129,9 +129,13 @@ impl RealtimeRuntime {
                 self.authorize_entry_topic(pool, user_id, topic).await
             }
             RealtimeTopicKind::Series => self.authorize_series_topic(pool, user_id, topic).await,
-            RealtimeTopicKind::AuctionRecruitment
-            | RealtimeTopicKind::AuctionTournament
-            | RealtimeTopicKind::AuctionMatch => Err(TopicAuthorizationError::Unsupported),
+            RealtimeTopicKind::AuctionRecruitment => {
+                self.authorize_auction_recruitment_topic(pool, user_id, topic)
+                    .await
+            }
+            RealtimeTopicKind::AuctionTournament | RealtimeTopicKind::AuctionMatch => {
+                Err(TopicAuthorizationError::Unsupported)
+            }
         }
     }
 
@@ -205,6 +209,51 @@ impl RealtimeRuntime {
         .bind(topic.guild_id())
         .bind(user_id)
         .bind(topic.resource_id())
+        .fetch_one(pool)
+        .await
+        .map_err(TopicAuthorizationError::Database)?;
+
+        if authorized {
+            Ok(())
+        } else {
+            Err(TopicAuthorizationError::Forbidden)
+        }
+    }
+
+    async fn authorize_auction_recruitment_topic(
+        &self,
+        pool: &sqlx::PgPool,
+        user_id: &UserId,
+        topic: &RealtimeTopic,
+    ) -> Result<(), TopicAuthorizationError> {
+        let recruitment_id = topic
+            .auction_recruitment_id()
+            .expect("auction recruitment topic always contains an auction recruitment ID");
+        let authorized = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM auction_recruitments AS recruitment
+                 JOIN guilds AS guild
+                   ON guild.guild_id = recruitment.guild_id
+                  AND guild.status = 'ACTIVE'
+                 JOIN guild_members AS member
+                   ON member.guild_id = recruitment.guild_id
+                  AND member.user_id = $2
+                  AND member.status = 'ACTIVE'
+                 JOIN guild_config AS config
+                   ON config.guild_id = recruitment.guild_id
+                 JOIN guild_member_discord_roles AS role
+                   ON role.guild_id = member.guild_id
+                  AND role.user_id = member.user_id
+                  AND role.role_id = config.operator_role_id
+                 WHERE recruitment.guild_id = $1
+                   AND recruitment.id = $3
+                   AND recruitment.status IN ('OPEN', 'CLOSED')
+             )",
+        )
+        .bind(topic.guild_id())
+        .bind(user_id)
+        .bind(recruitment_id.as_uuid())
         .fetch_one(pool)
         .await
         .map_err(TopicAuthorizationError::Database)?;
@@ -347,6 +396,11 @@ impl RealtimeTopic {
     pub fn recruitment_id(&self) -> Option<RecruitmentId> {
         self.is_entry_related()
             .then_some(RecruitmentId::from_uuid(self.resource_id))
+    }
+
+    pub fn auction_recruitment_id(&self) -> Option<AuctionRecruitmentId> {
+        (self.kind == RealtimeTopicKind::AuctionRecruitment)
+            .then_some(AuctionRecruitmentId::from_uuid(self.resource_id))
     }
 }
 
@@ -781,6 +835,18 @@ mod tests {
         assert!(topic.is_entry_related());
         assert_eq!(
             topic.recruitment_id().expect("recruitment").to_string(),
+            RECRUITMENT_ID
+        );
+
+        let auction_topic = RealtimeTopic::parse(&format!(
+            "guild:{GUILD_ID}:auction-recruitment:{RECRUITMENT_ID}"
+        ))
+        .expect("canonical auction recruitment topic");
+        assert_eq!(
+            auction_topic
+                .auction_recruitment_id()
+                .expect("auction recruitment")
+                .to_string(),
             RECRUITMENT_ID
         );
 

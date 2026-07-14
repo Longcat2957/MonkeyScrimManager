@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MonkeyBotApiClient, MonkeyBotApiContractError, MonkeyBotApiError } from './client.js';
 import type {
 	Actor,
+	AuctionRecruitmentSnapshot,
 	DiscordCatalogSyncRequest,
 	RecruitmentSnapshot,
 	SetupGuildData
@@ -12,6 +13,8 @@ const guildId = '200000000000000001';
 const userId = '100000000000000001';
 const dummyUserId = 'dmy_01900000-0000-7000-8000-000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
+const auctionRecruitmentId = '01900000-0000-7000-8000-000000000102';
+const auctionTournamentId = '01900000-0000-7000-8000-000000000103';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const serviceToken = 's'.repeat(32);
 const notificationId = '01900000-0000-7000-8000-000000000301';
@@ -45,6 +48,48 @@ const snapshot: RecruitmentSnapshot = {
 		{ id: dummyUserId, displayName: 'Dummy Jungle', preferredLanes: ['JUNGLE'] }
 	],
 	links: { entry: `/g/${guildId}/recruitments/${recruitmentId}/entry` }
+};
+
+const auctionSnapshot: AuctionRecruitmentSnapshot = {
+	recruitment: {
+		id: auctionRecruitmentId,
+		displayNumber: 215,
+		title: '20인 경매 내전 모집 #215',
+		format: 'TWENTY_PERSON',
+		rules: { hardFearless: false, semifinalBestOf: 3, finalBestOf: 3 },
+		participantCount: 20,
+		joinedParticipantCount: 0,
+		teamCount: 4,
+		status: 'OPEN',
+		revision: 0,
+		channelId: null,
+		messageId: null,
+		createdById: userId,
+		updatedAt: '2026-07-14T10:00:00Z',
+		href: `/g/${guildId}/auction/recruitments/${auctionRecruitmentId}`
+	},
+	participants: [],
+	links: { draft: null },
+	permissions: { canManageMembers: false, canClose: false, canCancel: true }
+};
+
+const auctionTournamentCancelPreview = {
+	tournament: {
+		id: auctionTournamentId,
+		displayNumber: 216,
+		title: '20인 경매 내전 #216',
+		status: 'IN_GAME' as const,
+		revision: 9
+	}
+};
+
+const auctionTournamentCancelResult = {
+	tournamentId: auctionTournamentId,
+	tournamentStatus: 'CANCELLED' as const,
+	tournamentRevision: 10,
+	sourceRecruitmentId: auctionRecruitmentId,
+	sourceRecruitmentRevision: 7,
+	reversedGameCount: 2
 };
 
 const setupData: SetupGuildData = {
@@ -216,6 +261,161 @@ describe('MonkeyBotApiClient', () => {
 				{ idempotencyKey: '400000000000000002' }
 			)
 		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
+	});
+
+	it('creates an auction recruitment with the bot actor and interaction idempotency key', async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+			envelope(auctionSnapshot)
+		);
+		const client = createClient(fetchMock);
+
+		await expect(
+			client.createAuctionRecruitment(
+				guildId,
+				{
+					actor,
+					format: 'TWENTY_PERSON',
+					semifinalBestOf: 1,
+					finalBestOf: 5,
+					hardFearless: true
+				},
+				{ idempotencyKey: '400000000000000007' }
+			)
+		).resolves.toEqual(auctionSnapshot);
+
+		const [input, init] = fetchMock.mock.calls[0] ?? [];
+		expect(String(input)).toBe(`http://api.local:8080/api/guilds/${guildId}/auction-recruitments`);
+		expect((init as RequestInit).method).toBe('POST');
+		expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+			actor,
+			format: 'TWENTY_PERSON',
+			semifinalBestOf: 1,
+			finalBestOf: 5,
+			hardFearless: true
+		});
+		const headers = new Headers((init as RequestInit).headers);
+		expect(headers.get('idempotency-key')).toBe('400000000000000007');
+	});
+
+	it('joins and leaves an auction recruitment with the canonical member routes', async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+			envelope(auctionSnapshot)
+		);
+		const client = createClient(fetchMock);
+		const context = { idempotencyKey: '400000000000000008' };
+
+		await client.joinAuctionRecruitment(
+			guildId,
+			auctionRecruitmentId,
+			{ actor, declaredLane: 'JUNGLE' },
+			context
+		);
+		await client.leaveAuctionRecruitment(guildId, auctionRecruitmentId, userId, { actor }, context);
+
+		expect(
+			fetchMock.mock.calls.map(([input, init]) => [String(input), (init as RequestInit).method])
+		).toEqual([
+			[
+				`http://api.local:8080/api/guilds/${guildId}/auction-recruitments/${auctionRecruitmentId}/members`,
+				'POST'
+			],
+			[
+				`http://api.local:8080/api/guilds/${guildId}/auction-recruitments/${auctionRecruitmentId}/members/${userId}`,
+				'DELETE'
+			]
+		]);
+		expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+			actor,
+			declaredLane: 'JUNGLE'
+		});
+		expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+			actor
+		});
+		for (const [, init] of fetchMock.mock.calls) {
+			const headers = new Headers((init as RequestInit).headers);
+			expect(headers.get('idempotency-key')).toBe(context.idempotencyKey);
+		}
+	});
+
+	it('reads the cancellation revision before cancelling an auction tournament', async () => {
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+			void _init;
+			const path = new URL(String(input)).pathname;
+			return envelope(
+				path.endsWith('/cancel-preview')
+					? auctionTournamentCancelPreview
+					: auctionTournamentCancelResult
+			);
+		});
+		const client = createClient(fetchMock);
+
+		await expect(
+			client.getAuctionTournamentCancelPreview(guildId, auctionTournamentId)
+		).resolves.toEqual(auctionTournamentCancelPreview);
+		await expect(
+			client.cancelAuctionTournament(
+				guildId,
+				auctionTournamentId,
+				{ actor, expectedRevision: 9, reason: '운영 일정 변경' },
+				{ idempotencyKey: '400000000000000009' }
+			)
+		).resolves.toEqual(auctionTournamentCancelResult);
+
+		expect(
+			fetchMock.mock.calls.map(([input, init]) => [String(input), (init as RequestInit).method])
+		).toEqual([
+			[
+				`http://api.local:8080/api/guilds/${guildId}/auction-tournaments/${auctionTournamentId}/cancel-preview`,
+				'GET'
+			],
+			[
+				`http://api.local:8080/api/guilds/${guildId}/auction-tournaments/${auctionTournamentId}/cancel`,
+				'POST'
+			]
+		]);
+
+		const previewHeaders = new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers);
+		expect(previewHeaders.get('authorization')).toBe(`Bearer ${serviceToken}`);
+		expect(previewHeaders.has('content-type')).toBe(false);
+		expect(previewHeaders.has('idempotency-key')).toBe(false);
+
+		const cancelInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+		const cancelHeaders = new Headers(cancelInit.headers);
+		expect(cancelHeaders.get('authorization')).toBe(`Bearer ${serviceToken}`);
+		expect(cancelHeaders.get('idempotency-key')).toBe('400000000000000009');
+		expect(JSON.parse(String(cancelInit.body))).toEqual({
+			actor,
+			expectedRevision: 9,
+			reason: '운영 일정 변경'
+		});
+	});
+
+	it('preserves a cancellation-preview API error for the interaction error handler', async () => {
+		const fetchMock = vi.fn(async () =>
+			Response.json(
+				{
+					error: {
+						code: 'auction_tournament_not_found',
+						message: '요청한 경매 내전을 찾을 수 없습니다.',
+						requestId
+					}
+				},
+				{ status: 404 }
+			)
+		);
+		const client = createClient(fetchMock);
+
+		const error = await client
+			.getAuctionTournamentCancelPreview(guildId, auctionTournamentId)
+			.catch((caught: unknown) => caught);
+
+		expect(error).toBeInstanceOf(MonkeyBotApiError);
+		expect(error).toMatchObject({
+			status: 404,
+			code: 'auction_tournament_not_found',
+			message: '요청한 경매 내전을 찾을 수 없습니다.',
+			requestId
+		});
 	});
 
 	it('accepts canonical dummy participant IDs but rejects malformed internal IDs', async () => {

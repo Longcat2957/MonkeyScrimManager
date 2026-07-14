@@ -3,14 +3,21 @@ import { type ZodType } from 'zod';
 
 import {
 	actorRequestSchema,
+	acknowledgeAuctionRecruitmentMessageDataSchema,
 	acknowledgeNotificationDataSchema,
 	acknowledgeNotificationRequestSchema,
 	acknowledgeRecruitmentMessageDataSchema,
 	apiReadinessDataSchema,
+	auctionRecruitmentMemberRequestSchema,
+	auctionRecruitmentSnapshotSchema,
+	auctionTournamentCancelPreviewDataSchema,
+	auctionTournamentCancelRequestSchema,
+	auctionTournamentCancelResultSchema,
 	apiErrorEnvelopeSchema,
 	bindRecruitmentMessageRequestSchema,
 	claimNotificationsDataSchema,
 	claimNotificationsRequestSchema,
+	createAuctionRecruitmentRequestSchema,
 	createRecruitmentRequestSchema,
 	discordCatalogSyncDataSchema,
 	discordCatalogSyncRequestSchema,
@@ -25,13 +32,20 @@ import {
 	setupGuildRequestSchema,
 	successEnvelopeSchema,
 	type ActorRequest,
+	type AcknowledgeAuctionRecruitmentMessageData,
 	type AcknowledgeNotificationData,
 	type AcknowledgeNotificationRequest,
 	type AcknowledgeRecruitmentMessageData,
 	type ApiReadinessData,
+	type AuctionRecruitmentMemberRequest,
+	type AuctionRecruitmentSnapshot,
+	type AuctionTournamentCancelPreviewData,
+	type AuctionTournamentCancelRequest,
+	type AuctionTournamentCancelResult,
 	type BindRecruitmentMessageRequest,
 	type ClaimNotificationsData,
 	type ClaimNotificationsRequest,
+	type CreateAuctionRecruitmentRequest,
 	type CreateRecruitmentRequest,
 	type DiscordCatalogSyncData,
 	type DiscordCatalogSyncRequest,
@@ -71,6 +85,13 @@ interface MutationRequest<TRequest, TResponse> {
 	responseSchema: ZodType<TResponse>;
 	context: ApiRequestContext;
 	idempotencyKey: string | null;
+	logRequest: boolean;
+}
+
+interface ReadRequest<TResponse> {
+	segments: string[];
+	responseSchema: ZodType<TResponse>;
+	context: ApiRequestContext;
 	logRequest: boolean;
 }
 
@@ -263,6 +284,85 @@ export class MonkeyBotApiClient {
 		);
 	}
 
+	createAuctionRecruitment(
+		guildId: string,
+		input: CreateAuctionRecruitmentRequest,
+		context: ApiMutationContext
+	): Promise<AuctionRecruitmentSnapshot> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['api', 'guilds', guildId, 'auction-recruitments'],
+			body: input,
+			requestSchema: createAuctionRecruitmentRequestSchema,
+			responseSchema: auctionRecruitmentSnapshotSchema,
+			context,
+			idempotencyKey: context.idempotencyKey,
+			logRequest: true
+		});
+	}
+
+	joinAuctionRecruitment(
+		guildId: string,
+		recruitmentId: string,
+		input: AuctionRecruitmentMemberRequest,
+		context: ApiMutationContext
+	): Promise<AuctionRecruitmentSnapshot> {
+		return this.#auctionRecruitmentMutation(
+			'POST',
+			['api', 'guilds', guildId, 'auction-recruitments', recruitmentId, 'members'],
+			input,
+			auctionRecruitmentMemberRequestSchema,
+			context
+		);
+	}
+
+	leaveAuctionRecruitment(
+		guildId: string,
+		recruitmentId: string,
+		userId: string,
+		input: ActorRequest,
+		context: ApiMutationContext
+	): Promise<AuctionRecruitmentSnapshot> {
+		return this.#auctionRecruitmentMutation(
+			'DELETE',
+			['api', 'guilds', guildId, 'auction-recruitments', recruitmentId, 'members', userId],
+			input,
+			actorRequestSchema,
+			context
+		);
+	}
+
+	getAuctionTournamentCancelPreview(
+		guildId: string,
+		tournamentId: string,
+		context: ApiRequestContext = {}
+	): Promise<AuctionTournamentCancelPreviewData> {
+		return this.#read({
+			segments: ['api', 'guilds', guildId, 'auction-tournaments', tournamentId, 'cancel-preview'],
+			responseSchema: auctionTournamentCancelPreviewDataSchema,
+			context,
+			logRequest: true
+		});
+	}
+
+	cancelAuctionTournament(
+		guildId: string,
+		tournamentId: string,
+		input: AuctionTournamentCancelRequest,
+		context: ApiMutationContext
+	): Promise<AuctionTournamentCancelResult> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['api', 'guilds', guildId, 'auction-tournaments', tournamentId, 'cancel'],
+			body: input,
+			requestSchema: auctionTournamentCancelRequestSchema,
+			responseSchema: auctionTournamentCancelResultSchema,
+			context,
+			idempotencyKey: context.idempotencyKey,
+			logRequest: true
+		});
+	}
+
 	bindRecruitmentMessage(
 		guildId: string,
 		recruitmentId: string,
@@ -397,6 +497,22 @@ export class MonkeyBotApiClient {
 		});
 	}
 
+	acknowledgeAuctionRecruitmentMessage(
+		input: AcknowledgeNotificationRequest,
+		context: ApiRequestContext = {}
+	): Promise<AcknowledgeAuctionRecruitmentMessageData> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['internal', 'notifications', 'auction-recruitment-message', 'ack'],
+			body: input,
+			requestSchema: acknowledgeNotificationRequestSchema,
+			responseSchema: acknowledgeAuctionRecruitmentMessageDataSchema,
+			context,
+			idempotencyKey: null,
+			logRequest: false
+		});
+	}
+
 	nackNotification(
 		input: NackNotificationRequest,
 		context: ApiRequestContext = {}
@@ -430,6 +546,115 @@ export class MonkeyBotApiClient {
 			idempotencyKey: context.idempotencyKey,
 			logRequest: true
 		});
+	}
+
+	#auctionRecruitmentMutation<TRequest>(
+		method: 'POST' | 'DELETE',
+		segments: string[],
+		body: TRequest,
+		requestSchema: ZodType<TRequest>,
+		context: ApiMutationContext
+	): Promise<AuctionRecruitmentSnapshot> {
+		return this.#mutate({
+			method,
+			segments,
+			body,
+			requestSchema,
+			responseSchema: auctionRecruitmentSnapshotSchema,
+			context,
+			idempotencyKey: context.idempotencyKey,
+			logRequest: true
+		});
+	}
+
+	async #read<TResponse>(request: ReadRequest<TResponse>): Promise<TResponse> {
+		const url = this.#url(request.segments);
+		const controller = new AbortController();
+		const timeout = setTimeout(
+			() => controller.abort(new Error('API request timed out')),
+			this.#timeoutMs
+		);
+		timeout.unref();
+		const abortFromCaller = () => controller.abort(request.context.signal?.reason);
+		request.context.signal?.addEventListener('abort', abortFromCaller, { once: true });
+
+		let response: Response;
+		try {
+			response = await this.#fetch(url, {
+				method: 'GET',
+				headers: {
+					accept: 'application/json',
+					authorization: `Bearer ${this.#serviceToken}`
+				},
+				redirect: 'error',
+				signal: controller.signal
+			});
+		} catch (error) {
+			const timedOut = controller.signal.aborted && !request.context.signal?.aborted;
+			if (request.logRequest) {
+				this.#logger?.warn(
+					{ err: error, method: 'GET', path: url.pathname, timedOut },
+					'bot API request failed'
+				);
+			}
+			throw new MonkeyBotApiTransportError(
+				timedOut ? 'Bot API request timed out' : 'Bot API request failed',
+				{ cause: error }
+			);
+		} finally {
+			clearTimeout(timeout);
+			request.context.signal?.removeEventListener('abort', abortFromCaller);
+		}
+
+		const payload = await readJson(response);
+		if (!response.ok) {
+			const parsed = apiErrorEnvelopeSchema.safeParse(payload);
+			const requestId = parsed.success
+				? parsed.data.error.requestId
+				: response.headers.get('x-request-id');
+			if (request.logRequest) {
+				this.#logger?.warn(
+					{
+						method: 'GET',
+						path: url.pathname,
+						status: response.status,
+						requestId,
+						code: parsed.success ? parsed.data.error.code : 'invalid_error_response'
+					},
+					'bot API rejected request'
+				);
+			}
+			throw new MonkeyBotApiError({
+				status: response.status,
+				code: parsed.success ? parsed.data.error.code : 'invalid_error_response',
+				message: parsed.success ? parsed.data.error.message : 'Bot API rejected the request',
+				requestId,
+				details: parsed.success ? parsed.data.error.details : undefined
+			});
+		}
+
+		const envelope = successEnvelopeSchema(request.responseSchema).safeParse(payload);
+		if (!envelope.success) {
+			if (request.logRequest) {
+				this.#logger?.error(
+					{ method: 'GET', path: url.pathname, status: response.status },
+					'bot API returned an invalid success payload'
+				);
+			}
+			throw new MonkeyBotApiContractError('Bot API response does not match the expected contract');
+		}
+		if (request.logRequest) {
+			this.#logger?.debug(
+				{
+					method: 'GET',
+					path: url.pathname,
+					status: response.status,
+					requestId: envelope.data.meta.requestId
+				},
+				'bot API request completed'
+			);
+		}
+		return envelope.data.data;
 	}
 
 	async #mutate<TRequest, TResponse>(

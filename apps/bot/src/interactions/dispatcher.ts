@@ -6,18 +6,28 @@ import {
 	type Interaction,
 	type StringSelectMenuInteraction
 } from 'discord.js';
-import type { RecruitmentSnapshot } from '../api/contracts.js';
+import type { AuctionRecruitmentSnapshot, RecruitmentSnapshot } from '../api/contracts.js';
 import { commandByName } from '../commands/index.js';
 import { actorFromInteraction } from '../discord/actor.js';
+import { renderAuctionRecruitmentMessage } from '../discord/auction-recruitment-message.js';
 import { renderRecruitmentMessage } from '../discord/recruitment-message.js';
-import { parseRecruitmentCustomId } from './custom-id.js';
+import {
+	parseAuctionRecruitmentCustomId,
+	parseRecruitmentCustomId,
+	type AuctionRecruitmentComponentId
+} from './custom-id.js';
 import type { InteractionContext } from './context.js';
 import { botErrorReference, reasonWithErrorReference } from './error-format.js';
 import { guildInteractionError } from './guild-context.js';
 
 type PreferredLane = RecruitmentSnapshot['participants'][number]['preferredLanes'][number];
+type AuctionLane = Exclude<
+	AuctionRecruitmentSnapshot['participants'][number]['declaredLane'],
+	null
+>;
 
 const PREFERRED_LANES = new Set<PreferredLane>(['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT']);
+const AUCTION_LANES = new Set<AuctionLane>(['TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT']);
 
 export function installInteractionDispatcher(client: Client, context: InteractionContext): void {
 	client.on('interactionCreate', (interaction) => {
@@ -35,10 +45,20 @@ export async function dispatchInteraction(
 			return;
 		}
 		if (interaction.isButton()) {
+			const auctionComponent = parseAuctionRecruitmentCustomId(interaction.customId);
+			if (auctionComponent) {
+				await dispatchAuctionRecruitmentButton(interaction, context, auctionComponent);
+				return;
+			}
 			await dispatchRecruitmentButton(interaction, context);
 			return;
 		}
 		if (interaction.isStringSelectMenu()) {
+			const auctionComponent = parseAuctionRecruitmentCustomId(interaction.customId);
+			if (auctionComponent) {
+				await dispatchAuctionRecruitmentLane(interaction, context, auctionComponent);
+				return;
+			}
 			await dispatchRecruitmentLanes(interaction, context);
 		}
 	} catch (error) {
@@ -131,6 +151,44 @@ async function dispatchRecruitmentButton(
 	}
 }
 
+async function dispatchAuctionRecruitmentButton(
+	interaction: ButtonInteraction,
+	context: InteractionContext,
+	component: AuctionRecruitmentComponentId
+): Promise<void> {
+	if (component.action === 'lane') return;
+	const guildError = guildInteractionError(interaction);
+	if (guildError) {
+		await interaction.reply({
+			content: guildError,
+			flags: MessageFlags.Ephemeral
+		});
+		return;
+	}
+	if (!interaction.inCachedGuild()) return;
+
+	await interaction.deferUpdate();
+	const actor = actorFromInteraction(interaction);
+	const requestContext = { idempotencyKey: interaction.id };
+	const snapshot =
+		component.action === 'join'
+			? await context.api.joinAuctionRecruitment(
+					interaction.guildId,
+					component.recruitmentId,
+					{ actor },
+					requestContext
+				)
+			: await context.api.leaveAuctionRecruitment(
+					interaction.guildId,
+					component.recruitmentId,
+					actor.id,
+					{ actor },
+					requestContext
+				);
+
+	await interaction.editReply(renderAuctionRecruitmentMessage(snapshot, context.config.webOrigin));
+}
+
 async function dispatchRecruitmentLanes(
 	interaction: StringSelectMenuInteraction,
 	context: InteractionContext
@@ -167,6 +225,41 @@ async function dispatchRecruitmentLanes(
 	await interaction.editReply(renderRecruitmentMessage(snapshot, context.config.webOrigin));
 }
 
+async function dispatchAuctionRecruitmentLane(
+	interaction: StringSelectMenuInteraction,
+	context: InteractionContext,
+	component: AuctionRecruitmentComponentId
+): Promise<void> {
+	if (component.action !== 'lane') return;
+	const guildError = guildInteractionError(interaction);
+	if (guildError) {
+		await interaction.reply({
+			content: guildError,
+			flags: MessageFlags.Ephemeral
+		});
+		return;
+	}
+	if (!interaction.inCachedGuild()) return;
+
+	await interaction.deferUpdate();
+	const declaredLane = parseAuctionLane(interaction.values);
+	if (!declaredLane) {
+		await interaction.followUp({
+			content: '참가 라인은 하나만 선택해 주세요.',
+			flags: MessageFlags.Ephemeral
+		});
+		return;
+	}
+	const actor = actorFromInteraction(interaction);
+	const snapshot = await context.api.joinAuctionRecruitment(
+		interaction.guildId,
+		component.recruitmentId,
+		{ actor, declaredLane },
+		{ idempotencyKey: interaction.id }
+	);
+	await interaction.editReply(renderAuctionRecruitmentMessage(snapshot, context.config.webOrigin));
+}
+
 function parsePreferredLanes(values: readonly string[]): PreferredLane[] | null {
 	const lanes: PreferredLane[] = [];
 	for (const value of values) {
@@ -175,6 +268,12 @@ function parsePreferredLanes(values: readonly string[]): PreferredLane[] | null 
 		if (!lanes.includes(lane)) lanes.push(lane);
 	}
 	return lanes;
+}
+
+function parseAuctionLane(values: readonly string[]): AuctionLane | null {
+	if (values.length !== 1) return null;
+	const lane = values[0];
+	return lane && AUCTION_LANES.has(lane as AuctionLane) ? (lane as AuctionLane) : null;
 }
 
 export function interactionErrorContent(error: unknown, interactionId: string): string {

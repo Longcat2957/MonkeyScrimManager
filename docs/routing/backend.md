@@ -983,88 +983,156 @@ stale series revision은 `409 series_revision_conflict`다. 동일 key/body는 �
 
 ### GET /api/guilds/{guildId}/auction-recruitments
 
-query state=actionable|active|completed.
+`state=actionable`만 지원한다. OPEN 또는 CLOSED이고 아직 tournament로 전환되지 않은 경매 모집을
+updatedAt/id 내림차순으로 반환한다. OPEN row의 `href`는
+`/g/{guildId}/auction/recruitments/{id}`, CLOSED row의 `href`는
+`/g/{guildId}/auction/recruitments/{id}/draft`다. 목록은 Web 생성 직후의 OPEN 모집과 기존 Bot 모집을 같은
+projection으로 보여준다.
 
 ### POST /api/guilds/{guildId}/auction-recruitments
 
-Bot이 경매 모집을 생성한다.
+Discord `/경매모집`과 Web `/g/{guildId}/auction`의 경매 모집 dialog가 같은 canonical create command를 쓴다.
 
-### GET /api/guilds/{guildId}/auction-recruitments/{id}
-
-```text
-id
-displayNumber
-title
-format             TEN_PERSON | TWENTY_PERSON
-participantCount   10 | 20
-teamCount          2 | 4
-participants[]
-setupDraft
-  revision
-  teams[] = teamIndex, captainId, initialPoints
-  updatedAt, updatedBy
-```
-
-### PATCH /api/guilds/{guildId}/auction-recruitments/{id}/setup-draft
-
-팀장/시작 point를 최소 operation으로 저장한다.
-
-```text
-ADD_CAPTAIN(captainId)
-REMOVE_CAPTAIN(captainId)
-SET_INITIAL_POINTS(teamIndex, points)
-```
-
-모든 operation은 `expectedRevision`을 포함한다. 전체 team setup JSON을 반복 PUT하지 않는다.
-Captain은 frontend의 선택 순서대로 team index에 들어간다. 중간 captain을 제거하면 뒤 captain을
-한 칸씩 당기고 team index별 시작 point는 그대로 유지한다.
-
-### POST/DELETE /api/guilds/{guildId}/auction-recruitments/{id}/members/**
-
-Bot operator의 강제 참가/제거.
-추가 request는 `userId`, `declaredLane`을 받는다. lane을 생략하면 저장된 guild main lane을
-사용하고 둘 다 없으면 `422 lane_required`다. 참가/취소와 captain 자동 해제는 setup draft와
-같은 transaction에서 처리한다.
-
-### POST /api/guilds/{guildId}/auction-recruitments/{id}/cancel
-
-취소와 audit.
-
-### POST /api/guilds/{guildId}/auction-tournaments
-
-저장된 setup draft를 검증하고 tournament로 확정한다.
+Bot request는 service principal, Discord interaction `Idempotency-Key`, actor snapshot, `format`과 rules를 사용한다.
+Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`, `format`과 rules를 사용하며 actor를
+지정할 수 없다.
 
 ```json
+// Bot
 {
-	"sourceRecruitmentId": "0190f480-0000-7000-8000-000000000001",
-	"expectedRevision": 4
+  "actor": { "id": "100000000000000001", "globalDisplayName": "Longcat", "displayName": "MSM Longcat", "avatarHash": null, "roleIds": [] },
+  "format": "TEN_PERSON",
+  "semifinalBestOf": null,
+  "finalBestOf": 3,
+  "hardFearless": false
+}
+
+// Browser
+{
+  "format": "TWENTY_PERSON",
+  "semifinalBestOf": 1,
+  "finalBestOf": 5,
+  "hardFearless": true
 }
 ```
 
-tournament는 별도 opaque ID를 발급하고 source_recruitment_id unique FK로
-연결한다. 같은 recruitment에는 non-cancelled tournament가 최대 하나다. captain/point는
-request가 아니라 해당 revision의 `auction_setup_drafts` snapshot에서 복사한다. 생성 되돌리기
-후 다시 시작하면 새 tournament ID를 발급한다.
+`format`은 `TEN_PERSON | TWENTY_PERSON`만 허용하고 target count는 각각 10/20으로 server가 파생한다.
+`finalBestOf`와 non-null `semifinalBestOf`는 `1 | 3 | 5`다. 10인은 `semifinalBestOf=null`만 허용하고, 20인은
+두 준결승이 공유하는 non-null `semifinalBestOf`와 독립 `finalBestOf`를 사용한다. 생략한 호환 필드는
+BO3/일반으로 정규화한다.
+Bot과 Browser 모두 ACTIVE guild member여야 한다. Backend는 current ACTIVE season과
+`AUCTION_RECRUITMENT` guild counter를 lock한 뒤 OPEN `auction_recruitments`, 빈
+`auction_setup_drafts(revision=0)`, format별 빈 team slot(2 또는 4)을 한 transaction으로 생성한다.
+
+어느 생성 주체든 `guild_config.recruitment_channel_id`가 반드시 설정되어 있어야 한다. 같은 transaction에
+그 채널을 대상으로 `AUCTION_RECRUITMENT_MESSAGE_CREATE` notification을 적재한다. `201 Created`는 DB state와
+Discord delivery work가 확정되었음을 뜻할 뿐 Discord 게시 완료를 뜻하지 않는다. 채널이 없으면 전체
+transaction을 rollback하고 `409 recruitment_channel_not_configured`를 반환한다. Bot slash command와 Browser는
+동일 outbox delivery/typed acknowledgement가 message reference를 bind할 때까지 channel/message ID를 추측하지
+않는다.
+
+response는 생성된 `AuctionRecruitmentSnapshot`이며 `recruitment.href`는 OPEN 모집 상세 route다. 동일 principal,
+idempotency key, request body는 같은 response를 replay하며 request가 다르면 `409 idempotency_conflict`다.
+
+### GET /api/guilds/{guildId}/auction-recruitments/{id}
+
+ACTIVE guild member에게 authoritative auction recruitment snapshot을 반환한다. response는 다음 구조다.
+
+```text
+recruitment
+  id, displayNumber, title, format, rules{hardFearless, semifinalBestOf, finalBestOf}
+  participantCount, joinedParticipantCount, teamCount
+  status, revision, channelId, messageId, createdById, updatedAt, href
+participants[] = id, displayName, declaredLane
+links
+  draft: string | null
+permissions
+  canManageMembers, canClose, canCancel
+```
+
+`draft` link는 CLOSED 모집에만 non-null이다. `canManageMembers`는 OPEN 모집에서 현재 active operator가
+browser roster add/remove를 실행할 수 있을 때만 true다. Browser는 권한을 자체 계산하지 않고 permissions를
+사용한다.
+CANCELLED 또는 CONVERTED 모집은 이 read route에서 `404`다.
+
+### POST /api/guilds/{guildId}/auction-recruitments/{id}/close
+
+Browser session, CSRF, browser `Idempotency-Key`가 필요하다. active operator만 OPEN 모집을 정원(10 또는 20명)
+까지 채운 뒤 CLOSED로 전환할 수 있다. transaction은 current recruitment revision/state와 JOINED participant 수를 다시 검증하고,
+recruitment revision/audit/realtime invalidate를 함께 기록한다. 성공 `200`은 updated
+`AuctionRecruitmentSnapshot`을 반환하며 `links.draft`가 non-null이다. 정원이 부족하면 safe reason
+`auction_recruitment_not_full`, stale/invalid lifecycle이면 해당 conflict reason을 반환한다. bound Discord
+message가 있으면 같은 transaction에 `AUCTION_RECRUITMENT_MESSAGE_UPDATE`를 적재한다.
+
+### DELETE /api/guilds/{guildId}/auction-recruitments/{id}
+
+Browser session, CSRF, browser `Idempotency-Key`를 사용하는 bodyless soft-cancel command다. OPEN 모집을
+생성자 또는 active operator가 CANCELLED로 전이할 수 있다. participant/setup draft/team slot/history는
+보존하고 audit/realtime invalidate를 같은 transaction에 기록한다. 동일 idempotency key는 cancel snapshot을
+replay하며 새 key의 재취소는 lifecycle conflict다. bound Discord message가 있으면 같은 transaction에
+`AUCTION_RECRUITMENT_MESSAGE_DELETE`를 적재한다.
+
+### POST /api/guilds/{guildId}/auction-recruitments/{id}/members
+
+Bot과 Browser가 같은 canonical roster command를 사용한다.
+
+- Bot service principal은 Discord interaction `Idempotency-Key`와 `{ actor, declaredLane? }`를 보낸다.
+  actor 자신의 ACTIVE 길드 소속을 확보한 뒤 OPEN 모집에 self-service로 참가한다. lane을 생략하면 저장된
+  guild main lane을 사용하고, 둘 다 없으면 `422 auction_declared_lane_required`를 반환한다.
+- Browser는 Discord OAuth session, CSRF, browser `Idempotency-Key`와
+  `{ memberId, declaredLane }`를 보낸다. 현재 active operator만 existing ACTIVE guild member를 추가할 수
+  있다. `memberId`는 opaque stored user ID이므로 Discord user와 development dummy user 모두 같은 경로로
+  처리하며, browser는 declared lane을 명시해야 한다.
+
+선택 lane의 현재 시즌 MMR은 1500 기본값을 포함해 `CAPTURED` snapshot으로 저장한다. capacity/duplicate/state를
+transaction에서 검증하고, recruitment/setup draft revision, audit, realtime outbox, bound Discord message
+update를 함께 기록한다.
+
+### DELETE /api/guilds/{guildId}/auction-recruitments/{id}/members/{userId}
+
+Bot과 Browser가 같은 canonical roster command를 사용한다.
+
+- Bot service principal은 Discord interaction `Idempotency-Key`와 `{ actor }`를 보낸다. actor는 자신을
+  취소하거나 configured operator role로 다른 참가자를 제거할 수 있다.
+- Browser는 Discord OAuth session, CSRF, browser `Idempotency-Key`와 빈 `{}` body를 보낸다. 현재 active
+  operator만 path의 참가자를 제거할 수 있다.
+
+OPEN 모집에서만 허용하며, 참가 row를 `WITHDRAWN`으로 전환하고 setup team에 남아 있던 captain 참조를 같은
+transaction에서 비운다. recruitment/setup draft revision, audit, realtime outbox와 bound Discord message
+update도 같은 transaction에 기록한다.
+
+### GET/PATCH /api/guilds/{guildId}/auction-recruitments/{id}/setup-draft
+
+`GET`은 ACTIVE 길드 멤버에게 CLOSED 모집의 setup draft와 JOINED roster를 반환한다. `PATCH`는
+browser session, CSRF, browser `Idempotency-Key`를 요구하며 current active operator만 실행할 수 있다.
+body는 `expectedRevision`과 format에 맞는 순서 팀 배열이다. 각 팀은 `teamIndex`, `teamName`,
+`captainUserId`, `initialPoints`를 포함한다.
+
+PATCH는 모집을 변경하지 않고 draft/팀 설정 revision, audit, outbox만 갱신한다. captain은 정확히 한 번씩
+선택된 JOINED participant여야 한다. 10인은 2팀, 20인은 4팀을 정확히 제공해야 하며, draft revision 충돌은
+`409 auction_setup_draft_revision_conflict`로 현재 revision을 함께 반환한다.
+
+### POST /api/guilds/{guildId}/auction-tournaments
+
+browser session operator가 CLOSED/full 모집과 complete setup draft에서 경매 내전을 시작한다. request는
+`sourceRecruitmentId`, `expectedRevision`이며 CSRF와 browser `Idempotency-Key`가 필수다. 생성 transaction은
+source recruitment, setup draft, setup team, JOINED participant를 잠그고 source를 CONVERTED로 전이한다.
+동시에 immutable rule snapshot, captain roster, initial point ledger, non-captain candidate queue를 만들고
+`BIDDING` snapshot을 반환한다. source recruitment의 기존 active tournament는 `409`로 거절한다.
 
 ### GET /api/guilds/{guildId}/auction-tournaments
 
 query state=active|completed.
 
+`active`는 `BIDDING`, `BRACKET_SETUP`, `IN_GAME`만, `completed`는 `COMPLETED`와 `CANCELLED`를 함께 반환한다.
+취소된 row는 결과 확정이 아닌 archive로 표시하지만, 기존 결과 snapshot URL은 계속 읽을 수 있다.
+
 ### GET /api/guilds/{guildId}/auction-tournaments/{id}
 
-view query로 setup, draft, bracket summary를 선택할 수 있다.
-
-draft snapshot:
-
-```text
-id, displayNumber, title, format, status, revision
-teams와 point/member
-candidateQueue
-currentTarget
-unsold
-recentRevertableAction
-updatedAt/updatedBy
-```
+ACTIVE 길드 멤버가 canonical draft aggregate를 읽는다. 응답은 tournament immutable rule snapshot, team별
+현재 point/roster, 전체 candidate queue, current target, UNSOLD 후보, 마지막 revert 가능한 action, viewer
+permission을 포함한다. `href`는 `/g/{guildId}/auction/tournaments/{tournamentId}/draft`다. `canManageDraft`는
+현재 active operator에게만 true다.
 
 ### POST /api/guilds/{guildId}/auction-tournaments/{id}/commands
 
@@ -1080,16 +1148,51 @@ RESTORE_UNSOLD
 REVERT_LAST
 ```
 
-일곱 command 모두 `Idempotency-Key`와 expectedRevision을 포함한다. AWARD_BID는 낙찰, point 차감,
-team 배치, checkpoint, audit, outbox를 한 transaction에서 처리한다.
-`RESTORE_UNSOLD`는 active target이 없을 때 선택한 유찰 선수를 즉시 current target으로
-복원하며 queue 뒤로 보내지 않는다.
-`REVERT_LAST`로 선수가 current target으로 돌아오면 이전 lot을 재사용하지 않고 새 lot ID를
-발급한다.
+browser-only command route다. current active operator, CSRF, browser `Idempotency-Key`,
+`expectedRevision`이 모두 필요하다. command는 tournament -> teams -> active team members -> candidates ->
+lots -> actions -> point ledger 순서로 잠그며 action/audit/outbox와 snapshot을 같은 transaction에서 기록한다.
+
+- `DRAW_NEXT`는 가장 앞 QUEUED candidate를 ACTIVE로 만들고 drawCount를 증가시킨다.
+- `MARK_UNSOLD`, `AWARD_BID`, `ASSIGN_CURRENT`는 현재 target과 일치해야 한다. AWARD_BID는 team point를
+  차감하고 BID roster/point ledger를 같이 만든다.
+- `ASSIGN_UNSOLD`는 active target이 없는 UNSOLD candidate만 manual roster로 옮긴다.
+- `RESTORE_UNSOLD`는 active target이 없을 때 유찰 후보에 새 ACTIVE lot을 만들며 queue 뒤로 보내거나
+  drawCount를 증가시키지 않는다. 이전 UNSOLD 또는 reverted assignment lot은 history로만 보존한다.
+- `REVERT_LAST`는 action ledger를 수정하지 않고 새 reversal action을 append한다. `MARK_UNSOLD`,
+  `AWARD_BID`, `ASSIGN_CURRENT` rollback은 새 ACTIVE lot으로 즉시 current target을 복원한다.
+  `ASSIGN_UNSOLD` rollback은 candidate를 UNSOLD로만 되돌린다. 낙찰 rollback은 roster release와 reversal
+  point ledger를 함께 기록한다.
+
+대진 slot이 아직 unlock인 `BRACKET_SETUP`에서는 `REVERT_LAST`만 가능하며, transaction 안에서 모든
+`auction_bracket_slots.team_id`를 먼저 비운다. match, lineup, game artifact 또는 locked bracket이 있으면
+draft mutation은 `409 auction_tournament_draft_locked` 또는 state conflict로 거절된다.
+
+### GET /api/guilds/{guildId}/auction-tournaments/{id}/cancel-preview
+
+BotBearer 전용 read endpoint다. Discord `/경매조기종료`는 여기서 canonical tournament UUID, display number,
+title, 현재 status와 revision을 읽고 POST cancel의 `expectedRevision`에 사용한다. body와 idempotency key는
+필요 없다. 이 read는 terminal status도 반환하지만 권한·상태·revision의 최종 판정은 반드시 다음 POST
+transaction에서 다시 수행한다.
 
 ### POST /api/guilds/{guildId}/auction-tournaments/{id}/cancel
 
-Bot operator의 조기 종료용 command. `Idempotency-Key`, expectedRevision, reason, audit가 필요하다.
+Bot service principal만 호출하는 operator 조기 종료 command다. browser action은 제공하지 않으며, 실제 Discord
+slash command/client가 이 endpoint를 호출해야 사용자 기능으로 도달한다. `Idempotency-Key`, `expectedRevision`,
+non-empty reason, actor snapshot과 audit가 필요하다.
+
+- `BIDDING`, `BRACKET_SETUP`, `IN_GAME`만 취소할 수 있다. `COMPLETED`와 `CANCELLED`는 `409`다.
+- `IN_GAME`은 tournament의 active match에 속한 모든 confirmed game을 confirmed time 역순으로 되돌린다.
+  각 game의 MMR ledger가 전역 MMR history tail이어야 하며, 이후 MMR 변경이 있으면 일부만 취소하지 않고
+  transaction 전체를 `409 auction_tournament_cancel_mmr_history_advanced`로 rollback한다.
+- game rollback이 끝난 뒤 active match, tournament, source recruitment을 모두 `CANCELLED`로 전환한다.
+  source recruitment의 bound Discord 모집 메시지는 typed DELETE outbox로 제거하고 tournament/recruitment
+  invalidation outbox와 audit를 같은 transaction에 기록한다.
+
+### GET /api/guilds/{guildId}/auction-tournaments/{id}/bracket
+
+활성 길드 멤버가 읽는 authoritative bracket aggregate다. tournament, team roster, 고정 순서의
+`A_0`, `A_1`, `B_0`, `B_1` slot, 생성된 match의 score 요약, viewer 권한을 함께 반환한다.
+`rules.semifinalBestOf`는 10인에서는 명시적으로 `null`, 20인에서는 1/3/5 숫자다.
 
 ### POST /api/guilds/{guildId}/auction-tournaments/{id}/bracket/commands
 
@@ -1097,27 +1200,31 @@ Bot operator의 조기 종료용 command. `Idempotency-Key`, expectedRevision, r
 ASSIGN_TEAM
 CLEAR_SLOT
 LOCK_BRACKET
+UNLOCK_BRACKET
 ```
 
-20인 slot은 A_0, A_1, B_0, B_1이다. 10인은 2팀 결승을 만든다.
-현재 frontend에 format 선택이 없으므로 `LOCK_BRACKET`이 만드는 신규 match는 BO3다.
-Bracket 생성 revert는 game이 없을 때 기존 match를 CANCELLED로 보존하고 tournament를
-BRACKET_SETUP으로 되돌린다.
+browser-only active operator command다. CSRF, browser `Idempotency-Key`, `expectedRevision`가 모두
+필요하며 tournament -> team -> active roster -> slot -> match 순서로 lock하고 audit/outbox와
+snapshot을 같은 transaction에 기록한다. `BRACKET_SETUP`이면서 아직 unlock인 경우에만 바꿀 수 있다.
+
+- `ASSIGN_TEAM`은 이전 배치와 target slot을 먼저 비운 뒤 새 slot에 넣는다. 따라서 같은 팀은 한 slot에만
+  존재한다.
+- 10인은 `A_0`, `A_1`만 허용한다. `LOCK_BRACKET`은 각 팀의 active roster 5명과 두 slot을 검증한 뒤,
+  configured `finalBestOf`와 `hardFearless`를 가진 `FINAL` 하나를 만든다.
+- 20인은 네 slot 모두를 사용한다. `LOCK_BRACKET`은 active roster 5명인 네 팀과 네 slot을 검증한 뒤,
+  configured `semifinalBestOf`의 `SEMIFINAL_A`, `SEMIFINAL_B` 및 configured `finalBestOf`의 빈
+  `FINAL`을 만든다. 모든 match는 tournament의 `hardFearless`를 복사한다.
+- bracket lock은 tournament를 `BRACKET_SETUP`에 유지한다. lineup lock 이후 match 진행 flow가
+  tournament를 `IN_GAME`으로 전환한다.
+- `UNLOCK_BRACKET`은 lock된 `BRACKET_SETUP` 또는 `IN_GAME` bracket의 recovery command다. 생성된 모든
+  match에 `games`와 `game_inputs`가 하나도 없을 때만 허용하며, 기존 match를 `CANCELLED` history로 남긴 뒤
+  bracket lock을 풀고 slot 편집 상태로 복원한다. 취소된 이전 match/lineup은 새 bracket lock의 artifact가 아니다.
 
 ### GET /api/guilds/{guildId}/auction-matches/{matchId}
 
-```text
-id, label, round
-bestOf
-leftTeamId/rightTeamId
-leftScore/rightScore/winnerTeamId
-lineupsLocked/resultEntered
-revision
-lineups
-games
-```
-
-round는 SEMIFINAL 또는 FINAL, bestOf는 1/3/5다.
+`match`, 양 팀 roster, `lineups`, 확정 `games`, viewer `permissions`를 한 snapshot으로 반환한다.
+각 game의 `picks` key는 반드시 잠긴 lineup의 10개 user ID와 정확히 일치하며, pick/ban은 null일 수 있다.
+`leftScore`/`rightScore`는 확정 game의 side preset과 winner에서만 계산한다.
 
 ### PATCH /api/guilds/{guildId}/auction-matches/{matchId}/lineup
 
@@ -1128,16 +1235,36 @@ round는 SEMIFINAL 또는 FINAL, bestOf는 1/3/5다.
 양 팀 TOP/JUNGLE/MID/BOTTOM/SUPPORT가 정확히 한 명씩이고 team membership과
 중복이 유효해야 한다.
 
+### POST /api/guilds/{guildId}/auction-matches/{matchId}/lineup/unlock
+
+operator recovery command다. lock metadata가 모두 있는 `READY` match만 다시 열 수 있으며, 해당 match의
+`games` 또는 `game_inputs` row가 하나라도 있으면, voided/superseded history를 포함해 거절한다. 기존 lane
+assignment는 유지하고 lock metadata만 비운 뒤 match를 `LINEUP_PENDING`으로 되돌린다. UI는 서버의
+`permissions.canUnlockLineup`이 true일 때만 이 command를 노출한다.
+
 ### POST /api/guilds/{guildId}/auction-matches/{matchId}/games
 
-matchId, setNumber, match의 expectedRevision, game을 받는다. 별도 tournament revision은 받지 않는다.
-서버는 tournament를 먼저 lock해 현재 status와 bracket 관계를 검증한 뒤 match revision을 비교한다.
-lock 전 입력은 거부한다.
-경매 game도 일반 game과 같은 guild MMR service/ledger를 사용한다.
+`expectedRevision`, `setNumber`, side preset, winner, 10명 전체의 pick map, 양 진영 5칸 ban, patch version을
+받는다. 별도 tournament revision은 받지 않는다. 서버는 tournament -> match -> locked lineup 순서로 lock한 뒤
+다음 set만 허용하고, set 안의 pick/ban 중복 및 같은 match 안의 hard fearless 과거 pick 재사용을 거절한다.
+lock 전 입력은 거부한다. 경매 game은 일반 game과 같은 guild MMR service/ledger를 사용한다.
+
+첫 확정 game은 match를 `IN_PROGRESS`로 전환한다. BO 승점에 도달하면 match를 `COMPLETED`로 전환하고,
+20인 `SEMIFINAL_A/B` 승자는 같은 transaction에서 `FINAL`의 left/right team으로 전파한다. 전파 시 해당
+준결승의 잠긴 5인 lineup도 final 쪽에 복사하지만 final lock metadata는 두 semifinal이 모두 준비될 때까지
+비워 둔다. final 승자는 tournament를 `COMPLETED`로 전환하고, result channel이 설정된 경우에만
+`AUCTION_TOURNAMENT_RESULT_CREATE` outbox를 enqueue한다.
 
 ### DELETE /api/guilds/{guildId}/auction-matches/{matchId}/games/last
 
-game/MMR/match score/tournament state를 transaction으로 복구한다.
+가장 최근 확정 game, MMR ledger, match score/state를 transaction으로 복구한다. source game input은
+`SUPERSEDED`가 되어 새 set 입력을 막지 않는다. MMR tail-safe 조건을 만족하지 않으면 거절한다.
+완료된 20인 준결승을 되돌릴 때 final의 lineup, game 또는 완료 artifact가 있으면 거절하며, 없을 때만
+전파한 final side와 5인 lineup을 함께 제거한다. 완료 final을 되돌리면 tournament는 `IN_GAME`으로 열린다.
+완료 final의 결과 Discord card는 같은 transaction에서 reconciliation한다. 아직 delivery를 시도하지 않은
+CREATE row만 terminal cancel할 수 있고, delivered CREATE는 typed result DELETE outbox를 enqueue한다. active
+lease 또는 attempted-but-undelivered/unknown delivery row가 있으면 card 상태를 안전하게 판단할 수 없으므로
+revert를 `409`로 거절한다.
 
 ### GET /api/guilds/{guildId}/auction-tournaments/{id}/result
 
@@ -1152,9 +1279,11 @@ participant game result와 MMR delta
 revertable checkpoint
 ```
 
-일반 참가자에게는 원장 조회이고 operator에게만 `결과 입력 되돌리기` 한 개를 노출한다. 이 action은
-별도 tournament 전용 복구 API를 만들지 않고
-`POST /api/guilds/{guildId}/reverts/{checkpointId}/apply`를 사용한다.
+`IN_GAME`, `COMPLETED`, `CANCELLED` tournament의 authoritative 집계다. `CANCELLED`는 BIDDING 중 취소되어
+match가 0개일 수 있고, bracket recovery의 이전 CANCELLED match history가 여러 개일 수 있다. archive는
+canonical team/match history를 반환하되 result rollback 권한은 항상 false이며, 취소 전 confirmed game은
+cancellation transaction에서 MMR과 함께 void되어 score/delta에 포함되지 않는다. 일반 참가자에게는 read-only이고,
+operator의 결과 되돌리기는 각 canonical match의 `DELETE .../games/last`만 사용한다. 별도 checkpoint API는 없다.
 
 ## 길드 전적과 랭킹
 
@@ -1884,9 +2013,10 @@ Bot service principal만 사용한다. request는 `{ "instanceId": "bot-1", "lim
 
 request는 `{ "instanceId", "notificationId", "leaseToken", "discordMessageId" }`다. owner+token이
 현재 lease와 일치할 때만 generic notification을 delivered로 전이한다. `RECRUITMENT_MESSAGE_UPDATE`와
-`RECRUITMENT_MESSAGE_DELETE`, `ENTRY_CONFIRMATION_CREATE`는 Discord delivery 성공 뒤 이 route를 사용한다.
-Browser-created `RECRUITMENT_MESSAGE_CREATE`에는 이 route를 사용하지 않으며 호출하면 `422
-recruitment_message_create_requires_typed_ack`로 거절한다.
+`RECRUITMENT_MESSAGE_DELETE`, `AUCTION_RECRUITMENT_MESSAGE_UPDATE`,
+`AUCTION_RECRUITMENT_MESSAGE_DELETE`, `ENTRY_CONFIRMATION_CREATE`는 Discord delivery 성공 뒤 이 route를
+사용한다. `RECRUITMENT_MESSAGE_CREATE` 또는 `AUCTION_RECRUITMENT_MESSAGE_CREATE`에는 이 route를 사용하지
+않으며 호출하면 typed ack required safe reason으로 거절한다.
 
 ### POST /internal/notifications/recruitment-message/ack
 
@@ -1896,6 +2026,14 @@ recruitment_message_create_requires_typed_ack`로 거절한다.
 현재 revision이 앞서 있으면 UPDATE를, 현재 status가 CANCELLED면 DELETE를 같은 transaction에 후속
 적재한다. generic ack 뒤 별도 bind를 호출하는 흐름은 crash window와 duplicate message 위험 때문에
 금지한다.
+
+### POST /internal/notifications/auction-recruitment-message/ack
+
+`AUCTION_RECRUITMENT_MESSAGE_CREATE` 전용 acknowledgement다. request shape은 generic ack와 같지만
+다른 aggregate를 bind하므로 일반 모집 acknowledgement와 polymorphic body를 공유하지 않는다. Bot은 Web이
+생성한 경매 모집 message send 성공 뒤 message ID를 보낸다. Backend는 notification delivered 전이와
+`auction_recruitments.channel_id/message_id` bind를 하나의 transaction으로 확정한다. generic ack 뒤 별도
+bind를 호출하는 흐름은 허용하지 않는다.
 
 ### POST /internal/notifications/nack
 
@@ -1919,9 +2057,14 @@ cookie session으로 handshake한다.
 ```text
 guild:{guildId}:recruitment:{id}
 guild:{guildId}:recruitment-entry-draft:{id}
+guild:{guildId}:auction-recruitment:{id}
 ```
 
-series/auction topic은 namespace 예약 상태이며 endpoint가 아직 subscribe하지 않는다.
+`auction-recruitment` topic은 OPEN 또는 CLOSED 모집의 현재 active operator만 subscribe할 수 있다. Web은
+`canManageMembers`가 true인 모집 detail에서만 이 topic을 열고, `invalidate` 또는 `resync_required`를 받으면
+authoritative auction recruitment snapshot을 다시 읽는다. 일반 guild member는 이 socket을 열지 않고 HTTP
+read만 사용한다. series와 auction tournament/match topic은 namespace 예약 상태이며 endpoint가 아직
+subscribe하지 않는다.
 
 client는 `{ "type": "subscribe", "topics": [...] }` 또는 `unsubscribe` frame을 보낸다. 성공하면
 `{ "type": "subscribed", "topics": [...] }`, hub lag에는 `{ "type": "resync_required" }`, 거부에는
@@ -1933,7 +2076,7 @@ event:
 {
 	"type": "invalidate",
 	"eventId": "0190f4a2-8b3c-7d5e-8f01-23456789abcd",
-	"topic": "guild:123:auction-tournament:0190f49d-3e20-7a41-9810-123456789abc",
+	"topic": "guild:123:auction-recruitment:0190f49d-3e20-7a41-9810-123456789abc",
 	"resourceId": "0190f49d-3e20-7a41-9810-123456789abc",
 	"revision": 43,
 	"occurredAt": "2026-07-11T11:20:12Z"
@@ -1951,6 +2094,8 @@ event:
 - recruitment topic event의 revision은 recruitment aggregate만, entry-draft topic event의 revision은
   `recruitment_entry_drafts` aggregate만 나타낸다. 두 topic은 동일 recruitment ID를 써도 revision을
   교환하거나 비교하지 않는다.
+- auction-recruitment topic event의 revision은 `auction_recruitments` aggregate만 나타낸다. setup draft,
+  auction tournament, auction match revision과 교환하거나 비교하지 않는다.
 
 ## 구현 순서
 

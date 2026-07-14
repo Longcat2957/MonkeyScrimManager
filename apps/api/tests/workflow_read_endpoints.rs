@@ -42,6 +42,7 @@ const GUILD_B: &str = "200000000000000002";
 const DISCORD_CLIENT_ID: &str = "900000000000000001";
 const PUBLIC_ORIGIN: &str = "http://localhost:5173";
 const OAUTH_KEY_BASE64URL: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const BOT_TOKEN: &str = "bot-service-token-that-is-at-least-32-characters";
 const SESSION_TOKEN: &str = "workflow-member-session";
 const OUTSIDER_SESSION_TOKEN: &str = "workflow-outsider-session";
 
@@ -55,8 +56,10 @@ const AUCTION_ACTIONABLE_10: &str = "01900000-0000-7000-8000-000000000501";
 const AUCTION_ACTIONABLE_20: &str = "01900000-0000-7000-8000-000000000502";
 const AUCTION_ACTIVE_SOURCE: &str = "01900000-0000-7000-8000-000000000503";
 const AUCTION_COMPLETED_SOURCE: &str = "01900000-0000-7000-8000-000000000504";
+const AUCTION_CANCELLED_SOURCE: &str = "01900000-0000-7000-8000-000000000505";
 const ACTIVE_TOURNAMENT: &str = "01900000-0000-7000-8000-000000000601";
 const COMPLETED_TOURNAMENT: &str = "01900000-0000-7000-8000-000000000602";
+const CANCELLED_TOURNAMENT: &str = "01900000-0000-7000-8000-000000000603";
 const ACTIVE_MATCH: &str = "01900000-0000-7000-8000-000000000801";
 
 const ACTIVE_TEAM_1: &str = "01900000-0000-7000-8000-000000000701";
@@ -65,6 +68,8 @@ const ACTIVE_TEAM_3: &str = "01900000-0000-7000-8000-000000000703";
 const ACTIVE_TEAM_4: &str = "01900000-0000-7000-8000-000000000704";
 const COMPLETED_TEAM_1: &str = "01900000-0000-7000-8000-000000000705";
 const COMPLETED_TEAM_2: &str = "01900000-0000-7000-8000-000000000706";
+const CANCELLED_TEAM_1: &str = "01900000-0000-7000-8000-000000000707";
+const CANCELLED_TEAM_2: &str = "01900000-0000-7000-8000-000000000708";
 
 type TestResult<T = ()> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -120,6 +125,9 @@ async fn run_workflow_read_flow() -> TestResult {
     assert_series(&app, &member_cookie).await?;
     assert_auction_recruitment_cursor(&app, &member_cookie).await?;
     assert_auction_tournaments(&app, &member_cookie).await?;
+    assert_cancelled_auction_tournament_archive(&app, &member_cookie).await?;
+    assert_auction_tournament_cancel_preview(&app).await?;
+    assert_legacy_auction_match_lock_exemption(&pool).await?;
 
     pool.close().await;
     drop(server);
@@ -179,7 +187,7 @@ async fn assert_operations(app: &Router, cookie: &str) -> TestResult {
     assert_eq!(operations[2]["status"], "결과 입력");
     assert_eq!(
         operations[2]["href"],
-        format!("/g/{GUILD_A}/auction/tournaments/{ACTIVE_TOURNAMENT}/bracket?view=result")
+        format!("/g/{GUILD_A}/auction/matches/{ACTIVE_MATCH}")
     );
     assert_eq!(operations[3]["title"], "20인 경매 모집");
     assert_eq!(operations[4]["title"], "10인 경매 모집");
@@ -293,6 +301,10 @@ async fn assert_auction_tournaments(app: &Router, cookie: &str) -> TestResult {
     let active = get(app, &active_path, Some(cookie)).await?;
     assert_eq!(active.status(), StatusCode::OK);
     let active = body_json(active).await?;
+    assert_eq!(
+        active["data"]["tournaments"].as_array().map(Vec::len),
+        Some(1)
+    );
     let row = &active["data"]["tournaments"][0];
     assert_eq!(row["id"], ACTIVE_TOURNAMENT);
     assert_eq!(row["format"], "TWENTY_PERSON");
@@ -310,13 +322,17 @@ async fn assert_auction_tournaments(app: &Router, cookie: &str) -> TestResult {
     assert!(row["championTeam"].is_null());
     assert_eq!(
         row["href"],
-        format!("/g/{GUILD_A}/auction/tournaments/{ACTIVE_TOURNAMENT}/bracket?view=result")
+        format!("/g/{GUILD_A}/auction/matches/{ACTIVE_MATCH}")
     );
 
     let completed_path = format!("/api/guilds/{GUILD_A}/auction-tournaments?state=completed");
     let completed = get(app, &completed_path, Some(cookie)).await?;
     assert_eq!(completed.status(), StatusCode::OK);
     let completed = body_json(completed).await?;
+    assert_eq!(
+        completed["data"]["tournaments"].as_array().map(Vec::len),
+        Some(2)
+    );
     let row = &completed["data"]["tournaments"][0];
     assert_eq!(row["id"], COMPLETED_TOURNAMENT);
     assert_eq!(row["format"], "TEN_PERSON");
@@ -333,6 +349,92 @@ async fn assert_auction_tournaments(app: &Router, cookie: &str) -> TestResult {
         row["href"],
         format!("/g/{GUILD_A}/auction/tournaments/{COMPLETED_TOURNAMENT}/result")
     );
+    let cancelled = &completed["data"]["tournaments"][1];
+    assert_eq!(cancelled["id"], CANCELLED_TOURNAMENT);
+    assert_eq!(cancelled["status"], "CANCELLED");
+    assert_eq!(cancelled["incompleteMatchCount"], 0);
+    assert!(cancelled["nextMatch"].is_null());
+    assert!(cancelled["championTeam"].is_null());
+    assert_eq!(
+        cancelled["href"],
+        format!("/g/{GUILD_A}/auction/tournaments/{CANCELLED_TOURNAMENT}/result")
+    );
+    Ok(())
+}
+
+async fn assert_cancelled_auction_tournament_archive(app: &Router, cookie: &str) -> TestResult {
+    let path = format!("/api/guilds/{GUILD_A}/auction-tournaments/{CANCELLED_TOURNAMENT}/result");
+    let response = get(app, &path, Some(cookie)).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await?;
+    assert_eq!(body["data"]["tournament"]["status"], "CANCELLED");
+    assert_eq!(body["data"]["matches"].as_array().map(Vec::len), Some(0));
+    assert_eq!(body["data"]["teams"].as_array().map(Vec::len), Some(2));
+    assert_eq!(body["data"]["players"].as_array().map(Vec::len), Some(0));
+    assert_eq!(body["data"]["permissions"]["canRevertResults"], false);
+    Ok(())
+}
+
+async fn assert_auction_tournament_cancel_preview(app: &Router) -> TestResult {
+    let path =
+        format!("/api/guilds/{GUILD_A}/auction-tournaments/{CANCELLED_TOURNAMENT}/cancel-preview");
+    let response = bot_get(app, &path).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await?;
+    assert_eq!(body["data"]["tournament"]["id"], CANCELLED_TOURNAMENT);
+    assert_eq!(body["data"]["tournament"]["displayNumber"], 116);
+    assert_eq!(body["data"]["tournament"]["status"], "CANCELLED");
+    assert_eq!(body["data"]["tournament"]["revision"], 6);
+    Ok(())
+}
+
+async fn assert_legacy_auction_match_lock_exemption(pool: &PgPool) -> TestResult {
+    let invariant_version = sqlx::query_scalar::<_, Option<i16>>(
+        "SELECT lineup_lock_invariant_version
+         FROM auction_matches
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_A)
+    .bind(id(ACTIVE_MATCH))
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(invariant_version, Some(1));
+
+    let current_row_violation = sqlx::query(
+        "UPDATE auction_matches
+         SET lineups_locked_at = NULL,
+             lineups_locked_by = NULL
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_A)
+    .bind(id(ACTIVE_MATCH))
+    .execute(pool)
+    .await;
+    assert!(current_row_violation.is_err());
+
+    // This mirrors an invalid row that predates 0018. It remains writable for
+    // later remediation without creating a fictional lock actor.
+    sqlx::query(
+        "UPDATE auction_matches
+         SET lineup_lock_invariant_version = NULL,
+             lineups_locked_at = NULL,
+             lineups_locked_by = NULL
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_A)
+    .bind(id(ACTIVE_MATCH))
+    .execute(pool)
+    .await?;
+    let updated = sqlx::query(
+        "UPDATE auction_matches
+         SET revision = revision + 1
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_A)
+    .bind(id(ACTIVE_MATCH))
+    .execute(pool)
+    .await?;
+    assert_eq!(updated.rows_affected(), 1);
     Ok(())
 }
 
@@ -688,20 +790,20 @@ async fn seed_auction_workflow(pool: &PgPool, season_id: Uuid) -> TestResult {
     sqlx::query(
         "INSERT INTO auction_recruitments (
             guild_id, id, season_id, display_number, title, format, target_count,
-            status, revision, created_by, created_at, updated_by, updated_at,
+            semifinal_best_of, status, revision, created_by, created_at, updated_by, updated_at,
             closed_at, converted_at
          ) VALUES
            ($1, $2, $3, 110, '10인 경매 모집', 'TEN_PERSON', 10,
-            'CLOSED', 2, $4, '2026-07-10T08:00:00Z', $4, '2026-07-10T12:20:00Z',
+            NULL, 'CLOSED', 2, $4, '2026-07-10T08:00:00Z', $4, '2026-07-10T12:20:00Z',
             '2026-07-10T12:20:00Z', NULL),
            ($1, $5, $3, 120, '20인 경매 모집', 'TWENTY_PERSON', 20,
-            'CLOSED', 3, $4, '2026-07-10T08:00:00Z', $4, '2026-07-10T12:25:00Z',
+            3, 'CLOSED', 3, $4, '2026-07-10T08:00:00Z', $4, '2026-07-10T12:25:00Z',
             '2026-07-10T12:25:00Z', NULL),
            ($1, $6, $3, 121, '진행 경매 원본', 'TWENTY_PERSON', 20,
-            'CONVERTED', 4, $4, '2026-07-10T07:00:00Z', $4, '2026-07-10T10:00:00Z',
+            3, 'CONVERTED', 4, $4, '2026-07-10T07:00:00Z', $4, '2026-07-10T10:00:00Z',
             '2026-07-10T09:00:00Z', '2026-07-10T10:00:00Z'),
            ($1, $7, $3, 111, '완료 경매 원본', 'TEN_PERSON', 10,
-            'CONVERTED', 4, $4, '2026-07-09T07:00:00Z', $4, '2026-07-09T10:00:00Z',
+            NULL, 'CONVERTED', 4, $4, '2026-07-09T07:00:00Z', $4, '2026-07-09T10:00:00Z',
             '2026-07-09T09:00:00Z', '2026-07-09T10:00:00Z')",
     )
     .bind(GUILD_A)
@@ -711,6 +813,23 @@ async fn seed_auction_workflow(pool: &PgPool, season_id: Uuid) -> TestResult {
     .bind(id(AUCTION_ACTIONABLE_20))
     .bind(id(AUCTION_ACTIVE_SOURCE))
     .bind(id(AUCTION_COMPLETED_SOURCE))
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO auction_recruitments (
+            guild_id, id, season_id, display_number, title, format, target_count,
+            status, revision, created_by, created_at, updated_by, updated_at, cancelled_at
+         ) VALUES (
+            $1, $2, $3, 116, '취소 경매 원본', 'TEN_PERSON', 10,
+            'CANCELLED', 5, $4, '2026-07-08T07:00:00Z', $4, '2026-07-08T10:00:00Z',
+            '2026-07-08T10:00:00Z'
+         )",
+    )
+    .bind(GUILD_A)
+    .bind(id(AUCTION_CANCELLED_SOURCE))
+    .bind(season_id)
+    .bind(USER_ID)
     .execute(pool)
     .await?;
 
@@ -742,13 +861,13 @@ async fn seed_auction_workflow(pool: &PgPool, season_id: Uuid) -> TestResult {
     sqlx::query(
         "INSERT INTO auction_tournaments (
             guild_id, id, season_id, source_recruitment_id, display_number,
-            title, format, status, revision, started_at, created_by, updated_by, updated_at
+            title, format, semifinal_best_of, status, revision, started_at, created_by, updated_by, updated_at
          ) VALUES
            ($1, $2, $3, $4, 118,
-            '20인 진행 경매', 'TWENTY_PERSON', 'IN_GAME', 7,
+            '20인 진행 경매', 'TWENTY_PERSON', 3, 'IN_GAME', 7,
             '2026-07-10T10:00:00Z', $5, $5, '2026-07-10T12:30:00Z'),
            ($1, $6, $3, $7, 117,
-            '10인 완료 경매', 'TEN_PERSON', 'BIDDING', 8,
+            '10인 완료 경매', 'TEN_PERSON', NULL, 'BIDDING', 8,
             '2026-07-09T10:00:00Z', $5, $5, '2026-07-09T18:00:00Z')",
     )
     .bind(GUILD_A)
@@ -761,6 +880,24 @@ async fn seed_auction_workflow(pool: &PgPool, season_id: Uuid) -> TestResult {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "INSERT INTO auction_tournaments (
+            guild_id, id, season_id, source_recruitment_id, display_number,
+            title, format, status, revision, started_at, ended_at, created_by, updated_by, updated_at
+         ) VALUES (
+            $1, $2, $3, $4, 116,
+            '매치 없이 취소된 10인 경매', 'TEN_PERSON', 'CANCELLED', 6,
+            '2026-07-08T09:00:00Z', '2026-07-08T10:00:00Z', $5, $5, '2026-07-08T10:00:00Z'
+         )",
+    )
+    .bind(GUILD_A)
+    .bind(id(CANCELLED_TOURNAMENT))
+    .bind(season_id)
+    .bind(id(AUCTION_CANCELLED_SOURCE))
+    .bind(USER_ID)
+    .execute(pool)
+    .await?;
+
     for (tournament_id, team_id, team_index, name) in [
         (ACTIVE_TOURNAMENT, ACTIVE_TEAM_1, 1_i16, "진행 1팀"),
         (ACTIVE_TOURNAMENT, ACTIVE_TEAM_2, 2_i16, "진행 2팀"),
@@ -768,6 +905,8 @@ async fn seed_auction_workflow(pool: &PgPool, season_id: Uuid) -> TestResult {
         (ACTIVE_TOURNAMENT, ACTIVE_TEAM_4, 4_i16, "진행 4팀"),
         (COMPLETED_TOURNAMENT, COMPLETED_TEAM_1, 1_i16, "완료 1팀"),
         (COMPLETED_TOURNAMENT, COMPLETED_TEAM_2, 2_i16, "완료 2팀"),
+        (CANCELLED_TOURNAMENT, CANCELLED_TEAM_1, 1_i16, "취소 1팀"),
+        (CANCELLED_TOURNAMENT, CANCELLED_TEAM_2, 2_i16, "취소 2팀"),
     ] {
         sqlx::query(
             "INSERT INTO auction_teams (
@@ -884,6 +1023,13 @@ async fn get(app: &Router, uri: &str, cookie: Option<&str>) -> TestResult<Respon
     Ok(app.clone().oneshot(request.body(Body::empty())?).await?)
 }
 
+async fn bot_get(app: &Router, uri: &str) -> TestResult<Response<Body>> {
+    let request = Request::get(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {BOT_TOKEN}"))
+        .body(Body::empty())?;
+    Ok(app.clone().oneshot(request).await?)
+}
+
 async fn body_json(response: Response<Body>) -> TestResult<Value> {
     let bytes = to_bytes(response.into_body(), usize::MAX).await?;
     Ok(serde_json::from_slice(&bytes)?)
@@ -908,6 +1054,10 @@ fn test_config(database_url: String) -> Result<Config, Box<dyn Error + Send + Sy
         (
             "MONKEYBOT_DATABASE_MIN_CONNECTIONS".to_owned(),
             "1".to_owned(),
+        ),
+        (
+            "MONKEYBOT_BOT_SERVICE_TOKEN".to_owned(),
+            BOT_TOKEN.to_owned(),
         ),
         (
             "MONKEYBOT_DISCORD_CLIENT_ID".to_owned(),

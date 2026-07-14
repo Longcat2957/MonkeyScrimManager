@@ -864,6 +864,9 @@ display_number bigint      NOT NULL CHECK > 0
 title          text        NOT NULL
 format         text        NOT NULL CHECK TEN_PERSON|TWENTY_PERSON
 target_count   smallint    NOT NULL CHECK IN (10,20)
+hard_fearless  boolean     NOT NULL DEFAULT false
+semifinal_best_of smallint  NULL CHECK IN (1,3,5)
+final_best_of  smallint    NOT NULL DEFAULT 3 CHECK IN (1,3,5)
 status         text        NOT NULL CHECK OPEN|CLOSED|CONVERTED|CANCELLED
 revision       bigint      NOT NULL CHECK >= 0
 channel_id     text        NULL
@@ -884,7 +887,19 @@ FK (guild_id, created_by) -> guild_members (guild_id, user_id) RESTRICT
 FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 CHECK ((format='TEN_PERSON' AND target_count=10)
     OR (format='TWENTY_PERSON' AND target_count=20))
+CHECK ((format='TEN_PERSON' AND semifinal_best_of IS NULL)
+    OR (format='TWENTY_PERSON' AND semifinal_best_of IN (1,3,5)))
 ```
+
+Discord `/경매모집`과 Web `/g/{guildId}/auction`은 생성 주체만 다르고 같은 create transaction을 사용한다.
+요청은 `format`, `final_best_of`, `hard_fearless`와 20인일 때 `semifinal_best_of`를 정하며 `target_count`는
+format에서 파생한다. 10인은 `semifinal_best_of=NULL`이고, 20인은 두 준결승이 같은 값을 공유한다. 생략한
+호환 요청은 BO3/일반으로 정규화한다. transaction은 ACTIVE guild member와 현재 season/counter를 lock한 뒤 OPEN
+`auction_recruitments`, `auction_setup_drafts(revision=0)`, format에 맞는 빈 `auction_setup_teams`
+(TEN_PERSON 1..2, TWENTY_PERSON 1..4)를 함께 만든다. 어느 생성 주체든 configured
+recruitment channel이 없으면 전체를 rollback하며, 있으면 같은 transaction에
+`AUCTION_RECRUITMENT_MESSAGE_CREATE` notification row를 적재한다. `channel_id`와 `message_id`는 Bot typed
+acknowledgement가 delivery 상태와 함께 원자적으로 bind하기 전까지 NULL이다.
 
 ### `auction_recruitment_participants`
 
@@ -929,8 +944,9 @@ FK (guild_id, recruitment_id) -> auction_recruitments (guild_id, id) RESTRICT
 FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 ```
 
-`/auction/recruitments/{id}/draft`에서 tournament 생성 전에 팀장과 시작 point를 여러 운영자가
-편집한다. 이 상태를 tournament row나 Valkey에 임시로 끼워 넣지 않는다.
+현재 `/auction/recruitments/{id}/draft`는 CLOSED 모집의 실제 확정 명단을 읽는 stage-gate다. 팀장과
+시작 point를 저장하는 mutation과 tournament 생성은 별도 vertical slice로 남아 있으며, 그 전에는 fixture
+route나 임시 Valkey 상태를 사용하지 않는다.
 
 ### `auction_setup_teams`
 
@@ -949,13 +965,13 @@ FK (guild_id, recruitment_id, captain_user_id)
   -> auction_recruitment_participants (guild_id, recruitment_id, user_id) RESTRICT
 ```
 
-APP invariant:
+향후 setup mutation의 APP invariant:
 
 - TEN_PERSON은 정확히 2팀, TWENTY_PERSON은 정확히 4팀이다.
 - 모든 captain은 JOINED participant이며 서로 달라야 한다.
 - tournament 생성은 필요한 captain/point가 모두 채워진 snapshot에서만 가능하다.
-- 참가/취소/강제 추가·제거는 `auction_recruitments.revision`과
-  `auction_setup_drafts.revision`을 같은 transaction에서 올린다.
+- 참가/취소는 `auction_recruitments.revision`과 `auction_setup_drafts.revision`을 같은 transaction에서
+  올린다. 현재 Bot self-service 참가/취소가 이 규칙을 적용한다.
 - 선택된 captain이 취소/제거되면 해당 setup team의 captain을 NULL로 비우고 draft revision을
   올린다. 이후 captain은 frontend 선택 순서처럼 앞 team으로 당기며 team index별 시작 point와
   team name은 유지한다.
@@ -972,6 +988,9 @@ source_recruitment_id uuid        NOT NULL
 display_number        bigint      NOT NULL CHECK > 0
 title                 text        NOT NULL
 format                text        NOT NULL CHECK TEN_PERSON|TWENTY_PERSON
+hard_fearless         boolean     NOT NULL DEFAULT false
+semifinal_best_of     smallint    NULL CHECK IN (1,3,5)
+final_best_of         smallint    NOT NULL DEFAULT 3 CHECK IN (1,3,5)
 status                text        NOT NULL CHECK BIDDING|BRACKET_SETUP|IN_GAME|COMPLETED|CANCELLED
 revision              bigint      NOT NULL CHECK >= 0
 bracket_locked_at     timestamptz NULL
@@ -1001,6 +1020,8 @@ CHECK ((status IN ('BIDDING','BRACKET_SETUP','IN_GAME') AND
         champion_team_id IS NULL AND ended_at IS NULL) OR
        (status='COMPLETED' AND champion_team_id IS NOT NULL AND ended_at IS NOT NULL) OR
        (status='CANCELLED' AND champion_team_id IS NULL AND ended_at IS NOT NULL))
+CHECK ((format='TEN_PERSON' AND semifinal_best_of IS NULL)
+    OR (format='TWENTY_PERSON' AND semifinal_best_of IN (1,3,5)))
 ```
 
 `champion_team_id` FK는 `auction_teams` 생성 뒤 다음 composite constraint로 추가한다.
@@ -1011,6 +1032,11 @@ FK (guild_id, id, champion_team_id)
 ```
 
 기존 v3의 tournament/recruitment 동일 ID 규칙은 폐기한다.
+
+Tournament 생성은 source 모집의 세 규칙을 불변 snapshot으로 복사한다. 그 뒤 match materialization은
+TEN_PERSON `FINAL`에 `final_best_of`, TWENTY_PERSON `SEMIFINAL_A/B`에 `semifinal_best_of`, `FINAL`에
+`final_best_of`를 넣는다. `hard_fearless`도 각 match에 복사하며, 사용 금지 범위는 같은 match의 이전 확정
+세트로만 제한한다. 준결승 A의 픽이 준결승 B나 결승까지 금지되지는 않는다.
 
 Tournament 생성 되돌리기는 bidding action이 시작되기 전만 허용한다. 기존 tournament를
 CANCELLED로, source auction recruitment를 CLOSED로 되돌리고 setup draft를 다시 편집 가능하게
@@ -1316,6 +1342,7 @@ id               uuid        NOT NULL
 season_id        uuid        NOT NULL
 match_key        text        NOT NULL CHECK SEMIFINAL_A|SEMIFINAL_B|FINAL
 best_of          smallint    NOT NULL CHECK IN (1,3,5)
+hard_fearless    boolean     NOT NULL DEFAULT false
 left_team_id     uuid        NULL
 right_team_id    uuid        NULL
 status           text        NOT NULL CHECK LINEUP_PENDING|READY|IN_PROGRESS|COMPLETED|CANCELLED
@@ -1323,6 +1350,7 @@ winner_team_id   uuid        NULL
 revision         bigint      NOT NULL CHECK >= 0
 lineups_locked_at timestamptz NULL
 lineups_locked_by text       NULL
+lineup_lock_invariant_version smallint NULL
 started_at       timestamptz NULL
 ended_at         timestamptz NULL
 updated_by       text        NULL
@@ -1353,12 +1381,24 @@ CHECK ((status IN ('LINEUP_PENDING','READY','IN_PROGRESS') AND
 
 - TEN_PERSON은 `FINAL` 하나다.
 - TWENTY_PERSON은 `SEMIFINAL_A`, `SEMIFINAL_B`, `FINAL`이다.
+- match의 `best_of`와 `hard_fearless`는 tournament rules snapshot에서 생성 시 복사된 값이다. source
+  recruitment를 나중에 다시 읽어 규칙을 바꾸지 않는다.
 - final team은 semifinal 완료 전 NULL일 수 있다.
 - semifinal winner로 빈 final의 team이 확정될 때는 각 진출 team의 직전 locked match lineup을
   final의 initial lineup row로 복사하되 lock metadata는 비워 둔다. 운영자가 final별 변경을 검토한
   뒤 다시 lock한다. 직전 lineup이 없거나 final에 이미 편집 row가 있으면 자동 덮어쓰지 않는다.
 - score와 `resultEntered`는 confirmed games에서 파생한다.
 - winner는 confirmed game 다수가 결정되면 같은 transaction에서 기록한다.
+- `auction_matches_lineup_lock_state_check`는 `lineups_locked_at`/`lineups_locked_by`가 함께 존재하거나
+  함께 비어 있어야 하며, 신규 `READY`/`IN_PROGRESS`/`COMPLETED` match에는 둘 다 존재하도록 강제한다.
+  migration `0018` 뒤 `0019`는 nullable `lineup_lock_invariant_version`을 추가한다. 실제 invariant를
+  만족하는 기존 row와 모든 신규 row는 `1`이고, lock actor provenance를 복원할 수 없는 기존 위반 row만
+  `NULL` legacy exemption으로 남는다. runtime/API는 이 column에 `NULL`을 쓰지 않는다.
+- `NULL` exemption은 기존 row의 unrelated revision/state update를 막지 않기 위한 DB-only compatibility
+  marker다. remediation은 실제 lock metadata와 `lineup_lock_invariant_version=1`을 같은 transaction에서
+  기록해야 하며, `NULL` row가 0개가 된 뒤에만 별도 migration으로 exemption을 제거하거나 column을
+  `NOT NULL`로 강화한다. actor를 추정하거나 `VALIDATE CONSTRAINT`만 실행해서 remediation을 완료했다고
+  판단하지 않는다.
 - bracket 생성 되돌리기는 기존 match를 CANCELLED로 보존한다. 다시 생성하면 같은 match key의
   새 match ID를 발급한다.
 

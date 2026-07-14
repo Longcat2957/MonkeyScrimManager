@@ -13,7 +13,7 @@ describe('workflow presentation', () => {
 		expect(formatRelativeTime('invalid', now)).toBe('-');
 	});
 
-	it('uses next-match state for auction result input without rebuilding the API href', () => {
+	it('keeps the canonical direct match workspace href for actionable auction work', () => {
 		const tournament: AuctionTournamentDto = {
 			id: '01900000-0000-7000-8000-000000000601',
 			displayNumber: 118,
@@ -36,7 +36,7 @@ describe('workflow presentation', () => {
 			championTeam: null,
 			updatedAt: '2026-07-12T11:00:00Z',
 			endedAt: null,
-			href: '/g/200000000000000001/auction/tournaments/01900000-0000-7000-8000-000000000601/bracket?view=result'
+			href: '/g/200000000000000001/auction/matches/01900000-0000-7000-8000-000000000801'
 		};
 
 		const view = buildAuctionView({
@@ -47,6 +47,41 @@ describe('workflow presentation', () => {
 		expect(view.activeWork[0]).toMatchObject({
 			status: '결과 입력',
 			detail: '결승 · 2세트 결과 대기',
+			href: '/g/200000000000000001/auction/matches/01900000-0000-7000-8000-000000000801'
+		});
+	});
+
+	it('keeps cancelled tournaments as neutral archived history with their record route', () => {
+		const tournament: AuctionTournamentDto = {
+			id: '01900000-0000-7000-8000-000000000602',
+			displayNumber: 117,
+			title: '금요 10인 경매',
+			format: 'TEN_PERSON',
+			participantCount: 10,
+			teamCount: 2,
+			status: 'CANCELLED',
+			revision: 9,
+			activeMemberCount: 10,
+			bidMemberCount: 8,
+			incompleteMatchCount: 0,
+			nextMatch: null,
+			championTeam: null,
+			updatedAt: '2026-07-12T10:00:00Z',
+			endedAt: '2026-07-12T10:00:00Z',
+			href: '/g/200000000000000001/auction/tournaments/01900000-0000-7000-8000-000000000602/result'
+		};
+
+		const view = buildAuctionView({
+			recruitments: [],
+			activeTournaments: [],
+			completedTournaments: [tournament]
+		});
+
+		expect(view.completedWork[0]).toMatchObject({
+			kind: '보관',
+			status: '취소됨',
+			tone: 'neutral',
+			iconKind: 'archived',
 			href: tournament.href
 		});
 	});
@@ -56,11 +91,11 @@ describe('workflow presentation', () => {
 			id: '01900000-0000-7000-8000-000000000101',
 			displayNumber: 214,
 			title: '금요 일반 내전 모집',
-		status: 'OPEN',
-		targetCount: 10,
-		bestOf: 3,
-		hardFearless: false,
-		joinedCount: 3,
+			status: 'OPEN',
+			targetCount: 10,
+			bestOf: 3,
+			hardFearless: false,
+			joinedCount: 3,
 			assignedCount: 0,
 			revision: 2,
 			updatedAt: '2026-07-12T11:00:00Z',

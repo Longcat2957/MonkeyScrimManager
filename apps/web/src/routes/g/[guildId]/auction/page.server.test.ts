@@ -33,6 +33,11 @@ describe('auction page server load', () => {
 							displayNumber: 42,
 							title: '수요 10인 경매',
 							format: 'TEN_PERSON',
+							rules: {
+								hardFearless: false,
+								semifinalBestOf: null,
+								finalBestOf: 3
+							},
 							participantCount: 10,
 							joinedParticipantCount: 10,
 							teamCount: 2,

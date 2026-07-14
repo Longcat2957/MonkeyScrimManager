@@ -724,21 +724,49 @@ export const seriesListDataSchema = z
 
 export const auctionFormatSchema = z.enum(['TEN_PERSON', 'TWENTY_PERSON']);
 
+export const auctionBestOfValues = [1, 3, 5] as const;
+export const auctionBestOfSchema = z.union([
+	z.literal(auctionBestOfValues[0]),
+	z.literal(auctionBestOfValues[1]),
+	z.literal(auctionBestOfValues[2])
+]);
+
+export const auctionRecruitmentRulesSchema = z
+	.object({
+		hardFearless: z.boolean(),
+		semifinalBestOf: auctionBestOfSchema.nullable(),
+		finalBestOf: auctionBestOfSchema
+	})
+	.strict();
+
 export const auctionRecruitmentSchema = z
 	.object({
 		id: uuidSchema,
 		displayNumber: z.number().int().positive(),
 		title: z.string(),
 		format: auctionFormatSchema,
+		rules: auctionRecruitmentRulesSchema,
 		participantCount: z.union([z.literal(10), z.literal(20)]),
 		joinedParticipantCount: nonnegativeInteger,
 		teamCount: z.union([z.literal(2), z.literal(4)]),
-		status: z.literal('CLOSED'),
+		status: z.enum(['OPEN', 'CLOSED']),
 		revision: nonnegativeInteger,
 		updatedAt: timestampSchema,
 		href: hrefSchema
 	})
-	.strict();
+	.strict()
+	.superRefine(({ format, rules }, context) => {
+		const valid =
+			(format === 'TEN_PERSON' && rules.semifinalBestOf === null) ||
+			(format === 'TWENTY_PERSON' && rules.semifinalBestOf !== null);
+		if (!valid) {
+			context.addIssue({
+				code: 'custom',
+				path: ['rules', 'semifinalBestOf'],
+				message: '경매 인원 형식과 4강 시리즈 규칙이 일치하지 않습니다.'
+			});
+		}
+	});
 
 export const auctionRecruitmentListDataSchema = z
 	.object({
@@ -772,7 +800,7 @@ export const auctionTournamentSchema = z
 		format: auctionFormatSchema,
 		participantCount: z.union([z.literal(10), z.literal(20)]),
 		teamCount: z.union([z.literal(2), z.literal(4)]),
-		status: z.enum(['BIDDING', 'BRACKET_SETUP', 'IN_GAME', 'COMPLETED']),
+		status: z.enum(['BIDDING', 'BRACKET_SETUP', 'IN_GAME', 'COMPLETED', 'CANCELLED']),
 		revision: nonnegativeInteger,
 		activeMemberCount: nonnegativeInteger,
 		bidMemberCount: nonnegativeInteger,
@@ -800,6 +828,8 @@ export type RecruitmentDto = z.infer<typeof recruitmentSchema>;
 export type SeriesDto = z.infer<typeof seriesSchema>;
 export type AuctionRecruitmentDto = z.infer<typeof auctionRecruitmentSchema>;
 export type AuctionTournamentDto = z.infer<typeof auctionTournamentSchema>;
+export type AuctionBestOf = z.infer<typeof auctionBestOfSchema>;
+export type AuctionRecruitmentRules = z.infer<typeof auctionRecruitmentRulesSchema>;
 export type ChampionPreferenceLane = z.infer<typeof championPreferenceLaneSchema>;
 export type ChampionPreferences = z.infer<typeof championPreferencesSchema>;
 export type GuildRecordsProfile = z.infer<typeof guildRecordsProfileDataSchema>;

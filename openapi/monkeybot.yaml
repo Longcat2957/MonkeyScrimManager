@@ -516,8 +516,10 @@ paths:
         Marks a notification delivered only when instanceId and leaseToken still own the current
         lease. This route is for delivery types without a domain-specific acknowledgement side
         effect. RECRUITMENT_MESSAGE_UPDATE, RECRUITMENT_MESSAGE_DELETE,
+        AUCTION_RECRUITMENT_MESSAGE_UPDATE, AUCTION_RECRUITMENT_MESSAGE_DELETE,
         ENTRY_CONFIRMATION_CREATE, and SERIES_RESULT_CREATE use it after Discord delivery
-        succeeds; browser-created initial recruitment messages use recruitment-message/ack instead.
+        succeeds; initial general and auction recruitment messages use their respective typed
+        acknowledgement endpoint instead.
       security:
         - BotBearer: []
       requestBody:
@@ -544,8 +546,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           description: >-
-            RECRUITMENT_MESSAGE_CREATE must use the typed recruitment-message acknowledgement
-            endpoint so the sent Discord message is bound atomically.
+            RECRUITMENT_MESSAGE_CREATE and AUCTION_RECRUITMENT_MESSAGE_CREATE must use their
+            typed acknowledgement endpoint so the sent Discord message is bound atomically.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/RequestId'
@@ -586,6 +588,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcknowledgeRecruitmentMessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/notifications/auction-recruitment-message/ack:
+    post:
+      operationId: acknowledgeAuctionRecruitmentMessageDelivery
+      summary: Acknowledge and bind a queued auction recruitment message
+      description: >-
+        Only accepts AUCTION_RECRUITMENT_MESSAGE_CREATE. In one transaction it marks the leased
+        delivery as delivered and binds the supplied Discord message ID to its auction
+        recruitment. Workers must call this after channel.send succeeds instead of calling
+        generic ack. The acknowledgement body is deliberately not polymorphic with the general
+        recruitment binding endpoint.
+      security:
+        - BotBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcknowledgeBotNotificationRequest'
+      responses:
+        '200':
+          description: Delivery acknowledged and auction recruitment message reference bound.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcknowledgeAuctionRecruitmentMessageResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1952,8 +1994,10 @@ paths:
       operationId: listGuildAuctionRecruitments
       summary: List actionable auction recruitments
       description: >-
-        Lists closed, unconverted auction recruitments ordered by updatedAt and opaque id
-        descending. A non-null nextCursor continues after the last returned row.
+        Lists open or closed, unconverted auction recruitments ordered by updatedAt and opaque id
+        descending. OPEN rows link to the recruitment roster; CLOSED rows link to the closed roster
+        stage-gate.
+        A non-null nextCursor continues after the last returned row.
       security:
         - SessionCookie: []
       parameters:
@@ -1981,14 +2025,383 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createGuildAuctionRecruitment
+      summary: Create a 10-person or 20-person auction recruitment
+      description: >-
+        Creates an OPEN auction recruitment, its empty setup draft, and the format-derived blank
+        team slots. Either a Bot interaction or an authenticated active guild member can create
+        one. Bot requests include the Discord actor snapshot; browser requests derive the actor
+        from the session. Both creation paths require the guild recruitment channel to be
+        configured and transactionally enqueue AUCTION_RECRUITMENT_MESSAGE_CREATE for that
+        channel. A 201 means database state and delivery work were accepted, not that Discord has
+        already posted the message.
+      security:
+        - BotBearer: []
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentCreateIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/CreateAuctionRecruitmentRequest'
+                - $ref: '#/components/schemas/WebCreateAuctionRecruitmentRequest'
+      responses:
+        '201':
+          description: Auction recruitment created or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Idempotency or domain conflict. recruitment_channel_not_configured means an auction
+            recruitment cannot be created until the guild recruitment channel is configured.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}:
+    get:
+      operationId: getGuildAuctionRecruitment
+      summary: Get an auction recruitment snapshot
+      description: >-
+        Returns the authoritative roster and viewer capabilities for an OPEN or CLOSED auction
+        recruitment. CANCELLED and CONVERTED rows are hidden. The draft link is null until a full
+        recruitment is closed by an operator, then points to the closed roster stage-gate.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+      responses:
+        '200':
+          description: Auction recruitment snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: cancelGuildAuctionRecruitment
+      summary: Cancel an open auction recruitment
+      description: >-
+        Browser-only soft-cancel command. The creator or a current active operator can cancel an
+        OPEN recruitment. Participants and setup rows remain retained history; the
+        resource is hidden from subsequent reads.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      responses:
+        '200':
+          description: Cancelled auction recruitment snapshot or an idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/setup-draft:
+    get:
+      operationId: getGuildAuctionSetupDraft
+      summary: Get a closed auction recruitment captain setup draft
+      description: >-
+        Returns the persisted captain/initial-point setup and joined roster for a CLOSED auction
+        recruitment. Any active guild member can read it; only an active operator receives
+        canEdit/canCreateTournament permissions.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+      responses:
+        '200':
+          description: Auction captain setup draft.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionSetupDraftSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateGuildAuctionSetupDraft
+      summary: Persist all captain and initial-point setup fields
+      description: >-
+        Browser-only operator command. The complete ordered team array replaces the draft at the
+        supplied revision; it does not change the recruitment lifecycle. Each captain must be a
+        unique currently joined participant.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAuctionSetupDraftRequest'
+      responses:
+        '200':
+          description: Updated setup draft or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionSetupDraftSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/close:
+    post:
+      operationId: closeGuildAuctionRecruitment
+      summary: Close a full auction recruitment and show its closed roster
+      description: >-
+        Browser-only lifecycle command. A current active operator can close only a full OPEN
+        recruitment. Success returns an authoritative snapshot with a non-null draft link.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebCloseAuctionRecruitmentRequest'
+      responses:
+        '200':
+          description: Closed auction recruitment snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/members:
+    post:
+      operationId: joinGuildAuctionRecruitment
+      summary: Join a member to an open auction recruitment
+      description: >-
+        Bot requests sync the Discord actor identity and join that actor while capacity remains.
+        Browser requests are limited to a current active operator and select an existing ACTIVE
+        guild member by memberId. The target is an opaque stored user identifier and can be a
+        Discord or development-dummy user; browser callers must explicitly choose declaredLane.
+        The backend captures the current-season lane MMR and serializes capacity, duplicate, and
+        lifecycle checks against the canonical roster. A changed bound Discord message queues
+        AUCTION_RECRUITMENT_MESSAGE_UPDATE in the same transaction.
+      security:
+        - BotBearer: []
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/RecruitmentMemberIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/AuctionRecruitmentMemberRequest'
+                - $ref: '#/components/schemas/WebAddAuctionRecruitmentMemberRequest'
+      responses:
+        '200':
+          description: Member joined the auction recruitment or an identical request replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          description: >-
+            Includes auction_declared_lane_required, recruitment_full, already_participant, or a
+            rejected open-recruitment transition.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/members/{userId}:
+    delete:
+      operationId: leaveGuildAuctionRecruitment
+      summary: Remove a participant from an open auction recruitment
+      description: >-
+        Bot requests allow the actor body to withdraw itself or a current configured operator to
+        remove another participant. Browser requests use an empty object, derive the actor from
+        the session, and require a current active operator. The transaction marks the participant
+        WITHDRAWN, clears a matching setup captain reference, increments the recruitment and
+        setup-draft revisions, and queues AUCTION_RECRUITMENT_MESSAGE_UPDATE when bound.
+      security:
+        - BotBearer: []
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/RecruitmentMemberIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/ActorRequest'
+                - $ref: '#/components/schemas/WebRemoveAuctionRecruitmentMemberRequest'
+      responses:
+        '200':
+          description: Participant withdrawn or an identical interaction replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}/auction-tournaments:
     get:
       operationId: listGuildAuctionTournaments
       summary: List active or completed auction tournaments
       description: >-
         Lists the requested tournament state ordered by updatedAt and opaque id descending. Active
-        selects BIDDING, BRACKET_SETUP, and IN_GAME; completed selects COMPLETED. A non-null
-        nextCursor continues after the last returned row.
+        selects BIDDING, BRACKET_SETUP, and IN_GAME; completed selects COMPLETED and CANCELLED.
+        A non-null nextCursor continues after the last returned row.
       security:
         - SessionCookie: []
       parameters:
@@ -2012,6 +2425,633 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createGuildAuctionTournament
+      summary: Create a bidding tournament from a closed auction recruitment
+      description: >-
+        Browser-only operator command. Locks the full closed recruitment and captain setup,
+        converts the source recruitment, and atomically creates captain rosters, initial point
+        ledgers, and candidate queue rows for a BIDDING tournament.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAuctionTournamentRequest'
+      responses:
+        '201':
+          description: Created bidding tournament or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentDraftSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}:
+    get:
+      operationId: getGuildAuctionTournamentDraft
+      summary: Get an auction tournament draft aggregate
+      description: >-
+        Returns the authoritative teams, candidate queue, active target, unsold candidates, most
+        recent revertable action, and viewer draft permissions. Any active guild member can read
+        the aggregate; only an active operator receives canManageDraft=true.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+      responses:
+        '200':
+          description: Auction tournament draft aggregate.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentDraftSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/commands:
+    post:
+      operationId: executeGuildAuctionTournamentDraftCommand
+      summary: Execute one auction draft command
+      description: >-
+        Browser-only active-operator command endpoint. Every command requires a browser
+        Idempotency-Key and expectedRevision. It appends the action history, applies normalized
+        team/candidate/lot/point state, records audit/outbox, and returns the canonical aggregate.
+        A BRACKET_SETUP tournament permits only REVERT_LAST before bracket lock and match artifacts.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionTournamentDraftCommand'
+      responses:
+        '200':
+          description: Updated aggregate or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentDraftSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/bracket:
+    get:
+      operationId: getGuildAuctionTournamentBracket
+      summary: Get an auction tournament bracket aggregate
+      description: >-
+        Returns the authoritative bracket slots, created matches, score summary, and viewer
+        permissions. Any active guild member can read the aggregate. Only an active operator can
+        edit an unlocked BRACKET_SETUP tournament.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+      responses:
+        '200':
+          description: Auction tournament bracket aggregate.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentBracketSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/bracket/commands:
+    post:
+      operationId: executeGuildAuctionTournamentBracketCommand
+      summary: Execute one auction tournament bracket command
+      description: >-
+        Browser-only active-operator command endpoint. Every command requires a browser
+        Idempotency-Key and expectedRevision. ASSIGN_TEAM atomically removes an existing team
+        placement before assigning its new slot. LOCK_BRACKET requires five active members in each
+        team and every required slot, then creates the configured semifinal/final matches.
+        UNLOCK_BRACKET is available only before any game input or game result exists; it cancels
+        the generated unstarted matches and restores editable bracket slots.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionTournamentBracketCommand'
+      responses:
+        '200':
+          description: Updated bracket aggregate or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentBracketSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/result:
+    get:
+      operationId: getGuildAuctionTournamentResult
+      summary: Get an active, completed, or cancelled auction tournament archive
+      description: >-
+        CANCELLED tournaments remain readable as an archive. A cancellation can occur before a
+        bracket exists, so its matches may be empty; any prior confirmed games have been reversed
+        and the response never grants result-reversal permission for the cancelled state.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+      responses:
+        '200':
+          description: Authoritative tournament teams, matches, confirmed games, and player MMR deltas.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentResultSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/cancel-preview:
+    get:
+      operationId: getGuildAuctionTournamentCancelPreview
+      summary: Get canonical auction tournament cancellation preflight data
+      description: >-
+        Bot service-principal read endpoint for the Discord cancellation command. It returns the
+        canonical tournament identifier, current status, and revision used by the following
+        cancellation request. This is advisory only; POST cancel remains the authoritative
+        operator, state, and optimistic-concurrency check.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+      responses:
+        '200':
+          description: Canonical tournament cancellation preflight data.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentCancelPreviewResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/cancel:
+    post:
+      operationId: cancelGuildAuctionTournament
+      summary: Cancel an active auction tournament from the Bot workflow
+      description: >-
+        Bot service-principal, active-operator recovery command. It accepts BIDDING,
+        BRACKET_SETUP, or IN_GAME tournaments only. IN_GAME cancellation reverses every confirmed
+        auction match game in reverse chronological order and is rejected if a later MMR change
+        makes that rollback unsafe. It then cancels the generated matches, tournament, and source
+        recruitment, appends an audit record, and queues a bound recruitment Discord message
+        deletion. This is an internal Bot endpoint, not a browser action.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionTournamentCancelRequest'
+      responses:
+        '200':
+          description: Cancelled tournament and source recruitment state, or an identical interaction replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentCancelResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes auction_tournament_cancel_unavailable for completed/cancelled state and
+            auction_tournament_cancel_mmr_history_advanced when a later MMR mutation blocks a
+            safe rollback.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}:
+    get:
+      operationId: getGuildAuctionMatch
+      summary: Get the canonical auction match workspace snapshot
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Match teams, locked lineup, confirmed games, scores, and viewer permissions.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}/lineup:
+    patch:
+      operationId: updateGuildAuctionMatchLineup
+      summary: Assign or clear one auction match lineup lane
+      description: >-
+        Browser-only active-operator command. The target team must be one of the match teams and
+        the optional teamMemberId clears that team's lane when null. The lineup remains editable
+        only before it has been locked.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionMatchLineupAssignmentRequest'
+      responses:
+        '200':
+          description: Updated canonical match snapshot or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}/lineup/lock:
+    post:
+      operationId: lockGuildAuctionMatchLineup
+      summary: Lock a complete auction match lineup
+      description: >-
+        Browser-only active-operator command. Each match team must have exactly one active member
+        assigned to TOP, JUNGLE, MID, BOTTOM, and SUPPORT before the lineup can be locked.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionMatchLineupLockRequest'
+      responses:
+        '200':
+          description: Locked canonical match snapshot or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}/lineup/unlock:
+    post:
+      operationId: unlockGuildAuctionMatchLineup
+      summary: Reopen a locked, unplayed auction match lineup
+      description: >-
+        Browser-only active-operator recovery command. It is available only for a locked READY
+        match and only when neither games nor game_inputs exist for that match. It retains the
+        current lane assignments, clears the lineup lock, and restores LINEUP_PENDING.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionMatchLineupLockRequest'
+      responses:
+        '200':
+          description: Reopened canonical match snapshot or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes auction_match_lineup_unlock_unavailable when the match is not a locked READY
+            match, or auction_match_lineup_result_artifacts_present when a game input or result
+            record exists.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}/games:
+    post:
+      operationId: submitGuildAuctionMatchGame
+      summary: Confirm the next auction match game
+      description: >-
+        Browser-only active-operator command. The exact locked ten-player lineup defines pick map
+        keys and MMR lanes. The server validates the next set number, per-game champion uniqueness,
+        hard fearless history within the same match, and terminal best-of score atomically.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionMatchGameSubmitRequest'
+      responses:
+        '201':
+          description: Confirmed game and updated canonical match snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}/games/last:
+    delete:
+      operationId: revertLastGuildAuctionMatchGame
+      summary: Reverse the latest confirmed auction match game
+      description: >-
+        Browser-only active-operator command. Reversal is accepted only while every affected MMR
+        ledger row remains tail-safe. A completed semifinal cannot be reopened after the propagated
+        final has lineup or game history.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionMatchGameRevertRequest'
+      responses:
+        '200':
+          description: Reverted game and updated canonical match snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -3656,6 +4696,22 @@ components:
       schema:
         type: string
         format: uuid
+    AuctionRecruitmentId:
+      name: auctionRecruitmentId
+      in: path
+      required: true
+      description: Auction recruitment root UUID. It is not the guild-local display number.
+      schema:
+        type: string
+        format: uuid
+    AuctionTournamentId:
+      name: auctionTournamentId
+      in: path
+      required: true
+      description: Auction tournament root UUID. It is not the guild-local display number.
+      schema:
+        type: string
+        format: uuid
     SeriesId:
       name: seriesId
       in: path
@@ -3729,9 +4785,10 @@ components:
       in: header
       required: true
       description: >-
-        Bot requests use the Discord interaction ID. Browser requests use a visible ASCII key up
-        to 128 bytes. Reuse with the identical authenticated principal and request replays the
-        stored response; a changed request returns idempotency_conflict.
+        General and auction recruitment Bot requests use the Discord interaction ID. Browser
+        requests use a visible ASCII key up to 128 bytes. Reuse with the identical authenticated
+        principal and request replays the stored response; a changed request returns
+        idempotency_conflict.
       schema:
         type: string
         minLength: 1
@@ -4306,13 +5363,103 @@ components:
       properties:
         actor:
           $ref: '#/components/schemas/DiscordActor'
+        bestOf:
+          type: integer
+          enum: [1, 3, 5]
+          default: 3
+        hardFearless:
+          type: boolean
+          default: false
     WebCreateRecruitmentRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        The authenticated session supplies the actor; callers cannot choose another user.
+        Omitted compatibility values use BO3 and hardFearless=false.
+      properties:
+        bestOf:
+          type: integer
+          enum: [1, 3, 5]
+          default: 3
+        hardFearless:
+          type: boolean
+          default: false
+    CreateAuctionRecruitmentRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, format]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        format:
+          $ref: '#/components/schemas/AuctionFormat'
+        semifinalBestOf:
+          oneOf:
+            - $ref: '#/components/schemas/AuctionBestOf'
+            - type: 'null'
+          description: Must be non-null for TWENTY_PERSON and null for TEN_PERSON. Omitted compatibility values default to BO3 for TWENTY_PERSON.
+        finalBestOf:
+          $ref: '#/components/schemas/AuctionBestOf'
+          default: 3
+        hardFearless:
+          type: boolean
+          default: false
+    WebCreateAuctionRecruitmentRequest:
+      type: object
+      additionalProperties: false
+      required: [format]
+      description: >-
+        The authenticated session supplies the actor. Browser callers select the auction format
+        and match rules but cannot choose a Discord user, capacity, season, display number, or channel.
+      properties:
+        format:
+          $ref: '#/components/schemas/AuctionFormat'
+        semifinalBestOf:
+          oneOf:
+            - $ref: '#/components/schemas/AuctionBestOf'
+            - type: 'null'
+          description: Must be non-null for TWENTY_PERSON and null for TEN_PERSON. Omitted compatibility values default to BO3 for TWENTY_PERSON.
+        finalBestOf:
+          $ref: '#/components/schemas/AuctionBestOf'
+          default: 3
+        hardFearless:
+          type: boolean
+          default: false
+    WebCloseAuctionRecruitmentRequest:
       type: object
       additionalProperties: false
       maxProperties: 0
       description: >-
-        Empty browser request body. The authenticated session supplies the actor; callers cannot
-        choose another user.
+        Empty browser request body. The authenticated session supplies the actor; only a current
+        active operator can close a full auction recruitment.
+    AuctionRecruitmentMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [actor]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        declaredLane:
+          $ref: '#/components/schemas/Lane'
+    WebAddAuctionRecruitmentMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [memberId, declaredLane]
+      description: >-
+        The authenticated session supplies the actor. A current active operator selects an
+        existing ACTIVE guild member and explicitly chooses that member's declared lane.
+      properties:
+        memberId:
+          $ref: '#/components/schemas/UserIdentifier'
+        declaredLane:
+          $ref: '#/components/schemas/Lane'
+    WebRemoveAuctionRecruitmentMemberRequest:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+      description: >-
+        Empty browser request body. The authenticated session supplies the actor and only a
+        current active operator can remove the path participant.
     ActorRequest:
       type: object
       additionalProperties: false
@@ -4956,12 +6103,17 @@ components:
       maxLength: 100
       description: >-
         Notification type interpreted by the Bot worker. Recruitment CREATE sends a new message,
-        UPDATE edits its bound message, DELETE removes it, ENTRY_CONFIRMATION_CREATE sends the
-        immutable roster card, and SERIES_RESULT_CREATE sends an immutable result card.
+        AUCTION_RECRUITMENT_MESSAGE_CREATE sends a new auction recruitment message; the matching
+        UPDATE and DELETE values edit or remove its bound message. General recruitment UPDATE and
+        DELETE operate on their own aggregate; ENTRY_CONFIRMATION_CREATE sends the immutable roster
+        card, and SERIES_RESULT_CREATE sends an immutable result card.
       enum:
         - RECRUITMENT_MESSAGE_CREATE
         - RECRUITMENT_MESSAGE_UPDATE
         - RECRUITMENT_MESSAGE_DELETE
+        - AUCTION_RECRUITMENT_MESSAGE_CREATE
+        - AUCTION_RECRUITMENT_MESSAGE_UPDATE
+        - AUCTION_RECRUITMENT_MESSAGE_DELETE
         - ENTRY_CONFIRMATION_CREATE
         - SERIES_RESULT_CREATE
     RecruitmentMessageNotificationPayload:
@@ -4977,6 +6129,20 @@ components:
           format: uuid
         snapshot:
           $ref: '#/components/schemas/RecruitmentSnapshot'
+    AuctionRecruitmentMessageNotificationPayload:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, auctionRecruitmentId, snapshot]
+      properties:
+        schemaVersion:
+          type: integer
+          const: 2
+          description: New rows use v2. Bot relay also normalizes unclaimed historical v1 rows without rules to BO3 and hardFearless=false.
+        auctionRecruitmentId:
+          type: string
+          format: uuid
+        snapshot:
+          $ref: '#/components/schemas/AuctionRecruitmentSnapshot'
     EntryConfirmationNotificationPlayer:
       type: object
       additionalProperties: false
@@ -5304,6 +6470,7 @@ components:
     BotNotificationPayload:
       oneOf:
         - $ref: '#/components/schemas/RecruitmentMessageNotificationPayload'
+        - $ref: '#/components/schemas/AuctionRecruitmentMessageNotificationPayload'
         - $ref: '#/components/schemas/EntryConfirmationNotificationPayload'
         - $ref: '#/components/schemas/SeriesResultNotificationPayloadV1'
         - $ref: '#/components/schemas/SeriesResultNotificationPayloadV2'
@@ -5447,6 +6614,38 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/AcknowledgeRecruitmentMessageData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AcknowledgeAuctionRecruitmentMessageData:
+      type: object
+      additionalProperties: false
+      required: [acknowledged, deliveredAt, auctionRecruitment]
+      properties:
+        acknowledged:
+          type: boolean
+          const: true
+        deliveredAt:
+          type: string
+          format: date-time
+        auctionRecruitment:
+          type: object
+          additionalProperties: false
+          required: [id, revision]
+          properties:
+            id:
+              type: string
+              format: uuid
+            revision:
+              type: integer
+              format: int64
+              minimum: 0
+    AcknowledgeAuctionRecruitmentMessageResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AcknowledgeAuctionRecruitmentMessageData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     BotNotificationFailure:
@@ -7923,6 +9122,1309 @@ components:
     AuctionFormat:
       type: string
       enum: [TEN_PERSON, TWENTY_PERSON]
+    AuctionBestOf:
+      type: integer
+      enum: [1, 3, 5]
+    AuctionRecruitmentRules:
+      type: object
+      additionalProperties: false
+      required: [hardFearless, semifinalBestOf, finalBestOf]
+      description: >-
+        Immutable recruitment rules. TEN_PERSON has semifinalBestOf=null; TWENTY_PERSON uses one
+        semifinalBestOf value for both semifinals and its own finalBestOf. hardFearless applies
+        independently inside each later materialized match.
+      properties:
+        hardFearless:
+          type: boolean
+        semifinalBestOf:
+          oneOf:
+            - $ref: '#/components/schemas/AuctionBestOf'
+            - type: 'null'
+        finalBestOf:
+          $ref: '#/components/schemas/AuctionBestOf'
+    AuctionSetupDraftTeam:
+      type: object
+      additionalProperties: false
+      required: [teamIndex, teamName, captainUserId, initialPoints]
+      properties:
+        teamIndex:
+          type: integer
+          minimum: 1
+          maximum: 4
+        teamName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        captainUserId:
+          $ref: '#/components/schemas/UserIdentifier'
+        initialPoints:
+          type: integer
+          minimum: 1
+    AuctionSetupDraftState:
+      type: object
+      additionalProperties: false
+      required: [recruitmentId, revision, teamCount, teams]
+      properties:
+        recruitmentId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        teamCount:
+          type: integer
+          enum: [2, 4]
+        teams:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/AuctionSetupDraftTeam'
+    AuctionSetupDraftPermissions:
+      type: object
+      additionalProperties: false
+      required: [canEdit, canCreateTournament]
+      properties:
+        canEdit:
+          type: boolean
+        canCreateTournament:
+          type: boolean
+    AuctionSetupDraftSnapshot:
+      type: object
+      additionalProperties: false
+      required: [draft, participants, permissions]
+      properties:
+        draft:
+          $ref: '#/components/schemas/AuctionSetupDraftState'
+        participants:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/AuctionRecruitmentParticipant'
+        permissions:
+          $ref: '#/components/schemas/AuctionSetupDraftPermissions'
+    AuctionSetupDraftSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionSetupDraftSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    UpdateAuctionSetupDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, teams]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        teams:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/AuctionSetupDraftTeam'
+    CreateAuctionTournamentRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceRecruitmentId, expectedRevision]
+      properties:
+        sourceRecruitmentId:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionSnapshotOrigin:
+      type: string
+      enum: [CAPTURED, INFERRED, UNAVAILABLE]
+    AuctionTournamentStatus:
+      type: string
+      enum: [BIDDING, BRACKET_SETUP, IN_GAME, COMPLETED, CANCELLED]
+    AuctionTournamentCancelPreviewTournament:
+      type: object
+      additionalProperties: false
+      required: [id, displayNumber, title, status, revision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+        status:
+          $ref: '#/components/schemas/AuctionTournamentStatus'
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionTournamentCancelPreview:
+      type: object
+      additionalProperties: false
+      required: [tournament]
+      properties:
+        tournament:
+          $ref: '#/components/schemas/AuctionTournamentCancelPreviewTournament'
+    AuctionTournamentCancelPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentCancelPreview'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionTournamentCancelRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, expectedRevision, reason]
+      properties:
+        actor:
+          $ref: '#/components/schemas/DiscordActor'
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 240
+    AuctionTournamentCancelResult:
+      type: object
+      additionalProperties: false
+      required:
+        - tournamentId
+        - tournamentStatus
+        - tournamentRevision
+        - sourceRecruitmentId
+        - sourceRecruitmentRevision
+        - reversedGameCount
+      properties:
+        tournamentId:
+          type: string
+          format: uuid
+        tournamentStatus:
+          $ref: '#/components/schemas/AuctionTournamentStatus'
+        tournamentRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        sourceRecruitmentId:
+          type: string
+          format: uuid
+        sourceRecruitmentRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        reversedGameCount:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionTournamentCancelResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentCancelResult'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionTournamentTeamMember:
+      type: object
+      additionalProperties: false
+      required:
+        [teamMemberId, userId, displayName, declaredLane, mmrAtAcquisition, snapshotOrigin, acquiredVia, rosterSlot]
+      properties:
+        teamMemberId:
+          type: string
+          format: uuid
+        userId:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        declaredLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        mmrAtAcquisition:
+          oneOf:
+            - type: number
+            - type: 'null'
+        snapshotOrigin:
+          $ref: '#/components/schemas/AuctionSnapshotOrigin'
+        acquiredVia:
+          type: string
+          enum: [CAPTAIN, BID, MANUAL]
+        rosterSlot:
+          type: integer
+          minimum: 1
+          maximum: 5
+    AuctionTournamentTeam:
+      type: object
+      additionalProperties: false
+      required: [id, teamIndex, teamName, initialPoints, currentPoints, pointRevision, members]
+      properties:
+        id:
+          type: string
+          format: uuid
+        teamIndex:
+          type: integer
+          minimum: 1
+          maximum: 4
+        teamName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        initialPoints:
+          type: integer
+          minimum: 0
+        currentPoints:
+          type: integer
+          minimum: 0
+        pointRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        members:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AuctionTournamentTeamMember'
+    AuctionTournamentDraftCandidate:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, declaredLane, mmrAtStart, snapshotOrigin, queuePosition, state, drawCount]
+      properties:
+        userId:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        declaredLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        mmrAtStart:
+          oneOf:
+            - type: number
+            - type: 'null'
+        snapshotOrigin:
+          $ref: '#/components/schemas/AuctionSnapshotOrigin'
+        queuePosition:
+          type: integer
+          format: int64
+          minimum: 0
+        state:
+          type: string
+          enum: [QUEUED, ACTIVE, UNSOLD, ASSIGNED]
+        drawCount:
+          type: integer
+          minimum: 0
+    AuctionTournamentSummary:
+      type: object
+      additionalProperties: false
+      required: [id, sourceRecruitmentId, displayNumber, title, format, rules, status, revision, href]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceRecruitmentId:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        format:
+          $ref: '#/components/schemas/AuctionFormat'
+        rules:
+          $ref: '#/components/schemas/AuctionRecruitmentRules'
+        status:
+          $ref: '#/components/schemas/AuctionTournamentStatus'
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        href:
+          type: string
+          format: uri-reference
+          pattern: '^/g/'
+    AuctionTournamentRecentAction:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [DRAW_NEXT, MARK_UNSOLD, AWARD_BID, ASSIGN_CURRENT, ASSIGN_UNSOLD, RESTORE_UNSOLD, REVERT_LAST]
+    AuctionTournamentDraftState:
+      type: object
+      additionalProperties: false
+      required: [currentTarget, unsold, recentAction]
+      properties:
+        currentTarget:
+          oneOf:
+            - $ref: '#/components/schemas/AuctionTournamentDraftCandidate'
+            - type: 'null'
+        unsold:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/AuctionTournamentDraftCandidate'
+        recentAction:
+          oneOf:
+            - $ref: '#/components/schemas/AuctionTournamentRecentAction'
+            - type: 'null'
+    AuctionTournamentDraftPermissions:
+      type: object
+      additionalProperties: false
+      required: [canManageDraft, canManageBracket]
+      properties:
+        canManageDraft:
+          type: boolean
+        canManageBracket:
+          type: boolean
+    AuctionTournamentDraftSnapshot:
+      type: object
+      additionalProperties: false
+      required: [tournament, teams, candidates, draft, permissions]
+      properties:
+        tournament:
+          $ref: '#/components/schemas/AuctionTournamentSummary'
+        teams:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/AuctionTournamentTeam'
+        candidates:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/AuctionTournamentDraftCandidate'
+        draft:
+          $ref: '#/components/schemas/AuctionTournamentDraftState'
+        permissions:
+          $ref: '#/components/schemas/AuctionTournamentDraftPermissions'
+    AuctionTournamentDraftSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentDraftSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionTournamentDraftCommand:
+      oneOf:
+        - $ref: '#/components/schemas/DrawNextAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/MarkUnsoldAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/AwardBidAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/AssignCurrentAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/AssignUnsoldAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/RestoreUnsoldAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/RevertLastAuctionTournamentDraftCommand'
+      discriminator:
+        propertyName: kind
+    DrawNextAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision]
+      properties:
+        kind:
+          const: DRAW_NEXT
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    MarkUnsoldAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision, memberId]
+      properties:
+        kind:
+          const: MARK_UNSOLD
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        memberId:
+          $ref: '#/components/schemas/UserIdentifier'
+    AwardBidAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision, memberId, teamId, points]
+      properties:
+        kind:
+          const: AWARD_BID
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        memberId:
+          $ref: '#/components/schemas/UserIdentifier'
+        teamId:
+          type: string
+          format: uuid
+        points:
+          type: integer
+          minimum: 0
+    AssignCurrentAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision, memberId, teamId]
+      properties:
+        kind:
+          const: ASSIGN_CURRENT
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        memberId:
+          $ref: '#/components/schemas/UserIdentifier'
+        teamId:
+          type: string
+          format: uuid
+    AssignUnsoldAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision, memberId, teamId]
+      properties:
+        kind:
+          const: ASSIGN_UNSOLD
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        memberId:
+          $ref: '#/components/schemas/UserIdentifier'
+        teamId:
+          type: string
+          format: uuid
+    RestoreUnsoldAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision, memberId]
+      properties:
+        kind:
+          const: RESTORE_UNSOLD
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        memberId:
+          $ref: '#/components/schemas/UserIdentifier'
+    RevertLastAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision]
+      properties:
+        kind:
+          const: REVERT_LAST
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionTournamentBracketSummary:
+      type: object
+      additionalProperties: false
+      required: [id, title, displayNumber, format, rules, status, revision, href]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        format:
+          $ref: '#/components/schemas/AuctionFormat'
+        rules:
+          $ref: '#/components/schemas/AuctionRecruitmentRules'
+        status:
+          $ref: '#/components/schemas/AuctionTournamentStatus'
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        href:
+          type: string
+          format: uri-reference
+          pattern: '^/g/'
+    AuctionTournamentBracketTeam:
+      type: object
+      additionalProperties: false
+      required: [id, teamIndex, teamName, initialPoints, currentPoints, members]
+      properties:
+        id:
+          type: string
+          format: uuid
+        teamIndex:
+          type: integer
+          minimum: 1
+          maximum: 4
+        teamName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        initialPoints:
+          type: integer
+          minimum: 0
+        currentPoints:
+          type: integer
+          minimum: 0
+        members:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AuctionTournamentTeamMember'
+    AuctionTournamentBracketSlot:
+      type: object
+      additionalProperties: false
+      required: [slotKey, teamId]
+      properties:
+        slotKey:
+          type: string
+          enum: [A_0, A_1, B_0, B_1]
+        teamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+    AuctionTournamentBracketMatch:
+      type: object
+      additionalProperties: false
+      required:
+        [id, matchKey, bestOf, hardFearless, leftTeamId, rightTeamId, status, revision,
+         leftScore, rightScore, winnerTeamId, lineupsLocked]
+      properties:
+        id:
+          type: string
+          format: uuid
+        matchKey:
+          type: string
+          enum: [SEMIFINAL_A, SEMIFINAL_B, FINAL]
+        bestOf:
+          type: integer
+          enum: [1, 3, 5]
+        hardFearless:
+          type: boolean
+        leftTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        rightTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        status:
+          type: string
+          enum: [LINEUP_PENDING, READY, IN_PROGRESS, COMPLETED, CANCELLED]
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        leftScore:
+          type: integer
+          minimum: 0
+        rightScore:
+          type: integer
+          minimum: 0
+        winnerTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        lineupsLocked:
+          type: boolean
+    AuctionTournamentBracketState:
+      type: object
+      additionalProperties: false
+      required: [locked, slots, matches]
+      properties:
+        locked:
+          type: boolean
+        slots:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/AuctionTournamentBracketSlot'
+        matches:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/AuctionTournamentBracketMatch'
+    AuctionTournamentBracketPermissions:
+      type: object
+      additionalProperties: false
+      required: [canManageBracket, canManageMatches, canRecoverBracket]
+      properties:
+        canManageBracket:
+          type: boolean
+        canManageMatches:
+          type: boolean
+        canRecoverBracket:
+          type: boolean
+    AuctionTournamentBracketSnapshot:
+      type: object
+      additionalProperties: false
+      required: [tournament, teams, bracket, permissions]
+      properties:
+        tournament:
+          $ref: '#/components/schemas/AuctionTournamentBracketSummary'
+        teams:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/AuctionTournamentBracketTeam'
+        bracket:
+          $ref: '#/components/schemas/AuctionTournamentBracketState'
+        permissions:
+          $ref: '#/components/schemas/AuctionTournamentBracketPermissions'
+    AuctionTournamentBracketSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentBracketSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionTournamentBracketCommand:
+      oneOf:
+        - $ref: '#/components/schemas/AssignAuctionTournamentBracketTeamCommand'
+        - $ref: '#/components/schemas/ClearAuctionTournamentBracketSlotCommand'
+        - $ref: '#/components/schemas/LockAuctionTournamentBracketCommand'
+        - $ref: '#/components/schemas/UnlockAuctionTournamentBracketCommand'
+      discriminator:
+        propertyName: kind
+    AssignAuctionTournamentBracketTeamCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision, slotKey, teamId]
+      properties:
+        kind:
+          const: ASSIGN_TEAM
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        slotKey:
+          type: string
+          enum: [A_0, A_1, B_0, B_1]
+        teamId:
+          type: string
+          format: uuid
+    ClearAuctionTournamentBracketSlotCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision, slotKey]
+      properties:
+        kind:
+          const: CLEAR_SLOT
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        slotKey:
+          type: string
+          enum: [A_0, A_1, B_0, B_1]
+    LockAuctionTournamentBracketCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision]
+      properties:
+        kind:
+          const: LOCK_BRACKET
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    UnlockAuctionTournamentBracketCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision]
+      properties:
+        kind:
+          const: UNLOCK_BRACKET
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionMatchLineupAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, teamId, lane, teamMemberId]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        teamId:
+          type: string
+          format: uuid
+        lane:
+          $ref: '#/components/schemas/Lane'
+        teamMemberId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+    AuctionMatchLineupLockRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionMatchLineupAssignment:
+      type: object
+      additionalProperties: false
+      required: [teamId, lane, teamMemberId, userId]
+      properties:
+        teamId:
+          type: string
+          format: uuid
+        lane:
+          $ref: '#/components/schemas/Lane'
+        teamMemberId:
+          type: string
+          format: uuid
+        userId:
+          $ref: '#/components/schemas/UserIdentifier'
+    AuctionMatchConfirmedGame:
+      type: object
+      additionalProperties: false
+      required: [id, setNumber, sidePreset, winner, picks, bans, patchVersion]
+      properties:
+        id:
+          type: string
+          format: uuid
+        setNumber:
+          type: integer
+          minimum: 1
+          maximum: 5
+        sidePreset:
+          type: string
+          enum: [DEFAULT, SWAPPED]
+        winner:
+          type: string
+          enum: [BLUE, RED]
+        picks:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: 'null'
+        bans:
+          $ref: '#/components/schemas/SeriesPickBanBans'
+        patchVersion:
+          oneOf:
+            - type: string
+            - type: 'null'
+    AuctionMatchSnapshotMatch:
+      type: object
+      additionalProperties: false
+      required: [id, tournamentId, matchKey, label, bestOf, hardFearless, status, revision, leftTeamId, rightTeamId, leftScore, rightScore, winnerTeamId, lineupsLocked]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tournamentId:
+          type: string
+          format: uuid
+        matchKey:
+          type: string
+          enum: [SEMIFINAL_A, SEMIFINAL_B, FINAL]
+        label:
+          type: string
+        bestOf:
+          $ref: '#/components/schemas/AuctionBestOf'
+        hardFearless:
+          type: boolean
+        status:
+          type: string
+          enum: [LINEUP_PENDING, READY, IN_PROGRESS, COMPLETED, CANCELLED]
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        leftTeamId:
+          type: string
+          format: uuid
+        rightTeamId:
+          type: string
+          format: uuid
+        leftScore:
+          type: integer
+          minimum: 0
+        rightScore:
+          type: integer
+          minimum: 0
+        winnerTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        lineupsLocked:
+          type: boolean
+    AuctionMatchSnapshotTeam:
+      type: object
+      additionalProperties: false
+      required: [id, teamName, members]
+      properties:
+        id:
+          type: string
+          format: uuid
+        teamName:
+          type: string
+        members:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AuctionTournamentTeamMember'
+    AuctionMatchSnapshotPermissions:
+      type: object
+      additionalProperties: false
+      required: [canManageLineup, canEnterResults, canUnlockLineup, canRevertLastGame]
+      properties:
+        canManageLineup:
+          type: boolean
+        canEnterResults:
+          type: boolean
+        canUnlockLineup:
+          type: boolean
+        canRevertLastGame:
+          type: boolean
+    AuctionMatchSnapshot:
+      type: object
+      additionalProperties: false
+      required: [match, teams, lineups, games, permissions]
+      properties:
+        match:
+          $ref: '#/components/schemas/AuctionMatchSnapshotMatch'
+        teams:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/AuctionMatchSnapshotTeam'
+        lineups:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/AuctionMatchLineupAssignment'
+        games:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AuctionMatchConfirmedGame'
+        permissions:
+          $ref: '#/components/schemas/AuctionMatchSnapshotPermissions'
+    AuctionMatchSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionMatchSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionMatchGameSubmitRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, setNumber, sidePreset, winner, picks, bans, patchVersion]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        setNumber:
+          type: integer
+          minimum: 1
+          maximum: 5
+        sidePreset:
+          type: string
+          enum: [DEFAULT, SWAPPED]
+        winner:
+          type: string
+          enum: [BLUE, RED]
+        picks:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: 'null'
+        bans:
+          $ref: '#/components/schemas/SeriesPickBanBans'
+        patchVersion:
+          oneOf:
+            - type: string
+            - type: 'null'
+    AuctionMatchGameRevertRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionTournamentResultTeamMember:
+      type: object
+      additionalProperties: false
+      required: [teamMemberId, userId, displayName, declaredLane, acquiredVia, acquisitionPoints]
+      properties:
+        teamMemberId:
+          type: string
+          format: uuid
+        userId:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+        declaredLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        acquiredVia:
+          type: string
+          enum: [CAPTAIN, BID, MANUAL]
+        acquisitionPoints:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+    AuctionTournamentResultTeam:
+      type: object
+      additionalProperties: false
+      required: [id, teamIndex, teamName, initialPoints, currentPoints, spentPoints, members]
+      properties:
+        id:
+          type: string
+          format: uuid
+        teamIndex:
+          type: integer
+          minimum: 1
+          maximum: 4
+        teamName:
+          type: string
+        initialPoints:
+          type: integer
+          minimum: 0
+        currentPoints:
+          type: integer
+          minimum: 0
+        spentPoints:
+          type: integer
+          minimum: 0
+        members:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AuctionTournamentResultTeamMember'
+    AuctionTournamentResultMatch:
+      type: object
+      additionalProperties: false
+      required: [id, matchKey, bestOf, hardFearless, status, leftTeamId, rightTeamId, leftScore, rightScore, winnerTeamId, lineupsLocked, lineups, games]
+      properties:
+        id:
+          type: string
+          format: uuid
+        matchKey:
+          type: string
+          enum: [SEMIFINAL_A, SEMIFINAL_B, FINAL]
+        bestOf:
+          $ref: '#/components/schemas/AuctionBestOf'
+        hardFearless:
+          type: boolean
+        status:
+          type: string
+          enum: [LINEUP_PENDING, READY, IN_PROGRESS, COMPLETED, CANCELLED]
+        leftTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        rightTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        leftScore:
+          type: integer
+          minimum: 0
+        rightScore:
+          type: integer
+          minimum: 0
+        winnerTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        lineupsLocked:
+          type: boolean
+        lineups:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/AuctionMatchLineupAssignment'
+        games:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AuctionMatchConfirmedGame'
+    AuctionTournamentResultPlayer:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, teamId, games, wins, losses, mmrDelta]
+      properties:
+        userId:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+        teamId:
+          type: string
+          format: uuid
+        games:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+        mmrDelta:
+          oneOf:
+            - type: number
+            - type: 'null'
+    AuctionTournamentResultPermissions:
+      type: object
+      additionalProperties: false
+      required: [canRevertResults]
+      properties:
+        canRevertResults:
+          type: boolean
+    AuctionTournamentResultSnapshot:
+      type: object
+      additionalProperties: false
+      required: [tournament, teams, matches, players, permissions]
+      properties:
+        tournament:
+          type: object
+          additionalProperties: false
+          required: [id, title, displayNumber, format, rules, status, revision, championTeamId, href]
+          properties:
+            id:
+              type: string
+              format: uuid
+            title:
+              type: string
+            displayNumber:
+              type: integer
+              format: int64
+            format:
+              $ref: '#/components/schemas/AuctionFormat'
+            rules:
+              $ref: '#/components/schemas/AuctionRecruitmentRules'
+            status:
+              $ref: '#/components/schemas/AuctionTournamentStatus'
+            revision:
+              type: integer
+              format: int64
+              minimum: 0
+            championTeamId:
+              oneOf:
+                - type: string
+                  format: uuid
+                - type: 'null'
+            href:
+              type: string
+              format: uri-reference
+        teams:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/AuctionTournamentResultTeam'
+        matches:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/AuctionTournamentResultMatch'
+        players:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/AuctionTournamentResultPlayer'
+        permissions:
+          $ref: '#/components/schemas/AuctionTournamentResultPermissions'
+    AuctionTournamentResultSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentResultSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AuctionRecruitmentSnapshotItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayNumber
+        - title
+        - format
+        - rules
+        - participantCount
+        - joinedParticipantCount
+        - teamCount
+        - status
+        - revision
+        - channelId
+        - messageId
+        - createdById
+        - updatedAt
+        - href
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+        format:
+          $ref: '#/components/schemas/AuctionFormat'
+        rules:
+          $ref: '#/components/schemas/AuctionRecruitmentRules'
+        participantCount:
+          type: integer
+          enum: [10, 20]
+          description: Format-derived recruitment capacity.
+        joinedParticipantCount:
+          type: integer
+          format: int64
+          minimum: 0
+        teamCount:
+          type: integer
+          enum: [2, 4]
+        status:
+          type: string
+          enum: [OPEN, CLOSED, CONVERTED, CANCELLED]
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        channelId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        messageId:
+          oneOf:
+            - $ref: '#/components/schemas/DiscordSnowflake'
+            - type: 'null'
+        createdById:
+          $ref: '#/components/schemas/UserIdentifier'
+        updatedAt:
+          type: string
+          format: date-time
+        href:
+          type: string
+          format: uri-reference
+          pattern: '^/g/'
+    AuctionRecruitmentParticipant:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, declaredLane]
+      properties:
+        id:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        declaredLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+    AuctionRecruitmentLinks:
+      type: object
+      additionalProperties: false
+      required: [draft]
+      properties:
+        draft:
+          oneOf:
+            - type: string
+              format: uri-reference
+              pattern: '^/g/'
+            - type: 'null'
+    AuctionRecruitmentPermissions:
+      type: object
+      additionalProperties: false
+      required: [canManageMembers, canClose, canCancel]
+      properties:
+        canManageMembers:
+          type: boolean
+        canClose:
+          type: boolean
+        canCancel:
+          type: boolean
+    AuctionRecruitmentSnapshot:
+      type: object
+      additionalProperties: false
+      required: [recruitment, participants, links, permissions]
+      properties:
+        recruitment:
+          $ref: '#/components/schemas/AuctionRecruitmentSnapshotItem'
+        participants:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/AuctionRecruitmentParticipant'
+        links:
+          $ref: '#/components/schemas/AuctionRecruitmentLinks'
+        permissions:
+          $ref: '#/components/schemas/AuctionRecruitmentPermissions'
+    AuctionRecruitmentSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionRecruitmentSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     AuctionRecruitmentListItem:
       type: object
       additionalProperties: false
@@ -7931,6 +10433,7 @@ components:
         - displayNumber
         - title
         - format
+        - rules
         - participantCount
         - joinedParticipantCount
         - teamCount
@@ -7950,6 +10453,8 @@ components:
           type: string
         format:
           $ref: '#/components/schemas/AuctionFormat'
+        rules:
+          $ref: '#/components/schemas/AuctionRecruitmentRules'
         participantCount:
           type: integer
           enum: [10, 20]
@@ -7962,7 +10467,7 @@ components:
           enum: [2, 4]
         status:
           type: string
-          const: CLOSED
+          enum: [OPEN, CLOSED]
         revision:
           type: integer
           format: int64
@@ -7974,6 +10479,7 @@ components:
         href:
           type: string
           format: uri-reference
+          description: OPEN rows link to the recruitment roster; CLOSED rows link to the closed-roster stage-gate.
     AuctionRecruitmentListData:
       type: object
       additionalProperties: false

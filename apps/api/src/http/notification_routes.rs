@@ -121,6 +121,22 @@ struct RecruitmentBindingData {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionRecruitmentMessageAckData {
+    acknowledged: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    delivered_at: OffsetDateTime,
+    auction_recruitment: AuctionRecruitmentBindingData,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionRecruitmentBindingData {
+    id: crate::domain::AuctionRecruitmentId,
+    revision: i64,
+}
+
+#[derive(Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 enum NackNotificationData {
     #[serde(rename = "RETRY_SCHEDULED")]
@@ -144,6 +160,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/internal/notifications/recruitment-message/ack",
             post(ack_recruitment_message),
+        )
+        .route(
+            "/internal/notifications/auction-recruitment-message/ack",
+            post(ack_auction_recruitment_message),
         )
         .route("/internal/notifications/nack", post(nack))
 }
@@ -269,6 +289,45 @@ pub async fn ack_recruitment_message(
     ))
 }
 
+pub async fn ack_auction_recruitment_message(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    _principal: BotServicePrincipal,
+    Json(request): Json<AckNotificationRequest>,
+) -> Result<Response, ApiError> {
+    let mut transaction = begin(database(&state, &request_id)?)
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+    let acknowledgement = notification_outbox::ack_auction_recruitment_message(
+        &mut transaction,
+        &AckNotification {
+            notification_id: request.notification_id,
+            lease_owner: &request.instance_id,
+            lease_token: request.lease_token,
+            discord_message_id: &request.discord_message_id,
+        },
+    )
+    .await
+    .map_err(|source| repository_error(source, &request_id))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+
+    Ok(error::success(
+        StatusCode::OK,
+        &request_id,
+        AuctionRecruitmentMessageAckData {
+            acknowledged: true,
+            delivered_at: acknowledgement.notification.delivered_at,
+            auction_recruitment: AuctionRecruitmentBindingData {
+                id: acknowledgement.auction_recruitment_id,
+                revision: acknowledgement.auction_recruitment_revision,
+            },
+        },
+    ))
+}
+
 pub async fn nack(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -365,7 +424,8 @@ fn repository_error(source: NotificationOutboxError, request_id: &RequestId) -> 
             "모집 메시지 생성 알림은 전용 확인 경로로 처리해야 합니다.",
             None,
         ),
-        NotificationOutboxError::RecruitmentMessageBindConflict => ApiError::new(
+        NotificationOutboxError::RecruitmentMessageBindConflict
+        | NotificationOutboxError::AuctionRecruitmentMessageBindConflict => ApiError::new(
             StatusCode::CONFLICT,
             request_id,
             "recruitment_message_bind_conflict",
@@ -373,6 +433,7 @@ fn repository_error(source: NotificationOutboxError, request_id: &RequestId) -> 
             None,
         ),
         NotificationOutboxError::InvalidRecruitmentMessagePayload
+        | NotificationOutboxError::InvalidAuctionRecruitmentMessagePayload
         | NotificationOutboxError::DeduplicationRowDisappeared
         | NotificationOutboxError::ClaimedRowDisappeared
         | NotificationOutboxError::DeduplicationConflict => {

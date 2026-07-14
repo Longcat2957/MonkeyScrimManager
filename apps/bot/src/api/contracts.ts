@@ -213,6 +213,212 @@ export const recruitmentMessageNotificationPayloadSchema = z
 	})
 	.strict();
 
+export const auctionRecruitmentFormatSchema = z.enum(['TEN_PERSON', 'TWENTY_PERSON']);
+export const auctionBestOfSchema = z.union([z.literal(1), z.literal(3), z.literal(5)]);
+export const auctionTournamentStatusSchema = z.enum([
+	'BIDDING',
+	'BRACKET_SETUP',
+	'IN_GAME',
+	'COMPLETED',
+	'CANCELLED'
+]);
+
+export const auctionRecruitmentRulesSchema = z
+	.object({
+		hardFearless: z.boolean(),
+		semifinalBestOf: auctionBestOfSchema.nullable(),
+		finalBestOf: auctionBestOfSchema
+	})
+	.strict();
+
+const auctionRecruitmentStatusSchema = z.enum(['OPEN', 'CLOSED', 'CONVERTED', 'CANCELLED']);
+
+export const auctionRecruitmentSummarySchema = z
+	.object({
+		id: uuidSchema,
+		displayNumber: z.number().int().positive(),
+		title: z.string().min(1).max(200),
+		format: auctionRecruitmentFormatSchema,
+		participantCount: z.union([z.literal(10), z.literal(20)]),
+		joinedParticipantCount: z.number().int().nonnegative(),
+		teamCount: z.union([z.literal(2), z.literal(4)]),
+		status: auctionRecruitmentStatusSchema,
+		revision: z.number().int().nonnegative(),
+		channelId: discordSnowflakeSchema.nullable(),
+		messageId: discordSnowflakeSchema.nullable(),
+		createdById: recruitmentParticipantIdSchema,
+		updatedAt: timestampSchema,
+		href: z.string().startsWith('/g/'),
+		rules: auctionRecruitmentRulesSchema
+	})
+	.strict();
+
+const legacyAuctionRecruitmentSummarySchema = auctionRecruitmentSummarySchema
+	.omit({ rules: true })
+	.transform((recruitment) => ({
+		...recruitment,
+		rules: {
+			hardFearless: false,
+			semifinalBestOf: recruitment.format === 'TWENTY_PERSON' ? (3 as const) : null,
+			finalBestOf: 3 as const
+		}
+	}));
+
+const auctionRecruitmentSnapshotFields = {
+	participants: z
+		.array(
+			z
+				.object({
+					id: recruitmentParticipantIdSchema,
+					displayName: z.string().min(1).max(100),
+					declaredLane: laneSchema.nullable()
+				})
+				.strict()
+		)
+		.max(20),
+	links: z
+		.object({
+			draft: z.string().startsWith('/g/').nullable()
+		})
+		.strict(),
+	permissions: z
+		.object({
+			canManageMembers: z.boolean(),
+			canClose: z.boolean(),
+			canCancel: z.boolean()
+		})
+		.strict()
+};
+
+export const auctionRecruitmentSnapshotSchema = z
+	.object({ recruitment: auctionRecruitmentSummarySchema, ...auctionRecruitmentSnapshotFields })
+	.strict()
+	.superRefine(({ recruitment }, context) => {
+		const { semifinalBestOf } = recruitment.rules;
+		if (recruitment.format === 'TEN_PERSON' && semifinalBestOf !== null) {
+			context.addIssue({
+				code: 'custom',
+				path: ['recruitment', 'rules', 'semifinalBestOf'],
+				message: 'TEN_PERSON auction recruitments must not define semifinalBestOf'
+			});
+		}
+		if (recruitment.format === 'TWENTY_PERSON' && semifinalBestOf === null) {
+			context.addIssue({
+				code: 'custom',
+				path: ['recruitment', 'rules', 'semifinalBestOf'],
+				message: 'TWENTY_PERSON auction recruitments must define semifinalBestOf'
+			});
+		}
+	});
+
+export const createAuctionRecruitmentRequestSchema = z
+	.object({
+		actor: actorSchema,
+		format: auctionRecruitmentFormatSchema,
+		semifinalBestOf: auctionBestOfSchema.nullable(),
+		finalBestOf: auctionBestOfSchema,
+		hardFearless: z.boolean()
+	})
+	.strict()
+	.superRefine(({ format, semifinalBestOf }, context) => {
+		if (format === 'TEN_PERSON' && semifinalBestOf !== null) {
+			context.addIssue({
+				code: 'custom',
+				path: ['semifinalBestOf'],
+				message: 'TEN_PERSON auction recruitments must not define semifinalBestOf'
+			});
+		}
+		if (format === 'TWENTY_PERSON' && semifinalBestOf === null) {
+			context.addIssue({
+				code: 'custom',
+				path: ['semifinalBestOf'],
+				message: 'TWENTY_PERSON auction recruitments must define semifinalBestOf'
+			});
+		}
+	});
+
+export const auctionTournamentCancelPreviewDataSchema = z
+	.object({
+		tournament: z
+			.object({
+				id: uuidSchema,
+				displayNumber: z.number().int().positive(),
+				title: z.string().min(1).max(200),
+				status: auctionTournamentStatusSchema,
+				revision: z.number().int().nonnegative()
+			})
+			.strict()
+	})
+	.strict();
+
+export const auctionTournamentCancelRequestSchema = z
+	.object({
+		actor: actorSchema,
+		expectedRevision: z.number().int().nonnegative(),
+		reason: z
+			.string()
+			.trim()
+			.min(1)
+			.refine((value) => [...value].length <= 240, 'reason must contain at most 240 characters')
+	})
+	.strict();
+
+export const auctionTournamentCancelResultSchema = z
+	.object({
+		tournamentId: uuidSchema,
+		tournamentStatus: auctionTournamentStatusSchema,
+		tournamentRevision: z.number().int().nonnegative(),
+		sourceRecruitmentId: uuidSchema,
+		sourceRecruitmentRevision: z.number().int().nonnegative(),
+		reversedGameCount: z.number().int().nonnegative()
+	})
+	.strict();
+
+export const auctionRecruitmentMemberRequestSchema = z
+	.object({
+		actor: actorSchema,
+		declaredLane: laneSchema.optional()
+	})
+	.strict();
+
+const legacyAuctionRecruitmentSnapshotSchema = z
+	.object({
+		recruitment: legacyAuctionRecruitmentSummarySchema,
+		...auctionRecruitmentSnapshotFields
+	})
+	.strict();
+
+const auctionRecruitmentMessageNotificationPayloadV1Schema = z
+	.object({
+		schemaVersion: z.literal(1),
+		auctionRecruitmentId: uuidSchema,
+		snapshot: z.union([auctionRecruitmentSnapshotSchema, legacyAuctionRecruitmentSnapshotSchema])
+	})
+	.strict();
+
+const auctionRecruitmentMessageNotificationPayloadV2Schema = z
+	.object({
+		schemaVersion: z.literal(2),
+		auctionRecruitmentId: uuidSchema,
+		snapshot: auctionRecruitmentSnapshotSchema
+	})
+	.strict();
+
+export const auctionRecruitmentMessageNotificationPayloadSchema = z
+	.union([
+		auctionRecruitmentMessageNotificationPayloadV1Schema,
+		auctionRecruitmentMessageNotificationPayloadV2Schema
+	])
+	.superRefine((payload, context) => {
+		if (payload.auctionRecruitmentId !== payload.snapshot.recruitment.id) {
+			context.addIssue({
+				code: 'custom',
+				path: ['auctionRecruitmentId'],
+				message: 'auctionRecruitmentId must match snapshot.recruitment.id'
+			});
+		}
+	});
+
 const entryConfirmationPlayerSchema = z
 	.object({
 		id: recruitmentParticipantIdSchema,
@@ -384,6 +590,143 @@ export const seriesResultNotificationPayloadSchema = z.discriminatedUnion('schem
 	seriesResultNotificationV1PayloadSchema,
 	seriesResultNotificationV2PayloadSchema
 ]);
+
+const auctionTournamentResultMatchKeySchema = z.enum(['SEMIFINAL_A', 'SEMIFINAL_B', 'FINAL']);
+
+const auctionTournamentResultTournamentSchema = z
+	.object({
+		displayNumber: z.number().int().positive(),
+		title: z.string().min(1).max(200),
+		format: auctionRecruitmentFormatSchema,
+		semifinalBestOf: auctionBestOfSchema.nullable(),
+		finalBestOf: auctionBestOfSchema,
+		hardFearless: z.boolean()
+	})
+	.strict();
+
+const auctionTournamentResultMatchSchema = z
+	.object({
+		matchKey: auctionTournamentResultMatchKeySchema,
+		label: z.string().min(1).max(100),
+		bestOf: auctionBestOfSchema,
+		leftTeamName: z.string().min(1).max(100),
+		rightTeamName: z.string().min(1).max(100),
+		leftScore: z.number().int().nonnegative(),
+		rightScore: z.number().int().nonnegative(),
+		winnerTeamName: z.string().min(1).max(100)
+	})
+	.strict();
+
+export const auctionTournamentResultNotificationPayloadSchema = z
+	.object({
+		schemaVersion: z.literal(1),
+		guildId: discordSnowflakeSchema,
+		tournamentId: uuidSchema,
+		channelId: discordSnowflakeSchema,
+		tournament: auctionTournamentResultTournamentSchema,
+		champion: z
+			.object({
+				teamId: uuidSchema,
+				teamName: z.string().min(1).max(100)
+			})
+			.strict(),
+		matches: z.array(auctionTournamentResultMatchSchema).min(1).max(3),
+		completedAt: timestampSchema
+	})
+	.strict()
+	.superRefine(validateAuctionTournamentResultPayload);
+
+export const auctionTournamentResultDeleteNotificationPayloadSchema = z
+	.object({
+		schemaVersion: z.literal(1),
+		guildId: discordSnowflakeSchema,
+		tournamentId: uuidSchema,
+		channelId: discordSnowflakeSchema,
+		discordMessageId: discordSnowflakeSchema
+	})
+	.strict();
+
+function validateAuctionTournamentResultPayload(
+	payload: z.infer<typeof auctionTournamentResultNotificationPayloadSchema>,
+	context: z.RefinementCtx
+): void {
+	const { tournament, matches } = payload;
+	const expectedMatchKeys: Array<z.infer<typeof auctionTournamentResultMatchKeySchema>> =
+		tournament.format === 'TEN_PERSON' ? ['FINAL'] : ['SEMIFINAL_A', 'SEMIFINAL_B', 'FINAL'];
+
+	if (
+		(tournament.format === 'TEN_PERSON' && tournament.semifinalBestOf !== null) ||
+		(tournament.format === 'TWENTY_PERSON' && tournament.semifinalBestOf === null)
+	) {
+		context.addIssue({
+			code: 'custom',
+			path: ['tournament', 'semifinalBestOf'],
+			message: 'auction tournament format and semifinalBestOf must agree'
+		});
+	}
+
+	const matchByKey = new Map(matches.map((match) => [match.matchKey, match]));
+	if (
+		matchByKey.size !== matches.length ||
+		expectedMatchKeys.some((matchKey) => !matchByKey.has(matchKey)) ||
+		matches.some((match) => !expectedMatchKeys.includes(match.matchKey))
+	) {
+		context.addIssue({
+			code: 'custom',
+			path: ['matches'],
+			message: 'completed auction tournament matches must match the tournament format'
+		});
+	}
+
+	for (const [index, match] of matches.entries()) {
+		const expectedBestOf =
+			match.matchKey === 'FINAL' ? tournament.finalBestOf : tournament.semifinalBestOf;
+		if (match.bestOf !== expectedBestOf) {
+			context.addIssue({
+				code: 'custom',
+				path: ['matches', index, 'bestOf'],
+				message: 'match best-of must match the tournament rule snapshot'
+			});
+		}
+		if (
+			match.winnerTeamName !== match.leftTeamName &&
+			match.winnerTeamName !== match.rightTeamName
+		) {
+			context.addIssue({
+				code: 'custom',
+				path: ['matches', index, 'winnerTeamName'],
+				message: 'match winner must be one of the two match teams'
+			});
+			continue;
+		}
+
+		const winningScore =
+			match.winnerTeamName === match.leftTeamName ? match.leftScore : match.rightScore;
+		const losingScore =
+			match.winnerTeamName === match.leftTeamName ? match.rightScore : match.leftScore;
+		const requiredWins = Math.floor(match.bestOf / 2) + 1;
+		if (
+			winningScore !== requiredWins ||
+			winningScore <= losingScore ||
+			match.leftScore + match.rightScore > match.bestOf
+		) {
+			context.addIssue({
+				code: 'custom',
+				path: ['matches', index],
+				message: 'match winner and score must describe a completed best-of result'
+			});
+		}
+	}
+
+	const final = matchByKey.get('FINAL');
+	if (final && final.winnerTeamName !== payload.champion.teamName) {
+		context.addIssue({
+			code: 'custom',
+			path: ['champion', 'teamName'],
+			message: 'champion team must match the final winner'
+		});
+	}
+}
 
 function validateSeriesResultOutcome(
 	snapshot: {
@@ -631,6 +974,14 @@ export const acknowledgeRecruitmentMessageDataSchema = acknowledgeNotificationDa
 	})
 	.strict();
 
+export const acknowledgeAuctionRecruitmentMessageDataSchema = acknowledgeNotificationDataSchema
+	.extend({
+		auctionRecruitment: z
+			.object({ id: uuidSchema, revision: z.number().int().nonnegative() })
+			.strict()
+	})
+	.strict();
+
 export const nackNotificationRequestSchema = z
 	.object({
 		instanceId: botInstanceIdSchema,
@@ -734,6 +1085,17 @@ export type RecruitmentParticipant = z.infer<typeof recruitmentParticipantSchema
 export type Recruitment = z.infer<typeof recruitmentSchema>;
 export type RecruitmentSnapshot = z.infer<typeof recruitmentSnapshotSchema>;
 export type CreateRecruitmentRequest = z.infer<typeof createRecruitmentRequestSchema>;
+export type AuctionRecruitmentFormat = z.infer<typeof auctionRecruitmentFormatSchema>;
+export type AuctionBestOf = z.infer<typeof auctionBestOfSchema>;
+export type AuctionRecruitmentRules = z.infer<typeof auctionRecruitmentRulesSchema>;
+export type AuctionRecruitmentSnapshot = z.infer<typeof auctionRecruitmentSnapshotSchema>;
+export type CreateAuctionRecruitmentRequest = z.infer<typeof createAuctionRecruitmentRequestSchema>;
+export type AuctionRecruitmentMemberRequest = z.infer<typeof auctionRecruitmentMemberRequestSchema>;
+export type AuctionTournamentCancelPreviewData = z.infer<
+	typeof auctionTournamentCancelPreviewDataSchema
+>;
+export type AuctionTournamentCancelRequest = z.infer<typeof auctionTournamentCancelRequestSchema>;
+export type AuctionTournamentCancelResult = z.infer<typeof auctionTournamentCancelResultSchema>;
 export type BindRecruitmentMessageRequest = z.infer<typeof bindRecruitmentMessageRequestSchema>;
 export type JoinRecruitmentRequest = z.infer<typeof joinRecruitmentRequestSchema>;
 export type ActorRequest = z.infer<typeof actorRequestSchema>;
@@ -754,6 +1116,12 @@ export type SeriesResultNotificationV2Snapshot = z.infer<
 export type SeriesResultNotificationSnapshot =
 	SeriesResultNotificationV1Snapshot | SeriesResultNotificationV2Snapshot;
 export type SeriesResultNotificationPayload = z.infer<typeof seriesResultNotificationPayloadSchema>;
+export type AuctionTournamentResultNotificationPayload = z.infer<
+	typeof auctionTournamentResultNotificationPayloadSchema
+>;
+export type AuctionTournamentResultDeleteNotificationPayload = z.infer<
+	typeof auctionTournamentResultDeleteNotificationPayloadSchema
+>;
 export type BotNotification = z.infer<typeof botNotificationSchema>;
 export type ClaimNotificationsRequest = z.infer<typeof claimNotificationsRequestSchema>;
 export type ClaimNotificationsData = z.infer<typeof claimNotificationsDataSchema>;
@@ -761,6 +1129,9 @@ export type AcknowledgeNotificationRequest = z.infer<typeof acknowledgeNotificat
 export type AcknowledgeNotificationData = z.infer<typeof acknowledgeNotificationDataSchema>;
 export type AcknowledgeRecruitmentMessageData = z.infer<
 	typeof acknowledgeRecruitmentMessageDataSchema
+>;
+export type AcknowledgeAuctionRecruitmentMessageData = z.infer<
+	typeof acknowledgeAuctionRecruitmentMessageDataSchema
 >;
 export type NackNotificationRequest = z.infer<typeof nackNotificationRequestSchema>;
 export type NackNotificationData = z.infer<typeof nackNotificationDataSchema>;

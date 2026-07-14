@@ -256,37 +256,51 @@ Web 모집 취소 (생성자 또는 운영자)
 
 ```txt
 Discord /경매모집
+Web /g/{guildId}/auction 경매 모집
 ```
 
 흐름:
 
 ```txt
-/경매모집
-  -> auction_recruitments(guild_id) 생성
-  -> Discord 경매 모집 메시지 발행
+Discord /경매모집 또는 Web 경매 모집 (ACTIVE guild member)
+  -> 10인(TEN_PERSON) 또는 20인(TWENTY_PERSON) 형식 선택
+  -> 공통 하드 피어리스와 결승 BO1/BO3/BO5 선택
+  -> 20인은 4강 BO1/BO3/BO5도 별도로 선택
+  -> 같은 auction recruitment create command 호출
+  -> 현재 season/counter를 잠그고 OPEN auction_recruitments, 빈 setup draft/team slot을 한 transaction으로 생성
+  -> configured 모집 채널의 AUCTION_RECRUITMENT_MESSAGE_CREATE outbox로 동일 경매 모집 메시지를 발행
+  -> Bot worker typed acknowledgement가 Discord channel/message ID를 recruitment에 원자적으로 bind
+  -> /g/{guildId}/auction/recruitments/{id} 모집 화면 이동
 
 참가자 button/select interaction
   -> 참가 lane 선택 / 참가 / 취소 저장
   -> Discord 메시지 갱신
-  -> 열려 있는 경매 준비 workspace invalidate
+  -> 경매 모집 aggregate invalidate
+
+Web 현재 active operator의 참가자 관리
+  -> ACTIVE guild member(Discord 또는 development dummy)를 선택하고 declared lane을 명시
+  -> Discord 참가와 같은 canonical roster, 현재 시즌 lane MMR snapshot, capacity/duplicate 검증을 사용
+  -> Discord 메시지 갱신과 operator 경매 모집 workspace invalidate
 
 정원 도달 또는 운영자 시작
-  -> /g/{guildId}/auction/recruitments/{id}/draft
+  -> OPEN 모집을 CLOSED로 전환
+  -> /g/{guildId}/auction/recruitments/{id}/draft에서 확정 참가자 확인
+  -> format에 맞는 2개 또는 4개 팀장과 팀별 시작 포인트 저장
+  -> 모집에서 저장한 BO/하드 피어리스 규칙은 이 단계에서 수정하지 않음
 
-운영자가 Web에서 경매 시작
-  -> auction_setup_drafts에서 팀장 선택
-  -> 팀별 시작 포인트 저장
-  -> 준비 완료 시 auction_tournaments 생성
+경매 tournament 생성
+  -> 저장된 auction_setup_drafts revision을 검증해 auction_tournaments 생성
   -> captain/team/candidate/initial point 원장 생성
   -> 후보 draw / bid / 낙찰 / 수동 배치
   -> 필요한 단계에 revert checkpoint 기록
 
 브래킷 시작
-  -> auction_matches 생성
+  -> 모집 rules snapshot을 tournament로 복사하고 auction_matches 생성
+  -> 10인은 결승 규칙, 20인은 두 4강과 결승의 각 규칙을 적용
   -> /g/{guildId}/auction/tournaments/{id}/bracket
 
 경기 시작 전 라인업 확정
-  -> match 선택
+  -> /g/{guildId}/auction/matches/{matchId}에서 match 선택
   -> 양 팀 5명의 라인 입력
   -> TOP / JUNGLE / MID / BOTTOM / SUPPORT 모두 확정
   -> 라인업 확정 후 경기 시작 가능
@@ -306,9 +320,11 @@ Discord /경매모집
 
 ```txt
 /g/{guildId}/auction
+/g/{guildId}/auction/recruitments/{id}
 /g/{guildId}/auction/recruitments/{id}/draft
 /g/{guildId}/auction/tournaments/{id}/draft
 /g/{guildId}/auction/tournaments/{id}/bracket
+/g/{guildId}/auction/matches/{matchId}
 /g/{guildId}/auction/tournaments/{id}/result
 ```
 
@@ -320,6 +336,10 @@ Discord /경매모집
 - 경매 진행 상태는 UI local state가 아니라 DB 원장을 기준으로 복구 가능해야 한다.
 - 입찰, 수동 배치, 라인업 확정, 결과 입력은 이전 단계로 되돌릴 수 있어야 한다.
 - 입찰 되돌리기/취소/강제 종료는 checkpoint 또는 audit log를 남긴다.
+- Web과 Discord는 모집 생성 주체만 다르며, format, season, display number, participant capacity,
+  setup draft와 Discord 모집 메시지의 canonical state를 별도로 만들지 않는다.
+- tournament와 match의 stage/BO/하드 피어리스는 모집 때 저장한 rules snapshot에서만 파생한다. Web route,
+  query parameter, local count가 새 규칙이나 다음 단계를 추론하지 않는다.
 
 ## 5. 사용자 등록 / Riot 계정 연결
 
@@ -592,10 +612,10 @@ Bot 설치
   -> /g/{guildId}/records에서 전적 확인
 ```
 
-경매 MVP:
+경매 tournament workflow:
 
 ```txt
-/경매모집
+Discord /경매모집 또는 Web /g/{guildId}/auction 경매 모집
   -> 참가/취소
   -> 팀장/포인트 설정
   -> 입찰

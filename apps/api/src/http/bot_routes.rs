@@ -9,19 +9,25 @@ use serde_json::Value;
 
 use crate::{
     domain::{
-        DiscordChannelId, DiscordInteractionId, DiscordMessageId, DiscordRoleId, DiscordUserId,
-        GuildId, Lane, RecruitmentId, SeriesId, UserId,
+        AuctionMatchId, AuctionRecruitmentId, AuctionTournamentId, DiscordChannelId,
+        DiscordInteractionId, DiscordMessageId, DiscordRoleId, DiscordUserId, GuildId, Lane,
+        RecruitmentId, SeriesId, UserId,
     },
     error::{self, ApiError},
     http::extractors::{
         AuthenticatedSession, BotServicePrincipal, RecruitmentCreatePrincipal, require_csrf,
     },
     repository::bot_workflow::{
-        self, BotActor, BotRecruitmentCommand, BotWorkflowError, EntryDraftOperation,
-        RecruitmentSeriesRules, RegisterGuildMemberCommand, RegisterGuildMemberInput,
-        SeriesEarlyCompleteCommand, SeriesGameRevertCommand, SeriesGameSubmitCommand,
-        SeriesPickBanOperation, SetupGuildCommand,
+        self, AuctionMatchGameRevertCommand, AuctionMatchGameSubmitCommand,
+        AuctionMatchLineupAssignmentCommand, AuctionMatchLineupLockCommand,
+        AuctionRecruitmentSeriesRules, AuctionSetupDraftTeamInput, AuctionTournamentBracketCommand,
+        AuctionTournamentCancelCommand, AuctionTournamentDraftCommand, BotActor,
+        BotAuctionRecruitmentParticipationCommand, BotRecruitmentCommand, BotWorkflowError,
+        EntryDraftOperation, RecruitmentSeriesRules, RegisterGuildMemberCommand,
+        RegisterGuildMemberInput, SeriesEarlyCompleteCommand, SeriesGameRevertCommand,
+        SeriesGameSubmitCommand, SeriesPickBanOperation, SetupGuildCommand,
     },
+    repository::workflow::AuctionFormat,
     state::{AppState, RequestId},
 };
 
@@ -30,7 +36,7 @@ const MAX_BROWSER_IDEMPOTENCY_KEY_BYTES: usize = 128;
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ActorRequest {
+pub(crate) struct ActorRequest {
     id: DiscordUserId,
     global_display_name: String,
     display_name: String,
@@ -71,6 +77,84 @@ struct BotCreateRecruitmentRequest {
     actor: ActorRequest,
     best_of: Option<i16>,
     hard_fearless: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserCreateAuctionRecruitmentRequest {
+    format: AuctionFormat,
+    semifinal_best_of: Option<i16>,
+    final_best_of: Option<i16>,
+    hard_fearless: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotCreateAuctionRecruitmentRequest {
+    actor: ActorRequest,
+    format: AuctionFormat,
+    semifinal_best_of: Option<i16>,
+    final_best_of: Option<i16>,
+    hard_fearless: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct AuctionRecruitmentMemberRequest {
+    actor: ActorRequest,
+    declared_lane: Option<Lane>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserAddAuctionRecruitmentMemberRequest {
+    member_id: UserId,
+    declared_lane: Lane,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserRemoveAuctionRecruitmentMemberRequest {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BrowserAuctionRecruitmentLifecycleRequest {}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserAuctionSetupDraftRequest {
+    expected_revision: i64,
+    teams: Vec<AuctionSetupDraftTeamInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserAuctionTournamentCreateRequest {
+    source_recruitment_id: AuctionRecruitmentId,
+    expected_revision: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BotAuctionTournamentCancelRequest {
+    actor: ActorRequest,
+    expected_revision: i64,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserAuctionMatchLineupAssignmentRequest {
+    expected_revision: i64,
+    team_id: uuid::Uuid,
+    lane: Lane,
+    team_member_id: Option<uuid::Uuid>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserAuctionMatchLineupLockRequest {
+    expected_revision: i64,
 }
 
 #[derive(Deserialize)]
@@ -327,6 +411,521 @@ pub async fn create_recruitment(
             .await
             .map_err(|error| web_create_error(error, &request_id))?;
             Ok(error::success(StatusCode::CREATED, &request_id, snapshot))
+        }
+    }
+}
+
+pub async fn create_auction_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(guild_id): Path<GuildId>,
+    headers: HeaderMap,
+    principal: RecruitmentCreatePrincipal,
+    Json(request): Json<Value>,
+) -> Result<Response, ApiError> {
+    match principal {
+        RecruitmentCreatePrincipal::Bot(_) => {
+            let request = serde_json::from_value::<BotCreateAuctionRecruitmentRequest>(request)
+                .map_err(|_| invalid_request("body", &request_id))?;
+            let rules = AuctionRecruitmentSeriesRules::from_optional(
+                request.format,
+                request.semifinal_best_of,
+                request.final_best_of,
+                request.hard_fearless,
+            );
+            let interaction_id = interaction_id(&headers, &request_id)?;
+            let snapshot = bot_workflow::execute_auction_recruitment_command(
+                database(&state, &request_id)?,
+                &guild_id,
+                &interaction_id,
+                &request_id,
+                actor(request.actor, &request_id)?,
+                request.format,
+                rules,
+            )
+            .await
+            .map_err(|error| command_error(error, &request_id))?;
+            Ok(error::success(StatusCode::CREATED, &request_id, snapshot))
+        }
+        RecruitmentCreatePrincipal::Session(principal) => {
+            let request = serde_json::from_value::<BrowserCreateAuctionRecruitmentRequest>(request)
+                .map_err(|_| invalid_browser_auction_recruitment_create_request(&request_id))?;
+            let rules = AuctionRecruitmentSeriesRules::from_optional(
+                request.format,
+                request.semifinal_best_of,
+                request.final_best_of,
+                request.hard_fearless,
+            );
+            require_csrf(&headers, &state, &principal, &request_id)?;
+            let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+            let snapshot = bot_workflow::create_web_auction_recruitment(
+                database(&state, &request_id)?,
+                &guild_id,
+                &principal.session.user_id,
+                request.format,
+                rules,
+                &idempotency_key,
+                &request_id,
+            )
+            .await
+            .map_err(|error| web_auction_recruitment_error(error, &request_id))?;
+            Ok(error::success(StatusCode::CREATED, &request_id, snapshot))
+        }
+    }
+}
+
+pub async fn close_auction_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(_request): Json<BrowserAuctionRecruitmentLifecycleRequest>,
+) -> Result<Response, ApiError> {
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::close_web_auction_recruitment(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_recruitment_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn update_auction_setup_draft(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserAuctionSetupDraftRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_setup_draft_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::update_web_auction_setup_draft(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        request.expected_revision,
+        request.teams,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_setup_draft_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn create_auction_tournament(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(guild_id): Path<GuildId>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserAuctionTournamentCreateRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_tournament_create_request(
+            &request_id,
+        ));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::create_web_auction_tournament(
+        database(&state, &request_id)?,
+        &guild_id,
+        &principal.session.user_id,
+        request.source_recruitment_id,
+        request.expected_revision,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_tournament_create_error(error, &request_id))?;
+    Ok(error::success(StatusCode::CREATED, &request_id, snapshot))
+}
+
+pub async fn execute_auction_tournament_draft_command(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, tournament_id)): Path<(GuildId, AuctionTournamentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(payload): Json<Value>,
+) -> Result<Response, ApiError> {
+    let command = serde_json::from_value::<AuctionTournamentDraftCommand>(payload)
+        .map_err(|_| invalid_browser_auction_tournament_draft_command_request(&request_id))?;
+    if command.expected_revision() < 0 {
+        return Err(invalid_browser_auction_tournament_draft_command_request(
+            &request_id,
+        ));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::execute_web_auction_tournament_draft_command(
+        database(&state, &request_id)?,
+        &guild_id,
+        tournament_id,
+        &principal.session.user_id,
+        command,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_tournament_draft_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn execute_auction_tournament_bracket_command(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, tournament_id)): Path<(GuildId, AuctionTournamentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(payload): Json<Value>,
+) -> Result<Response, ApiError> {
+    let command = serde_json::from_value::<AuctionTournamentBracketCommand>(payload)
+        .map_err(|_| invalid_browser_auction_tournament_bracket_command_request(&request_id))?;
+    if command.expected_revision() < 0 {
+        return Err(invalid_browser_auction_tournament_bracket_command_request(
+            &request_id,
+        ));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::execute_web_auction_tournament_bracket_command(
+        database(&state, &request_id)?,
+        &guild_id,
+        tournament_id,
+        &principal.session.user_id,
+        command,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_tournament_bracket_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn cancel_auction_tournament(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, tournament_id)): Path<(GuildId, AuctionTournamentId)>,
+    headers: HeaderMap,
+    _principal: BotServicePrincipal,
+    Json(request): Json<BotAuctionTournamentCancelRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_request("expectedRevision", &request_id));
+    }
+    validate_text(&request.reason, 240, "reason", &request_id)?;
+    let interaction_id = interaction_id(&headers, &request_id)?;
+    let result = bot_workflow::cancel_auction_tournament(
+        database(&state, &request_id)?,
+        &guild_id,
+        tournament_id,
+        &interaction_id,
+        &request_id,
+        AuctionTournamentCancelCommand {
+            actor: actor(request.actor, &request_id)?,
+            expected_revision: request.expected_revision,
+            reason: request.reason.trim().to_owned(),
+        },
+    )
+    .await
+    .map_err(|error| command_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
+}
+
+pub async fn auction_tournament_cancel_preview(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, tournament_id)): Path<(GuildId, AuctionTournamentId)>,
+    _principal: BotServicePrincipal,
+) -> Result<Response, ApiError> {
+    let preview = bot_workflow::get_auction_tournament_cancel_preview(
+        database(&state, &request_id)?,
+        &guild_id,
+        tournament_id,
+    )
+    .await
+    .map_err(|error| command_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, preview))
+}
+
+pub async fn update_auction_match_lineup(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, match_id)): Path<(GuildId, AuctionMatchId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserAuctionMatchLineupAssignmentRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_match_lineup_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::update_web_auction_match_lineup(
+        database(&state, &request_id)?,
+        &guild_id,
+        match_id,
+        &principal.session.user_id,
+        AuctionMatchLineupAssignmentCommand {
+            expected_revision: request.expected_revision,
+            team_id: request.team_id,
+            lane: request.lane,
+            team_member_id: request.team_member_id,
+        },
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_match_lineup_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn lock_auction_match_lineup(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, match_id)): Path<(GuildId, AuctionMatchId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserAuctionMatchLineupLockRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_match_lineup_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::lock_web_auction_match_lineup(
+        database(&state, &request_id)?,
+        &guild_id,
+        match_id,
+        &principal.session.user_id,
+        AuctionMatchLineupLockCommand {
+            expected_revision: request.expected_revision,
+        },
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_match_lineup_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn unlock_auction_match_lineup(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, match_id)): Path<(GuildId, AuctionMatchId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserAuctionMatchLineupLockRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_match_lineup_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::unlock_web_auction_match_lineup(
+        database(&state, &request_id)?,
+        &guild_id,
+        match_id,
+        &principal.session.user_id,
+        AuctionMatchLineupLockCommand {
+            expected_revision: request.expected_revision,
+        },
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_match_lineup_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn submit_auction_match_game(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, match_id)): Path<(GuildId, AuctionMatchId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<AuctionMatchGameSubmitCommand>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_match_game_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::submit_web_auction_match_game(
+        database(&state, &request_id)?,
+        &guild_id,
+        match_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+        request,
+    )
+    .await
+    .map_err(|error| web_auction_match_game_error(error, &request_id))?;
+    Ok(error::success(StatusCode::CREATED, &request_id, snapshot))
+}
+
+pub async fn revert_last_auction_match_game(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, match_id)): Path<(GuildId, AuctionMatchId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<AuctionMatchGameRevertCommand>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_match_game_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::revert_last_web_auction_match_game(
+        database(&state, &request_id)?,
+        &guild_id,
+        match_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+        request,
+    )
+    .await
+    .map_err(|error| web_auction_match_game_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn cancel_auction_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::cancel_web_auction_recruitment(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_auction_recruitment_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn join_auction_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    headers: HeaderMap,
+    principal: RecruitmentCreatePrincipal,
+    Json(request): Json<Value>,
+) -> Result<Response, ApiError> {
+    match principal {
+        RecruitmentCreatePrincipal::Bot(_) => {
+            let request = serde_json::from_value::<AuctionRecruitmentMemberRequest>(request)
+                .map_err(|_| invalid_request("body", &request_id))?;
+            let interaction_id = interaction_id(&headers, &request_id)?;
+            let snapshot = bot_workflow::execute_auction_recruitment_participation_command(
+                database(&state, &request_id)?,
+                &guild_id,
+                &interaction_id,
+                &request_id,
+                BotAuctionRecruitmentParticipationCommand::Join {
+                    actor: actor(request.actor, &request_id)?,
+                    recruitment_id,
+                    declared_lane: request.declared_lane,
+                },
+            )
+            .await
+            .map_err(|error| command_error(error, &request_id))?;
+
+            Ok(error::success(StatusCode::OK, &request_id, snapshot))
+        }
+        RecruitmentCreatePrincipal::Session(principal) => {
+            let request =
+                serde_json::from_value::<BrowserAddAuctionRecruitmentMemberRequest>(request)
+                    .map_err(|_| invalid_browser_auction_recruitment_member_request(&request_id))?;
+            require_csrf(&headers, &state, &principal, &request_id)?;
+            let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+            let snapshot = bot_workflow::add_web_auction_recruitment_member(
+                database(&state, &request_id)?,
+                &guild_id,
+                recruitment_id,
+                &principal.session.user_id,
+                request.member_id,
+                request.declared_lane,
+                &idempotency_key,
+                &request_id,
+            )
+            .await
+            .map_err(|error| web_auction_recruitment_error(error, &request_id))?;
+            Ok(error::success(StatusCode::OK, &request_id, snapshot))
+        }
+    }
+}
+
+pub async fn leave_auction_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id, user_id)): Path<(GuildId, AuctionRecruitmentId, UserId)>,
+    headers: HeaderMap,
+    principal: RecruitmentCreatePrincipal,
+    Json(request): Json<Value>,
+) -> Result<Response, ApiError> {
+    match principal {
+        RecruitmentCreatePrincipal::Bot(_) => {
+            let request = serde_json::from_value::<ActorOnlyRequest>(request)
+                .map_err(|_| invalid_request("body", &request_id))?;
+            let interaction_id = interaction_id(&headers, &request_id)?;
+            let snapshot = bot_workflow::execute_auction_recruitment_participation_command(
+                database(&state, &request_id)?,
+                &guild_id,
+                &interaction_id,
+                &request_id,
+                BotAuctionRecruitmentParticipationCommand::Leave {
+                    actor: actor(request.actor, &request_id)?,
+                    recruitment_id,
+                    user_id,
+                },
+            )
+            .await
+            .map_err(|error| command_error(error, &request_id))?;
+
+            Ok(error::success(StatusCode::OK, &request_id, snapshot))
+        }
+        RecruitmentCreatePrincipal::Session(principal) => {
+            serde_json::from_value::<BrowserRemoveAuctionRecruitmentMemberRequest>(request)
+                .map_err(|_| invalid_browser_auction_recruitment_member_request(&request_id))?;
+            require_csrf(&headers, &state, &principal, &request_id)?;
+            let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+            let snapshot = bot_workflow::remove_web_auction_recruitment_member(
+                database(&state, &request_id)?,
+                &guild_id,
+                recruitment_id,
+                &principal.session.user_id,
+                user_id,
+                &idempotency_key,
+                &request_id,
+            )
+            .await
+            .map_err(|error| web_auction_recruitment_error(error, &request_id))?;
+            Ok(error::success(StatusCode::OK, &request_id, snapshot))
         }
     }
 }
@@ -942,6 +1541,66 @@ fn invalid_browser_create_request(request_id: &RequestId) -> ApiError {
     )
 }
 
+fn invalid_browser_auction_recruitment_create_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_recruitment_create_request",
+        "경매 모집 생성 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_auction_recruitment_member_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_recruitment_member_request",
+        "경매 모집 참가자 변경 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_auction_setup_draft_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_setup_draft_request",
+        "경매 팀장 설정 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_auction_tournament_create_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_tournament_create_request",
+        "경매 내전 시작 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_auction_tournament_draft_command_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_tournament_draft_command_request",
+        "경매 드래프트 명령 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_auction_tournament_bracket_command_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_tournament_bracket_command_request",
+        "경매 브래킷 명령 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
 fn invalid_recruitment_best_of(request_id: &RequestId, received: i16) -> ApiError {
     ApiError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -953,6 +1612,26 @@ fn invalid_recruitment_best_of(request_id: &RequestId, received: i16) -> ApiErro
             "allowedValues": [1, 3, 5],
             "receivedValue": received,
         })),
+    )
+}
+
+fn invalid_browser_auction_match_lineup_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_match_lineup_request",
+        "경매 경기 라인업 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_auction_match_game_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_auction_match_game_request",
+        "경매 경기 결과 입력 요청 형식이 올바르지 않습니다.",
+        None,
     )
 }
 
@@ -1078,6 +1757,27 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
         BotWorkflowError::InvalidRecruitmentBestOf { received } => {
             invalid_recruitment_best_of(request_id, received)
         }
+        BotWorkflowError::InvalidAuctionRecruitmentBestOf { stage, received } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_recruitment_best_of",
+            "경매 모집 시리즈 형식은 BO1, BO3, BO5만 선택할 수 있습니다.",
+            Some(serde_json::json!({ "stage": stage, "bestOf": received })),
+        ),
+        BotWorkflowError::AuctionRecruitmentSemifinalBestOfUnsupported => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_semifinal_best_of_unsupported",
+            "10인 경매 모집에는 4강 시리즈 형식을 설정할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionRecruitmentSemifinalBestOfRequired => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_semifinal_best_of_required",
+            "20인 경매 모집에는 4강 시리즈 형식이 필요합니다.",
+            None,
+        ),
         BotWorkflowError::InvalidCommand(_) => ApiError::new(
             StatusCode::BAD_REQUEST,
             request_id,
@@ -1360,6 +2060,13 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "모집 정원이 가득 찼습니다.",
             None,
         ),
+        BotWorkflowError::AuctionDeclaredLaneRequired => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_declared_lane_required",
+            "주 라인을 먼저 설정하거나 모집 메시지에서 참가 라인을 선택해 주세요.",
+            None,
+        ),
         BotWorkflowError::ParticipantAlreadyJoined => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             request_id,
@@ -1400,6 +2107,160 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             request_id,
             "idempotency_in_progress",
             "같은 interaction 요청을 처리하고 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 경매 내전을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupDraftNotEditable(status)
+        | BotWorkflowError::AuctionTournamentSourceNotReady(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "invalid_auction_recruitment_state",
+            "현재 경매 모집 상태에서는 이 작업을 수행할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::AuctionSetupDraftRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_setup_draft_revision_conflict",
+            "경매 팀장 설정이 변경되었습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::AuctionSetupTeamCountInvalid { expected, actual } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_team_count",
+            "경매 형식에 맞는 팀 수를 입력해야 합니다.",
+            Some(serde_json::json!({ "expectedTeamCount": expected, "actualTeamCount": actual })),
+        ),
+        BotWorkflowError::AuctionSetupTeamIndexInvalid { expected, actual } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_team_index",
+            "팀 순서는 1번부터 연속해서 입력해야 합니다.",
+            Some(serde_json::json!({ "expectedTeamIndex": expected, "actualTeamIndex": actual })),
+        ),
+        BotWorkflowError::AuctionSetupTeamNameInvalid => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_team_name",
+            "팀 이름이 올바르지 않습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupInitialPointsInvalid => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_initial_points",
+            "초기 포인트는 1 이상이어야 합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupDuplicateCaptain => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "duplicate_auction_setup_captain",
+            "같은 참가자를 여러 팀의 팀장으로 지정할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupCaptainNotJoined => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_setup_captain_not_joined",
+            "팀장은 현재 모집에 참가한 길드 멤버여야 합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupDraftIncomplete {
+            configured,
+            required,
+        } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_setup_incomplete",
+            "모든 팀의 팀장을 설정한 뒤 경매 내전을 시작할 수 있습니다.",
+            Some(
+                serde_json::json!({ "configuredTeamCount": configured, "requiredTeamCount": required }),
+            ),
+        ),
+        BotWorkflowError::AuctionTournamentAlreadyExists => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_already_exists",
+            "이 모집으로 이미 진행 중인 경매 내전이 있습니다.",
+            None,
+        ),
+        error @ (BotWorkflowError::AuctionTournamentRevisionConflict { .. }
+        | BotWorkflowError::AuctionTournamentDraftNotEditable(_)
+        | BotWorkflowError::AuctionTournamentDraftLocked
+        | BotWorkflowError::AuctionDraftCandidateNotFound
+        | BotWorkflowError::AuctionDraftTeamNotFound
+        | BotWorkflowError::AuctionDraftUnsoldLotNotFound
+        | BotWorkflowError::AuctionDraftCurrentTargetRequired
+        | BotWorkflowError::AuctionDraftCurrentTargetExists
+        | BotWorkflowError::AuctionDraftCurrentTargetMismatch
+        | BotWorkflowError::AuctionDraftCandidateStateMismatch
+        | BotWorkflowError::AuctionDraftNoQueuedCandidate
+        | BotWorkflowError::AuctionDraftTeamFull
+        | BotWorkflowError::AuctionDraftBidPointsInvalid { .. }
+        | BotWorkflowError::AuctionDraftNoRevertableAction
+        | BotWorkflowError::AuctionDraftRevertUnavailable) => {
+            web_auction_tournament_draft_error(error, request_id)
+        }
+        error @ (BotWorkflowError::AuctionTournamentBracketNotEditable(_)
+        | BotWorkflowError::AuctionTournamentBracketLocked
+        | BotWorkflowError::AuctionTournamentBracketRecoveryUnavailable
+        | BotWorkflowError::AuctionTournamentBracketSlotUnavailable
+        | BotWorkflowError::AuctionTournamentBracketRosterIncomplete
+        | BotWorkflowError::AuctionTournamentBracketSlotsIncomplete) => {
+            web_auction_tournament_bracket_error(error, request_id)
+        }
+        error @ (BotWorkflowError::AuctionMatchNotFound
+        | BotWorkflowError::AuctionMatchTeamsPending
+        | BotWorkflowError::AuctionMatchTournamentNotReady
+        | BotWorkflowError::AuctionMatchRevisionConflict { .. }
+        | BotWorkflowError::AuctionMatchLineupNotEditable(_)
+        | BotWorkflowError::AuctionMatchLineupLocked
+        | BotWorkflowError::AuctionMatchLineupUnlockUnavailable(_)
+        | BotWorkflowError::AuctionMatchLineupResultArtifactsPresent
+        | BotWorkflowError::AuctionMatchLineupTeamNotFound
+        | BotWorkflowError::AuctionMatchLineupMemberNotFound
+        | BotWorkflowError::AuctionMatchLineupPlayerAssigned
+        | BotWorkflowError::AuctionMatchLineupIncomplete) => {
+            web_auction_match_lineup_error(error, request_id)
+        }
+        error @ (BotWorkflowError::AuctionMatchResultNotEditable(_)
+        | BotWorkflowError::AuctionMatchSetNotCurrent { .. }
+        | BotWorkflowError::AuctionMatchGameChampionDuplicate { .. }
+        | BotWorkflowError::AuctionMatchHardFearlessChampionUsed { .. }
+        | BotWorkflowError::AuctionMatchNoConfirmedGames
+        | BotWorkflowError::AuctionMatchGameMmrHistoryAdvanced
+        | BotWorkflowError::AuctionMatchDownstreamWorkExists
+        | BotWorkflowError::AuctionTournamentResultDeliveryInProgress
+        | BotWorkflowError::AuctionTournamentResultDeliveryUncertain) => {
+            web_auction_match_game_error(error, request_id)
+        }
+        BotWorkflowError::AuctionTournamentResultUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_result_unavailable",
+            "진행 중이거나 완료된 경매 내전에서만 결과를 확인할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::AuctionTournamentCancelUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_cancel_unavailable",
+            "완료되었거나 이미 취소된 경매 내전은 조기 종료할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::AuctionTournamentCancelMmrHistoryAdvanced => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_cancel_mmr_history_advanced",
+            "이후 MMR 변경이 있어 경매 내전 전체를 안전하게 취소할 수 없습니다.",
             None,
         ),
         BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
@@ -1465,6 +2326,767 @@ fn web_create_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError
             None,
         ),
         error => command_error(error, request_id),
+    }
+}
+
+fn web_auction_recruitment_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::InvalidCommand(_) => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_recruitment_request",
+            "경매 모집 요청 형식이 올바르지 않습니다.",
+            None,
+        ),
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 경매 모집을 만들거나 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "경매 모집을 변경하려면 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::NoActiveSeason => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "no_active_season",
+            "길드에 진행 중인 시즌이 없어 경매 모집을 만들 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::RecruitmentNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "auction_recruitment_not_found",
+            "요청한 경매 모집을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::RecruitmentNotOpen(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_recruitment_not_open",
+            "모집 중인 경매에서만 이 작업을 수행할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::CloseRequiresFullRoster { joined, target } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_recruitment_not_full",
+            "정원을 채운 뒤 모집을 마감할 수 있습니다.",
+            Some(serde_json::json!({ "joinedCount": joined, "targetCount": target })),
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 경매 모집 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_auction_setup_draft_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 경매 팀장 설정을 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "경매 팀장 설정을 변경하려면 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::RecruitmentNotFound
+        | BotWorkflowError::AuctionSetupDraftNotEditable(_) => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "auction_setup_draft_not_found",
+            "요청한 경매 팀장 설정을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupDraftRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_setup_draft_revision_conflict",
+            "경매 팀장 설정이 변경되었습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::CloseRequiresFullRoster { joined, target } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_recruitment_not_full",
+            "정원을 모두 채운 뒤 팀장 설정을 저장할 수 있습니다.",
+            Some(serde_json::json!({ "joinedCount": joined, "targetCount": target })),
+        ),
+        BotWorkflowError::AuctionSetupTeamCountInvalid { expected, actual } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_team_count",
+            "경매 형식에 맞는 팀 수를 입력해야 합니다.",
+            Some(serde_json::json!({ "expectedTeamCount": expected, "actualTeamCount": actual })),
+        ),
+        BotWorkflowError::AuctionSetupTeamIndexInvalid { expected, actual } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_team_index",
+            "팀 순서는 1번부터 연속해서 입력해야 합니다.",
+            Some(serde_json::json!({ "expectedTeamIndex": expected, "actualTeamIndex": actual })),
+        ),
+        BotWorkflowError::AuctionSetupTeamNameInvalid => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_team_name",
+            "팀 이름은 비어 있지 않은 64바이트 이하의 값이어야 합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupInitialPointsInvalid => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_setup_initial_points",
+            "초기 포인트는 1 이상이어야 합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupDuplicateCaptain => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "duplicate_auction_setup_captain",
+            "같은 참가자를 여러 팀의 팀장으로 지정할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupCaptainNotJoined => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_setup_captain_not_joined",
+            "팀장은 현재 모집에 참가한 길드 멤버여야 합니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 경매 팀장 설정 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_auction_tournament_create_error(
+    error: BotWorkflowError,
+    request_id: &RequestId,
+) -> ApiError {
+    match error {
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 경매 내전을 시작할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "경매 내전을 시작하려면 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::RecruitmentNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "auction_recruitment_not_found",
+            "요청한 경매 모집을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionSetupDraftRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_setup_draft_revision_conflict",
+            "경매 팀장 설정이 변경되었습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::AuctionTournamentSourceNotReady(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_source_not_ready",
+            "모집 마감 후에만 경매 내전을 시작할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::AuctionSetupDraftIncomplete {
+            configured,
+            required,
+        } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_setup_incomplete",
+            "모든 팀의 팀장과 초기 포인트를 설정한 뒤 경매 내전을 시작할 수 있습니다.",
+            Some(
+                serde_json::json!({ "configuredTeamCount": configured, "requiredTeamCount": required }),
+            ),
+        ),
+        BotWorkflowError::AuctionSetupCaptainNotJoined => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_setup_captain_not_joined",
+            "팀장은 현재 모집에 참가한 길드 멤버여야 합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentAlreadyExists => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_already_exists",
+            "이 모집으로 이미 진행 중인 경매 내전이 있습니다.",
+            None,
+        ),
+        BotWorkflowError::CloseRequiresFullRoster { joined, target } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_recruitment_not_full",
+            "정원을 모두 채운 뒤 경매 내전을 시작할 수 있습니다.",
+            Some(serde_json::json!({ "joinedCount": joined, "targetCount": target })),
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 경매 내전 시작 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_auction_tournament_draft_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 경매 드래프트를 확인하거나 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "경매 드래프트를 변경하려면 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "auction_tournament_not_found",
+            "요청한 경매 내전을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_revision_conflict",
+            "다른 운영자가 경매 드래프트를 변경했습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::AuctionTournamentDraftNotEditable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_draft_not_editable",
+            "현재 경매 내전 상태에서는 드래프트를 변경할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::AuctionTournamentDraftLocked => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_draft_locked",
+            "대진 또는 경기 기록이 있어 경매 드래프트를 변경할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftCandidateNotFound => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_draft_candidate_not_found",
+            "경매 후보 풀에서 해당 참가자를 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftTeamNotFound => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_draft_team_not_found",
+            "경매 내전에서 해당 팀을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftUnsoldLotNotFound => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_unsold_lot_not_found",
+            "선택한 유찰 후보의 처리 기록을 찾을 수 없습니다. 최신 상태를 확인해 주세요.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftCurrentTargetRequired => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_current_target_required",
+            "현재 추첨된 후보가 있어야 이 작업을 수행할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftCurrentTargetExists => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_current_target_exists",
+            "현재 추첨된 후보를 먼저 처리해야 합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftCurrentTargetMismatch => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_current_target_mismatch",
+            "선택한 후보가 현재 추첨 대상과 다릅니다. 최신 상태를 확인해 주세요.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftCandidateStateMismatch => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_candidate_state_mismatch",
+            "선택한 후보의 현재 상태에서는 이 작업을 수행할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftNoQueuedCandidate => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_no_queued_candidate",
+            "다음으로 추첨할 후보가 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftTeamFull => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_team_full",
+            "선택한 팀은 이미 정원을 채웠습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftBidPointsInvalid {
+            current_points,
+            submitted_points,
+        } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_auction_draft_bid_points",
+            "낙찰 포인트는 팀의 현재 포인트 범위에서 입력해야 합니다.",
+            Some(
+                serde_json::json!({ "currentPoints": current_points, "submittedPoints": submitted_points }),
+            ),
+        ),
+        BotWorkflowError::AuctionDraftNoRevertableAction => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_no_revertable_action",
+            "되돌릴 수 있는 마지막 경매 작업이 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftRevertUnavailable => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_draft_revert_unavailable",
+            "이후 변경이 있어 마지막 경매 작업을 안전하게 되돌릴 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 경매 드래프트 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 경매 드래프트 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_auction_tournament_bracket_error(
+    error: BotWorkflowError,
+    request_id: &RequestId,
+) -> ApiError {
+    match error {
+        BotWorkflowError::InvalidCommand(_) => {
+            invalid_browser_auction_tournament_bracket_command_request(request_id)
+        }
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 경매 브래킷을 확인하거나 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "경매 브래킷을 변경하려면 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "auction_tournament_not_found",
+            "요청한 경매 내전을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_revision_conflict",
+            "다른 운영자가 경매 브래킷을 변경했습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::AuctionTournamentBracketNotEditable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_bracket_not_editable",
+            "브래킷 설정 단계에서만 이 작업을 수행할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::AuctionTournamentBracketLocked => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_bracket_locked",
+            "브래킷이 확정되었거나 경기 기록이 있어 변경할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentBracketRecoveryUnavailable => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_bracket_recovery_unavailable",
+            "게임 입력 또는 결과 기록이 있어 브래킷 확정을 해제할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentBracketSlotUnavailable => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_tournament_bracket_slot_unavailable",
+            "현재 경매 형식에서는 선택한 브래킷 슬롯을 사용할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionDraftTeamNotFound => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_tournament_bracket_team_not_found",
+            "경매 내전에서 선택한 팀을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentBracketRosterIncomplete => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_bracket_roster_incomplete",
+            "모든 팀의 활성 roster가 5명이어야 브래킷을 확정할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentBracketSlotsIncomplete => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_bracket_slots_incomplete",
+            "경매 형식에 필요한 모든 브래킷 슬롯에 팀을 배치해야 합니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 경매 브래킷 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 경매 브래킷 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_auction_match_lineup_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::InvalidCommand(_) => {
+            invalid_browser_auction_match_lineup_request(request_id)
+        }
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 경매 경기 라인업을 확인하거나 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "경매 경기 라인업을 변경하려면 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "auction_match_not_found",
+            "요청한 경매 경기를 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchTeamsPending => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_teams_pending",
+            "양 팀이 확정된 뒤에만 이 경기를 편성할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchTournamentNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_tournament_not_ready",
+            "대진이 확정된 진행 중 경매 내전에서만 라인업을 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_revision_conflict",
+            "다른 운영자가 경매 경기 라인업을 변경했습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::AuctionMatchLineupNotEditable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_lineup_not_editable",
+            "라인업 편성 대기 상태에서만 이 작업을 수행할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status })),
+        ),
+        BotWorkflowError::AuctionMatchLineupLocked => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_lineup_locked",
+            "이 경기는 이미 라인업이 확정되어 변경할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchLineupUnlockUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_lineup_unlock_unavailable",
+            "게임 결과를 입력하기 전 확정된 라인업만 다시 편성할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status })),
+        ),
+        BotWorkflowError::AuctionMatchLineupResultArtifactsPresent => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_lineup_result_artifacts_present",
+            "게임 입력 또는 결과 기록이 있어 라인업 확정을 해제할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchLineupTeamNotFound => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_match_lineup_team_not_found",
+            "선택한 팀은 이 경기에 배정되어 있지 않습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchLineupMemberNotFound => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_match_lineup_member_not_found",
+            "선택한 선수는 해당 팀의 활성 roster에 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchLineupPlayerAssigned => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_lineup_player_assigned",
+            "같은 선수는 경매 경기 라인업의 한 라인에만 배정할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchLineupIncomplete => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_lineup_incomplete",
+            "양 팀의 TOP, JUNGLE, MID, BOTTOM, SUPPORT를 모두 배정해야 라인업을 확정할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 경매 경기 라인업 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 경매 경기 라인업 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_auction_match_game_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::InvalidCommand(_) | BotWorkflowError::InvalidGameResult => {
+            invalid_browser_auction_match_game_request(request_id)
+        }
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 경매 경기 결과를 확인하거나 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "경매 경기 결과를 변경하려면 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "auction_match_not_found",
+            "요청한 경매 경기를 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchTeamsPending => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_teams_pending",
+            "양 팀이 확정된 뒤에만 이 경기의 결과를 입력할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchTournamentNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_tournament_not_ready",
+            "대진이 확정된 진행 중 경매 내전에서만 경기 결과를 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_revision_conflict",
+            "다른 운영자가 경매 경기 결과를 변경했습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::AuctionMatchResultNotEditable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_result_not_editable",
+            "현재 경기 상태에서는 세트 결과를 입력하거나 되돌릴 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status })),
+        ),
+        BotWorkflowError::AuctionMatchSetNotCurrent { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_set_not_current",
+            "현재 진행 중인 세트만 기록할 수 있습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedSetNumber": expected, "actualSetNumber": actual })),
+        ),
+        BotWorkflowError::AuctionMatchGameChampionDuplicate { champion_id } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "duplicate_auction_match_game_champion",
+            "같은 세트에서 픽과 밴은 같은 챔피언을 중복할 수 없습니다.",
+            Some(serde_json::json!({ "championId": champion_id })),
+        ),
+        BotWorkflowError::AuctionMatchHardFearlessChampionUsed { champion_id } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "auction_match_hard_fearless_champion_used",
+            "하드 피어리스에서는 이 경기의 이전 세트에서 픽한 챔피언을 다시 픽할 수 없습니다.",
+            Some(serde_json::json!({ "championId": champion_id })),
+        ),
+        BotWorkflowError::AuctionMatchNoConfirmedGames => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_no_confirmed_games",
+            "되돌릴 확정 세트가 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchGameMmrHistoryAdvanced => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_game_reversal_not_safe",
+            "이후 MMR 변경이 있어 이 세트 결과를 안전하게 되돌릴 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionMatchDownstreamWorkExists => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_downstream_work_exists",
+            "결승의 라인업 또는 게임 기록이 있어 준결승 결과를 되돌릴 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentResultDeliveryInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_result_delivery_in_progress",
+            "결과 메시지를 Discord에 전송 중이라 지금은 결과를 되돌릴 수 없습니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        BotWorkflowError::AuctionTournamentResultDeliveryUncertain => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_result_delivery_unresolved",
+            "Discord 결과 메시지의 전송 여부를 확인할 수 없어 결과를 되돌릴 수 없습니다. 운영 로그에서 전송 상태를 확인해 주세요.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 경매 경기 결과 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 경매 경기 결과 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => web_auction_match_lineup_error(error, request_id),
     }
 }
 
@@ -1687,5 +3309,29 @@ mod tests {
 
         assert!(validate_text(&"가".repeat(100), 100, "displayName", &request_id).is_ok());
         assert!(validate_text(&"가".repeat(101), 100, "displayName", &request_id).is_err());
+    }
+
+    #[test]
+    fn auction_recruitment_create_request_uses_flat_optional_rules() {
+        let request =
+            serde_json::from_value::<BrowserCreateAuctionRecruitmentRequest>(serde_json::json!({
+                "format": "TWENTY_PERSON",
+                "semifinalBestOf": 1,
+                "finalBestOf": 5,
+                "hardFearless": true,
+            }))
+            .expect("flat auction create request should deserialize");
+
+        assert_eq!(request.format, AuctionFormat::TwentyPerson);
+        assert_eq!(request.semifinal_best_of, Some(1));
+        assert_eq!(request.final_best_of, Some(5));
+        assert_eq!(request.hard_fearless, Some(true));
+        assert!(
+            serde_json::from_value::<BrowserCreateAuctionRecruitmentRequest>(serde_json::json!({
+                "format": "TEN_PERSON",
+                "rules": { "finalBestOf": 3 },
+            }),)
+            .is_err()
+        );
     }
 }

@@ -181,11 +181,85 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         )
         .route(
             "/api/guilds/{guild_id}/auction-recruitments",
-            get(workflow_routes::auction_recruitments),
+            get(workflow_routes::auction_recruitments).post(bot_routes::create_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}",
+            get(workflow_routes::auction_recruitment).delete(bot_routes::cancel_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/setup-draft",
+            get(workflow_routes::auction_setup_draft).patch(bot_routes::update_auction_setup_draft),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/members",
+            post(bot_routes::join_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/members/{user_id}",
+            delete(bot_routes::leave_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/close",
+            post(bot_routes::close_auction_recruitment),
         )
         .route(
             "/api/guilds/{guild_id}/auction-tournaments",
-            get(workflow_routes::auction_tournaments),
+            get(workflow_routes::auction_tournaments).post(bot_routes::create_auction_tournament),
+        )
+
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}",
+            get(workflow_routes::auction_tournament_draft),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/commands",
+            post(bot_routes::execute_auction_tournament_draft_command),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/bracket",
+            get(workflow_routes::auction_tournament_bracket),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/result",
+            get(workflow_routes::auction_tournament_result),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/cancel-preview",
+            get(bot_routes::auction_tournament_cancel_preview),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/cancel",
+            post(bot_routes::cancel_auction_tournament),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/bracket/commands",
+            post(bot_routes::execute_auction_tournament_bracket_command),
+        )
+
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}",
+            get(workflow_routes::auction_match),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}/lineup",
+            patch(bot_routes::update_auction_match_lineup),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}/lineup/lock",
+            post(bot_routes::lock_auction_match_lineup),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}/lineup/unlock",
+            post(bot_routes::unlock_auction_match_lineup),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}/games",
+            post(bot_routes::submit_auction_match_game),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}/games/last",
+            delete(bot_routes::revert_last_auction_match_game),
         )
 		.route("/api/riot/records", get(riot_routes::records))
 		.route(

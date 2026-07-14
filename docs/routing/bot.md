@@ -356,16 +356,29 @@ Backend:
 
 ## 경매 내전 운영 Commands
 
-### `/경매모집 정원`
+현재 구현 범위는 `/경매모집`과 해당 Discord 모집 카드의 self-service 참가/취소/라인 선택, 그리고
+`/경매조기종료`다. 이외 토너먼트 운영 command 항목은 설계 예약이며, route와 command registration이
+생기기 전에는 실행 가능하다고 노출하지 않는다.
+
+### `/경매모집 정원 [결승] [4강] [하드피어리스]`
 
 목적:
 
-- 10인 또는 20인 경매 모집 생성.
+- 10인 또는 20인 경매 모집 생성과 match rules 확정.
 - Discord 경매 모집 메시지 발행.
+- Web `/g/{guildId}/auction`의 경매 모집 dialog와 같은 aggregate를 생성.
 
 Backend:
 
-- auction recruitment create API/service.
+- `POST /api/guilds/{guildId}/auction-recruitments`의 Bot principal branch.
+- Bot은 actor snapshot, `format: TEN_PERSON|TWENTY_PERSON`, 결승 BO1/BO3/BO5, 하드 피어리스와 20인일 때
+  4강 BO1/BO3/BO5를 보낸다. 생략한 rule option은 BO3/일반으로 정규화한다. 10인에 4강 rule을 지정하면
+  backend가 안전하게 거부한다. target count, active season, display number, setup draft/team slot은 backend
+  create command가 결정한다.
+- Web과 Bot은 별도 create service나 별도 모집 row를 만들지 않는다.
+- Bot도 configured recruitment channel이 없으면 `recruitment_channel_not_configured` 응답을 그대로
+  interaction에 표시한다. 성공 response의 channel/message ID는 notification worker typed acknowledgement가
+  bind할 때까지 null일 수 있다.
 
 Message components:
 
@@ -373,11 +386,11 @@ Message components:
 - 참석 취소 button.
 - 참가 lane select. guild main lane을 기본값으로 사용하며 미설정 사용자는 lane 선택 후에만 참가를
   확정한다.
-- 정원 도달 시 operator action.
 
 Web link:
 
-- `/g/{guildId}/auction/recruitments/{id}/draft`.
+- 생성 직후 `/g/{guildId}/auction/recruitments/{id}`.
+- 운영자가 Web에서 모집을 마감한 뒤 `/g/{guildId}/auction/recruitments/{id}/draft`의 실제 마감 명단.
 
 ### `/경매인원추가 모집 멤버 [라인]`
 
@@ -439,19 +452,33 @@ Audit:
 
 - Backend에서 기록.
 
-### `/경매조기종료 토너먼트`
+### `/경매조기종료 토너먼트 사유`
 
 목적:
 
-- 진행 중 경매 토너먼트 취소.
+- 진행 중 경매 토너먼트를 history를 보존한 채 조기 종료한다.
+- `토너먼트`는 경매 토너먼트 페이지 URL에 있는 canonical UUID다. `사유`는 공백이 아닌 1~240자다.
 
 Backend:
 
-- `POST /api/guilds/{guildId}/auction-tournaments/:id/cancel`을 service principal로 호출한다.
+- Bot은 먼저 BotBearer 전용
+  `GET /api/guilds/{guildId}/auction-tournaments/{id}/cancel-preview`로 canonical tournament ID, 현재
+  `revision`, status를 읽는다. 사용자가 revision을 입력하지 않는다.
+- 이어서 `POST /api/guilds/{guildId}/auction-tournaments/{id}/cancel`을 service principal로 호출하며 actor
+  snapshot, preview revision, 사유와 Discord interaction ID를 idempotency key로 보낸다.
+- preflight와 cancel 사이에 tournament가 바뀌면 backend의 revision conflict를 그대로 표시하며, Bot이
+  임의 재시도하거나 stale revision으로 취소하지 않는다.
+- 성공 응답은 실행자에게만 보이며, source recruitment에 bound Discord 모집 메시지가 있으면 backend outbox가
+  `AUCTION_RECRUITMENT_MESSAGE_DELETE`를 적재한다. CANCELLED tournament에는 결과 채널 카드를 새로
+  발행하지 않는다.
 
 권한:
 
 - operator.
+
+Audit:
+
+- Backend가 actor, 사유, rollback된 세트 수를 기록한다.
 
 ## 관리자 Commands
 
@@ -586,15 +613,12 @@ Handlers:
 - `recruit:leave:{recruitmentId}`
 - `recruit:roles:{recruitmentId}`
 - `recruit:start-entry:{recruitmentId}`
-- `recruit:cancel:{recruitmentId}`
-- `recruit:cancel-confirm:{recruitmentId}`
 
 목적:
 
 - 참석/취소.
 - 선호 라인 선택.
 - operator의 엔트리 편성 시작.
-- 모집 취소 확인.
 
 Web link:
 
@@ -611,20 +635,15 @@ Handlers:
 - `auction-recruit:join:{recruitmentId}`
 - `auction-recruit:leave:{recruitmentId}`
 - `auction-recruit:lane:{recruitmentId}`
-- `auction-recruit:start:{recruitmentId}`
-- `auction-recruit:cancel:{recruitmentId}`
-- `auction-recruit:cancel-confirm:{recruitmentId}`
 
 목적:
 
 - 참석/취소.
 - main lane이 없는 사용자의 lane 선택과 참가 확정.
-- operator의 경매 시작.
-- 모집 취소 확인.
 
-Web link:
-
-- `auction-recruit:start` 처리 후 `/g/{guildId}/auction/recruitments/{id}/draft`.
+경매 모집 마감과 취소는 Web 모집 화면의 권한 기반 lifecycle action으로만 제공한다. Discord
+message component는 roster 참여 상태만 변경하며, 정원이 찬 뒤 운영자가 Web에서 마감하면
+`/g/{guildId}/auction/recruitments/{id}/draft`의 실제 마감 명단으로 이동한다.
 
 ## API -> Bot Internal Routing
 
@@ -639,6 +658,26 @@ RECRUITMENT_MESSAGE_UPDATE
 RECRUITMENT_MESSAGE_DELETE
 payload = { schemaVersion: 1, recruitmentId, snapshot }
 ```
+
+경매 모집 typed notification:
+
+```text
+AUCTION_RECRUITMENT_MESSAGE_CREATE
+AUCTION_RECRUITMENT_MESSAGE_UPDATE
+AUCTION_RECRUITMENT_MESSAGE_DELETE
+payload = { schemaVersion: 2, auctionRecruitmentId, snapshot }
+```
+
+Web과 Bot command가 생성한 경매 모집 모두 configured recruitment channel에 위 CREATE row를
+transactionally enqueue한다. Bot worker는 `renderAuctionRecruitmentMessage(snapshot)`으로 Discord 모집 메시지를 게시한 뒤
+`POST /internal/notifications/auction-recruitment-message/ack`를 호출한다. 이 typed acknowledgement는
+delivery 상태와 `auction_recruitments.channel_id/message_id` bind를 하나의 transaction으로 처리한다.
+모집 마감은 bound message UPDATE를, OPEN 모집 취소는 DELETE를 적재한다. UPDATE/DELETE는 generic
+`POST /internal/notifications/ack`로 완료 처리한다.
+
+새 경매 모집 row는 `schemaVersion: 2`와 rules 포함 snapshot을 사용한다. 아직 claim되지 않은 이전 v1 row는
+rules가 없으므로 Bot relay가 `BO3`, `hardFearless=false`로 정규화해 렌더링하며, typed acknowledgement는 v1/v2
+모두 허용한다. backend는 기존 row를 재작성하거나 재발행하지 않는다.
 
 확정 엔트리 notification:
 
@@ -684,16 +723,37 @@ transaction을 rollback하지 않으며 기존 outbox retry 정책으로 처리�
 이후 결과를 되돌리거나 재확정할 때 기존 Discord 카드를 edit/delete하는 `end_card_*` binding은 별도 lifecycle
 확장으로 남긴다.
 
+경매 토너먼트 완료 notification:
+
+```text
+AUCTION_TOURNAMENT_RESULT_CREATE
+payload = {
+  schemaVersion: 1,
+  guildId, tournamentId, channelId,
+  tournament: { displayNumber, title, format, semifinalBestOf, finalBestOf, hardFearless },
+  champion: { teamId, teamName },
+  matches,
+  completedAt
+}
+```
+
+결승이 확정되어 tournament가 `COMPLETED`가 될 때만 configured `result_channel_id`에 적재한다. 10인에서는
+`semifinalBestOf`를 반드시 `null`로, 20인에서는 두 준결승과 결승의 완료 score를 모두 포함한다. 이 payload는
+web 결과 aggregate를 재사용하지 않는 Bot 전용 v1 contract이며, 결과 channel이 없으면 completion은 그대로
+성공하고 outbox만 생략한다.
+
 처리 순서:
 
 1. `POST /internal/notifications/claim`으로 최대 50개의 lease row를 claim한다.
-2. payload version과 full recruitment snapshot을 검증하고 configured recruitment channel에
-   `renderRecruitmentMessage(snapshot)`을 보낸다. CREATE에는 `discordNonce`를 그대로 Discord nonce로
-   사용한다.
-3. CREATE send가 성공하면 `POST /internal/notifications/recruitment-message/ack`로 message ID를 보낸다.
-   이 acknowledgement는 delivered 전이와 recruitment message bind를 원자적으로 처리하고, create와
-   경합한 수동 추가/취소가 있으면 최신 UPDATE 또는 DELETE를 후속 적재한다.
-4. UPDATE는 payload snapshot의 bound message를 같은 renderer 결과로 edit한 뒤 generic
+2. payload version과 full snapshot을 검증하고 configured recruitment channel에 일반 모집은
+   `renderRecruitmentMessage(snapshot)`, 경매 모집은 `renderAuctionRecruitmentMessage(snapshot)`을 보낸다.
+   CREATE에는 `discordNonce`를 그대로 Discord nonce로 사용한다.
+3. 일반 모집 CREATE send가 성공하면 `POST /internal/notifications/recruitment-message/ack`로 message ID를
+   보낸다. 경매 모집 CREATE는
+   `POST /internal/notifications/auction-recruitment-message/ack`를 사용한다. 각 typed acknowledgement는
+   delivered 전이와 해당 recruitment message bind를 원자적으로 처리한다. 일반 모집 create와 경합한
+   수동 추가/취소는 최신 UPDATE 또는 DELETE를 후속 적재한다.
+4. 일반/경매 모집 UPDATE는 payload snapshot의 bound message를 각각의 renderer 결과로 edit한 뒤 generic
    `POST /internal/notifications/ack`를 호출한다. DELETE는 bound message를 삭제한 뒤 generic ack을
    호출한다. Discord가 이미 삭제된 message를 반환하면 DELETE delivery는 완료로 처리해 ack한다.
 5. send/edit/delete 전에 실패하면 `POST /internal/notifications/nack`을 보낸다. 429/5xx/transport은 retry이고,
@@ -712,6 +772,7 @@ Bot이 생성해야 하는 주요 웹 링크:
 | 일반 모집 마감 후 엔트리 편성   | `/g/{guildId}/recruitments/{id}/entry`          |
 | 일반 시리즈 생성 후 픽/밴       | `/g/{guildId}/series/{id}/pick-ban`             |
 | 일반 시리즈 완료 후 결과        | `/g/{guildId}/series/{id}/result`               |
+| 경매 모집 생성 직후             | `/g/{guildId}/auction/recruitments/{id}`        |
 | 경매 모집 마감 후 드래프트 시작 | `/g/{guildId}/auction/recruitments/{id}/draft`  |
 | 경매 토너먼트 입찰 진행         | `/g/{guildId}/auction/tournaments/{id}/draft`   |
 | 경매 브래킷 입력                | `/g/{guildId}/auction/tournaments/{id}/bracket` |

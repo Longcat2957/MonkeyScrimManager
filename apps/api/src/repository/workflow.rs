@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -52,7 +53,8 @@ pub struct OperationRecord {
     pub priority: OperationPriority,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AuctionFormat {
     TenPerson,
     TwentyPerson,
@@ -166,9 +168,13 @@ pub struct AuctionRecruitmentRecord {
     pub display_number: i64,
     pub title: String,
     pub format: AuctionFormat,
+    pub semifinal_best_of: Option<i16>,
+    pub final_best_of: i16,
+    pub hard_fearless: bool,
     pub target_count: i16,
     pub participant_count: i64,
     pub team_count: i16,
+    pub status: RecruitmentStatus,
     pub revision: i64,
     pub updated_at: OffsetDateTime,
 }
@@ -252,6 +258,7 @@ pub async fn list_operations(
                     recruitment.target_count::bigint AS third_count,
                     NULL::text AS source_status,
                     NULL::text AS auxiliary_status,
+                    NULL::uuid AS auxiliary_id,
                     0::smallint AS priority_rank
              FROM recruitments AS recruitment
              JOIN viewer ON viewer.guild_id = recruitment.guild_id
@@ -296,6 +303,7 @@ pub async fn list_operations(
                     0::bigint,
                     scrim.status,
                     NULL::text,
+                    NULL::uuid,
                     0::smallint
              FROM series AS scrim
              JOIN viewer ON viewer.guild_id = scrim.guild_id
@@ -321,6 +329,7 @@ pub async fn list_operations(
                     recruitment.target_count::bigint,
                     recruitment.status,
                     NULL::text,
+                    NULL::uuid,
                     1::smallint
              FROM auction_recruitments AS recruitment
              JOIN viewer ON viewer.guild_id = recruitment.guild_id
@@ -354,6 +363,7 @@ pub async fn list_operations(
                     matches.count,
                     tournament.status,
                     next_match.status,
+                    next_match.id,
                     1::smallint
              FROM auction_tournaments AS tournament
              JOIN viewer ON viewer.guild_id = tournament.guild_id
@@ -379,7 +389,8 @@ pub async fn list_operations(
                    AND auction_match.status NOT IN ('COMPLETED', 'CANCELLED')
              ) AS matches
              LEFT JOIN LATERAL (
-                 SELECT auction_match.status
+                 SELECT auction_match.id,
+                        auction_match.status
                  FROM auction_matches AS auction_match
                  WHERE auction_match.guild_id = tournament.guild_id
                    AND auction_match.tournament_id = tournament.id
@@ -410,7 +421,8 @@ pub async fn list_operations(
                 second_count,
                 third_count,
                 source_status,
-                auxiliary_status
+                auxiliary_status,
+                auxiliary_id
          FROM operation_rows
          ORDER BY priority_rank, updated_at DESC, source_kind, entity_id DESC
          LIMIT 100",
@@ -619,6 +631,10 @@ pub async fn list_actionable_auction_recruitments(
                     recruitment.title,
                     recruitment.format,
                     recruitment.target_count,
+                    recruitment.semifinal_best_of,
+                    recruitment.final_best_of,
+                    recruitment.hard_fearless,
+                    recruitment.status,
                     recruitment.revision,
                     recruitment.updated_at
              FROM auction_recruitments AS recruitment
@@ -630,7 +646,7 @@ pub async fn list_actionable_auction_recruitments(
               AND viewer.user_id = $1
               AND viewer.status = 'ACTIVE'
              WHERE recruitment.guild_id = $2
-               AND recruitment.status = 'CLOSED'
+               AND recruitment.status IN ('OPEN', 'CLOSED')
                AND recruitment.converted_at IS NULL
                AND NOT EXISTS (
                    SELECT 1
@@ -652,6 +668,10 @@ pub async fn list_actionable_auction_recruitments(
                 page.title,
                 page.format,
                 page.target_count,
+                page.semifinal_best_of,
+                page.final_best_of,
+                page.hard_fearless,
+                page.status,
                 page.revision,
                 page.updated_at,
                 joined.count AS participant_count
@@ -713,7 +733,7 @@ pub async fn list_auction_tournaments(
              WHERE tournament.guild_id = $2
                AND (
                    ($3 = 'active' AND tournament.status IN ('BIDDING', 'BRACKET_SETUP', 'IN_GAME'))
-                   OR ($3 = 'completed' AND tournament.status = 'COMPLETED')
+                   OR ($3 = 'completed' AND tournament.status IN ('COMPLETED', 'CANCELLED'))
                )
                AND tournament.deleted_at IS NULL
                AND (
@@ -871,6 +891,7 @@ struct OperationRow {
     third_count: i64,
     source_status: Option<String>,
     auxiliary_status: Option<String>,
+    auxiliary_id: Option<AuctionMatchId>,
 }
 
 impl OperationRow {
@@ -927,22 +948,32 @@ impl OperationRow {
                         "auction operation has no tournament status",
                     ),
                 )?;
-                let (status, detail, suffix) = match source_status {
+                let (status, detail, href) = match source_status {
                     "BIDDING" => (
                         "입찰 진행",
                         format!("{}팀 · {}명 편성", self.second_count, self.first_count),
-                        "draft",
+                        format!("/g/{guild}/auction/tournaments/{}/draft", self.entity_id),
                     ),
                     "BRACKET_SETUP" => (
                         "대진 설정",
                         format!("{}팀 · 대진 확정 대기", self.second_count),
-                        "bracket",
+                        format!("/g/{guild}/auction/tournaments/{}/bracket", self.entity_id),
                     ),
                     "IN_GAME" => {
                         let wants_result = matches!(
                             self.auxiliary_status.as_deref(),
                             Some("READY" | "IN_PROGRESS")
                         );
+                        let href = if wants_result {
+                            let match_id = self.auxiliary_id.ok_or(
+                                WorkflowRepositoryError::InvalidProjection(
+                                    "auction operation has no next match id",
+                                ),
+                            )?;
+                            format!("/g/{guild}/auction/matches/{match_id}")
+                        } else {
+                            format!("/g/{guild}/auction/tournaments/{}/bracket", self.entity_id)
+                        };
                         (
                             if wants_result {
                                 "결과 입력"
@@ -950,11 +981,7 @@ impl OperationRow {
                                 "대진 진행"
                             },
                             format!("{}경기 진행 또는 대기", self.third_count),
-                            if wants_result {
-                                "bracket?view=result"
-                            } else {
-                                "bracket"
-                            },
+                            href,
                         )
                     }
                     _ => {
@@ -968,10 +995,7 @@ impl OperationRow {
                     OperationKind::Auction,
                     status,
                     detail,
-                    format!(
-                        "/g/{guild}/auction/tournaments/{}/{}",
-                        self.entity_id, suffix
-                    ),
+                    href,
                     OperationPriority::Normal,
                 )
             }
@@ -1114,6 +1138,10 @@ struct AuctionRecruitmentRow {
     title: String,
     format: String,
     target_count: i16,
+    semifinal_best_of: Option<i16>,
+    final_best_of: i16,
+    hard_fearless: bool,
+    status: RecruitmentStatus,
     revision: i64,
     updated_at: OffsetDateTime,
     participant_count: i64,
@@ -1134,14 +1162,34 @@ impl AuctionRecruitmentRow {
                 "auction recruitment target does not match format",
             ));
         }
+        if !matches!(self.final_best_of, 1 | 3 | 5) {
+            return Err(WorkflowRepositoryError::InvalidProjection(
+                "auction recruitment final best-of is invalid",
+            ));
+        }
+        let semifinal_is_valid = match format {
+            AuctionFormat::TenPerson => self.semifinal_best_of.is_none(),
+            AuctionFormat::TwentyPerson => self
+                .semifinal_best_of
+                .is_some_and(|best_of| matches!(best_of, 1 | 3 | 5)),
+        };
+        if !semifinal_is_valid {
+            return Err(WorkflowRepositoryError::InvalidProjection(
+                "auction recruitment semifinal best-of does not match format",
+            ));
+        }
         Ok(AuctionRecruitmentRecord {
             id: self.id,
             display_number: self.display_number,
             title: self.title,
             format,
+            semifinal_best_of: self.semifinal_best_of,
+            final_best_of: self.final_best_of,
+            hard_fearless: self.hard_fearless,
             target_count: self.target_count,
             participant_count: self.participant_count,
             team_count: format.team_count(),
+            status: self.status,
             revision: self.revision,
             updated_at: self.updated_at,
         })

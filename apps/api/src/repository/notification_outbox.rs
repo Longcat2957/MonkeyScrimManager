@@ -9,7 +9,10 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{DiscordChannelId, DiscordMessageId, GuildId, NotificationId, RecruitmentStatus},
+    domain::{
+        AuctionRecruitmentId, DiscordChannelId, DiscordMessageId, GuildId, NotificationId,
+        RecruitmentStatus,
+    },
     infrastructure::postgres::DatabaseTransaction,
 };
 
@@ -21,10 +24,20 @@ pub const RECRUITMENT_MESSAGE_CREATE_TYPE: &str = "RECRUITMENT_MESSAGE_CREATE";
 pub const RECRUITMENT_MESSAGE_UPDATE_TYPE: &str = "RECRUITMENT_MESSAGE_UPDATE";
 pub const RECRUITMENT_MESSAGE_DELETE_TYPE: &str = "RECRUITMENT_MESSAGE_DELETE";
 pub const RECRUITMENT_MESSAGE_SCHEMA_VERSION: u16 = 1;
+pub const AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE: &str = "AUCTION_RECRUITMENT_MESSAGE_CREATE";
+pub const AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE: &str = "AUCTION_RECRUITMENT_MESSAGE_UPDATE";
+pub const AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE: &str = "AUCTION_RECRUITMENT_MESSAGE_DELETE";
+pub const AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION: u16 = 2;
+// Existing outbox rows can still contain the pre-rules payload.
+const LEGACY_AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION: u16 = 1;
 pub const ENTRY_CONFIRMATION_CREATE_TYPE: &str = "ENTRY_CONFIRMATION_CREATE";
 pub const ENTRY_CONFIRMATION_SCHEMA_VERSION: u16 = 1;
 pub const SERIES_RESULT_CREATE_TYPE: &str = "SERIES_RESULT_CREATE";
 pub const SERIES_RESULT_SCHEMA_VERSION: u16 = 2;
+pub const AUCTION_TOURNAMENT_RESULT_CREATE_TYPE: &str = "AUCTION_TOURNAMENT_RESULT_CREATE";
+pub const AUCTION_TOURNAMENT_RESULT_SCHEMA_VERSION: u16 = 1;
+pub const AUCTION_TOURNAMENT_RESULT_DELETE_TYPE: &str = "AUCTION_TOURNAMENT_RESULT_DELETE";
+pub const AUCTION_TOURNAMENT_RESULT_DELETE_SCHEMA_VERSION: u16 = 1;
 
 const MAX_LEASE_OWNER_BYTES: usize = 128;
 const MAX_DEDUPLICATION_KEY_BYTES: usize = 255;
@@ -61,6 +74,14 @@ pub enum EnqueueNotificationOutcome {
 pub struct RecruitmentMessageNotificationPayload {
     pub schema_version: u16,
     pub recruitment_id: crate::domain::RecruitmentId,
+    pub snapshot: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuctionRecruitmentMessageNotificationPayload {
+    pub schema_version: u16,
+    pub auction_recruitment_id: AuctionRecruitmentId,
     pub snapshot: Value,
 }
 
@@ -131,6 +152,13 @@ pub struct RecruitmentMessageAcknowledgement {
     pub notification: AcknowledgedNotification,
     pub recruitment_id: crate::domain::RecruitmentId,
     pub recruitment_revision: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuctionRecruitmentMessageAcknowledgement {
+    pub notification: AcknowledgedNotification,
+    pub auction_recruitment_id: AuctionRecruitmentId,
+    pub auction_recruitment_revision: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,16 +279,27 @@ pub async fn claim(
                 OR notification.lease_until < claim_clock.current_time
            )
            AND (
-                notification.notification_type NOT IN ($3, $4, $5)
+                notification.notification_type NOT IN ($3, $4, $5, $6, $7, $8)
                 OR NOT EXISTS (
                     SELECT 1
                     FROM bot_notification_outbox AS earlier
                     WHERE earlier.guild_id = notification.guild_id
-                      AND earlier.notification_type IN ($3, $4, $5)
                       AND earlier.delivered_at IS NULL
                       AND earlier.failed_at IS NULL
-                      AND earlier.payload ->> 'recruitmentId'
-                          = notification.payload ->> 'recruitmentId'
+                      AND (
+                          (
+                              notification.notification_type IN ($3, $4, $5)
+                              AND earlier.notification_type IN ($3, $4, $5)
+                              AND earlier.payload ->> 'recruitmentId'
+                                  = notification.payload ->> 'recruitmentId'
+                          )
+                          OR (
+                              notification.notification_type IN ($6, $7, $8)
+                              AND earlier.notification_type IN ($6, $7, $8)
+                              AND earlier.payload ->> 'auctionRecruitmentId'
+                                  = notification.payload ->> 'auctionRecruitmentId'
+                          )
+                      )
                       AND (earlier.created_at, earlier.id)
                           < (notification.created_at, notification.id)
                 )
@@ -274,6 +313,9 @@ pub async fn claim(
     .bind(RECRUITMENT_MESSAGE_CREATE_TYPE)
     .bind(RECRUITMENT_MESSAGE_UPDATE_TYPE)
     .bind(RECRUITMENT_MESSAGE_DELETE_TYPE)
+    .bind(AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE)
+    .bind(AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE)
+    .bind(AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE)
     .fetch_all(&mut **transaction)
     .await?;
 
@@ -359,11 +401,21 @@ async fn acknowledge(
     .await?
     .ok_or(NotificationOutboxError::LeaseConflict)?;
     match mode {
-        AcknowledgementMode::Generic if notification_type == RECRUITMENT_MESSAGE_CREATE_TYPE => {
+        AcknowledgementMode::Generic
+            if matches!(
+                notification_type.as_str(),
+                RECRUITMENT_MESSAGE_CREATE_TYPE | AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE
+            ) =>
+        {
             return Err(NotificationOutboxError::RecruitmentMessageCreateRequiresTypedAck);
         }
         AcknowledgementMode::RecruitmentMessageCreate
             if notification_type != RECRUITMENT_MESSAGE_CREATE_TYPE =>
+        {
+            return Err(NotificationOutboxError::UnexpectedNotificationType);
+        }
+        AcknowledgementMode::AuctionRecruitmentMessageCreate
+            if notification_type != AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE =>
         {
             return Err(NotificationOutboxError::UnexpectedNotificationType);
         }
@@ -507,6 +559,107 @@ pub async fn ack_recruitment_message(
     })
 }
 
+pub async fn ack_auction_recruitment_message(
+    transaction: &mut DatabaseTransaction,
+    request: &AckNotification<'_>,
+) -> Result<AuctionRecruitmentMessageAcknowledgement, NotificationOutboxError> {
+    let notification = acknowledge(
+        transaction,
+        request,
+        AcknowledgementMode::AuctionRecruitmentMessageCreate,
+    )
+    .await?;
+    let payload = serde_json::from_value::<AuctionRecruitmentMessageNotificationPayload>(
+        notification.payload.clone(),
+    )
+    .map_err(|_| NotificationOutboxError::InvalidAuctionRecruitmentMessagePayload)?;
+    if !is_supported_auction_recruitment_message_schema_version(payload.schema_version)
+        || !payload.snapshot.is_object()
+    {
+        return Err(NotificationOutboxError::InvalidAuctionRecruitmentMessagePayload);
+    }
+
+    let binding = sqlx::query_as::<_, RecruitmentBindingRow>(
+        "UPDATE auction_recruitments
+         SET channel_id = $1,
+             message_id = $2,
+             revision = CASE
+                 WHEN message_id IS NULL THEN revision + 1
+                 ELSE revision
+             END,
+             updated_at = CASE
+                 WHEN message_id IS NULL THEN $3
+                 ELSE updated_at
+             END
+         WHERE guild_id = $4
+           AND id = $5
+           AND (
+                message_id IS NULL
+                OR (channel_id = $1 AND message_id = $2)
+           )
+         RETURNING revision, status",
+    )
+    .bind(&notification.channel_id)
+    .bind(&notification.discord_message_id)
+    .bind(notification.delivered_at)
+    .bind(&notification.guild_id)
+    .bind(payload.auction_recruitment_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(NotificationOutboxError::AuctionRecruitmentMessageBindConflict)?;
+
+    let sent_revision = payload
+        .snapshot
+        .pointer("/recruitment/revision")
+        .and_then(Value::as_i64)
+        .ok_or(NotificationOutboxError::InvalidAuctionRecruitmentMessagePayload)?;
+    let notification_type = if binding.status == RecruitmentStatus::Cancelled {
+        Some(AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE)
+    } else if binding.revision > sent_revision.saturating_add(1) {
+        Some(AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE)
+    } else {
+        None
+    };
+    if let Some(notification_type) = notification_type {
+        let current_payload = auction_recruitment_message_payload(
+            transaction,
+            &notification.guild_id,
+            payload.auction_recruitment_id,
+        )
+        .await?;
+        let deduplication_key = match notification_type {
+            AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE => format!(
+                "auction-recruitment:{}:message:delete",
+                payload.auction_recruitment_id
+            ),
+            AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE => format!(
+                "auction-recruitment:{}:message:update:{}",
+                payload.auction_recruitment_id, binding.revision
+            ),
+            _ => unreachable!("only auction recruitment message lifecycle types are selected"),
+        };
+        enqueue(
+            transaction,
+            &EnqueueNotification {
+                id: NotificationId::new(),
+                guild_id: &notification.guild_id,
+                deduplication_key: &deduplication_key,
+                channel_id: &notification.channel_id,
+                notification_type,
+                payload: &current_payload,
+                created_at: notification.delivered_at,
+            },
+        )
+        .await?;
+    }
+
+    Ok(AuctionRecruitmentMessageAcknowledgement {
+        notification,
+        auction_recruitment_id: payload.auction_recruitment_id,
+        auction_recruitment_revision: binding.revision,
+    })
+}
+
 pub async fn recruitment_message_payload(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -566,6 +719,95 @@ pub async fn recruitment_message_payload(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(NotificationOutboxError::RecruitmentMessageBindConflict)
+}
+
+pub async fn auction_recruitment_message_payload(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    recruitment_id: AuctionRecruitmentId,
+) -> Result<Value, NotificationOutboxError> {
+    sqlx::query_scalar::<_, Value>(
+        "SELECT jsonb_build_object(
+             'schemaVersion', $3,
+             'auctionRecruitmentId', recruitment.id::text,
+             'snapshot', jsonb_build_object(
+                 'recruitment', jsonb_build_object(
+                     'id', recruitment.id::text,
+                     'displayNumber', recruitment.display_number,
+                     'title', recruitment.title,
+                     'format', recruitment.format,
+                     'rules', jsonb_build_object(
+                         'hardFearless', recruitment.hard_fearless,
+                         'semifinalBestOf', recruitment.semifinal_best_of,
+                         'finalBestOf', recruitment.final_best_of
+                     ),
+                     'participantCount', recruitment.target_count,
+                     'joinedParticipantCount', COALESCE((
+                         SELECT count(*)
+                         FROM auction_recruitment_participants AS joined
+                         WHERE joined.guild_id = recruitment.guild_id
+                           AND joined.recruitment_id = recruitment.id
+                           AND joined.status = 'JOINED'
+                     ), 0),
+                     'teamCount', CASE recruitment.format
+                         WHEN 'TEN_PERSON' THEN 2
+                         WHEN 'TWENTY_PERSON' THEN 4
+                     END,
+                     'status', recruitment.status,
+                     'revision', recruitment.revision,
+                     'channelId', recruitment.channel_id,
+                     'messageId', recruitment.message_id,
+                     'createdById', recruitment.created_by,
+                     'updatedAt', recruitment.updated_at,
+                     'href', format('/g/%s/auction/recruitments/%s', recruitment.guild_id, recruitment.id)
+                 ),
+                 'participants', COALESCE((
+                     SELECT jsonb_agg(
+                         jsonb_build_object(
+                             'id', participant.user_id,
+                             'displayName', member.display_name,
+                             'declaredLane', participant.declared_lane
+                         )
+                         ORDER BY participant.joined_at, participant.user_id
+                     )
+                     FROM auction_recruitment_participants AS participant
+                     JOIN guild_members AS member
+                       ON member.guild_id = participant.guild_id
+                      AND member.user_id = participant.user_id
+                     WHERE participant.guild_id = recruitment.guild_id
+                       AND participant.recruitment_id = recruitment.id
+                       AND participant.status = 'JOINED'
+                 ), '[]'::jsonb),
+                 'links', jsonb_build_object(
+                     'draft', CASE WHEN recruitment.status = 'CLOSED'
+                         THEN format('/g/%s/auction/recruitments/%s/draft', recruitment.guild_id, recruitment.id)
+                         ELSE NULL
+                     END
+                 ),
+                 'permissions', jsonb_build_object(
+                     'canManageMembers', false,
+                     'canClose', false,
+                     'canCancel', false
+                 )
+             )
+         )
+         FROM auction_recruitments AS recruitment
+         WHERE recruitment.guild_id = $1 AND recruitment.id = $2",
+    )
+    .bind(guild_id)
+    .bind(recruitment_id.as_uuid())
+    .bind(i32::from(AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION))
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(NotificationOutboxError::AuctionRecruitmentMessageBindConflict)
+}
+
+const fn is_supported_auction_recruitment_message_schema_version(version: u16) -> bool {
+    matches!(
+        version,
+        LEGACY_AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION
+            | AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION
+    )
 }
 
 pub async fn nack(
@@ -788,6 +1030,7 @@ enum FailureDisposition {
 enum AcknowledgementMode {
     Generic,
     RecruitmentMessageCreate,
+    AuctionRecruitmentMessageCreate,
 }
 
 fn classify_failure(
@@ -918,8 +1161,12 @@ pub enum NotificationOutboxError {
     UnexpectedNotificationType,
     #[error("recruitment message notification payload is invalid")]
     InvalidRecruitmentMessagePayload,
+    #[error("auction recruitment message notification payload is invalid")]
+    InvalidAuctionRecruitmentMessagePayload,
     #[error("recruitment message cannot be bound to the notification target")]
     RecruitmentMessageBindConflict,
+    #[error("auction recruitment message cannot be bound to the notification target")]
+    AuctionRecruitmentMessageBindConflict,
     #[error("PostgreSQL notification outbox operation failed")]
     Sql(#[from] sqlx::Error),
 }
@@ -944,6 +1191,20 @@ mod tests {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
         );
+    }
+
+    #[test]
+    fn auction_recruitment_message_ack_accepts_legacy_and_current_schemas() {
+        assert!(is_supported_auction_recruitment_message_schema_version(
+            LEGACY_AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION
+        ));
+        assert!(is_supported_auction_recruitment_message_schema_version(
+            AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION
+        ));
+        assert!(!is_supported_auction_recruitment_message_schema_version(0));
+        assert!(!is_supported_auction_recruitment_message_schema_version(
+            AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION + 1
+        ));
     }
 
     #[test]

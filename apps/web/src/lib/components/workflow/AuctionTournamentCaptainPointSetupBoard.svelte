@@ -1,96 +1,190 @@
 <script lang="ts">
-	import { Check, Search } from 'lucide-svelte';
+	import { Check, LoaderCircle, Play, Save, Search } from 'lucide-svelte';
 	import { untrack } from 'svelte';
-	import { laneLabel, type MockAuctionMember } from '$lib/fixtures/workflow';
-	import PlayerAvatar from './PlayerAvatar.svelte';
+	import type {
+		AuctionSetupDraft,
+		AuctionSetupConfiguredTeam,
+		AuctionSetupParticipant,
+		AuctionSetupTeam
+	} from '$lib/contracts/auctionTournamentSetup';
+	import type { ChampionPreferenceLane } from '$lib/contracts/workflow';
 	import PositionIcon from './PositionIcon.svelte';
 
+	export type AuctionSetupBoardCommand = {
+		expectedRevision: number;
+		teams: AuctionSetupConfiguredTeam[];
+	};
+
 	interface Props {
-		initialMembers: MockAuctionMember[];
-		initialCaptainIds?: string[];
-		teamCount?: number;
-		initialPoints?: number;
-		profileIconVersion?: string | null;
+		draft: AuctionSetupDraft;
+		participants: AuctionSetupParticipant[];
+		canEdit?: boolean;
+		canCreateTournament?: boolean;
+		busy?: boolean;
+		onSave?: (command: AuctionSetupBoardCommand) => void | Promise<void>;
+		onCreate?: (command: AuctionSetupBoardCommand) => void | Promise<void>;
 	}
 
 	let {
-		initialMembers,
-		initialCaptainIds = [],
-		teamCount = 4,
-		initialPoints = 1000,
-		profileIconVersion = null
+		draft,
+		participants,
+		canEdit = false,
+		canCreateTournament = false,
+		busy = false,
+		onSave,
+		onCreate
 	}: Props = $props();
 
-	let captainIds = $state<string[]>(untrack(() => initialCaptainIds.slice(0, teamCount)));
-	let pointInputs = $state<string[]>(
-		untrack(() => Array.from({ length: teamCount }, () => String(initialPoints)))
-	);
-	let query = $state('');
+	const laneLabels: Record<ChampionPreferenceLane, string> = {
+		TOP: '탑',
+		JUNGLE: '정글',
+		MID: '미드',
+		BOTTOM: '바텀',
+		SUPPORT: '서포트'
+	};
 
-	const normalizedQuery = $derived(query.trim().toLowerCase());
-	const teamIndexes = $derived(Array.from({ length: teamCount }, (_, index) => index));
-	const teamPoints = $derived(
-		teamIndexes.map((index) => pointInputNumber(pointInputs[index] ?? ''))
-	);
-	const validPointCount = $derived(teamPoints.filter((point) => point !== null).length);
-	const selectedCaptains = $derived(
-		captainIds
-			.map((id) => initialMembers.find((member) => member.id === id))
-			.filter((member): member is MockAuctionMember => Boolean(member))
-	);
-	const filteredMembers = $derived(
-		initialMembers.filter((member) => {
-			if (!normalizedQuery) return true;
-			return (
-				member.name.toLowerCase().includes(normalizedQuery) ||
-				laneLabel[member.role].toLowerCase().includes(normalizedQuery) ||
-				(member.riotTier ?? '').toLowerCase().includes(normalizedQuery)
-			);
-		})
-	);
-	const ready = $derived(selectedCaptains.length === teamCount && validPointCount === teamCount);
-
-	function pointInputNumber(value: string): number | null {
-		const parsed = Number(value.trim());
-		if (!Number.isFinite(parsed) || parsed <= 0) return null;
-		return Math.floor(parsed);
+	function sortedDraftTeams(source: AuctionSetupDraft): AuctionSetupTeam[] {
+		return source.teams.slice().sort((left, right) => left.teamIndex - right.teamIndex);
 	}
 
-	function toggleCaptain(memberId: string) {
-		if (captainIds.includes(memberId)) {
-			captainIds = captainIds.filter((id) => id !== memberId);
-			return;
-		}
-		if (captainIds.length >= teamCount) return;
-		captainIds = [...captainIds, memberId];
-	}
-
-	function updateTeamPoint(index: number, value: string) {
-		pointInputs = teamIndexes.map((teamIndex) =>
-			teamIndex === index ? value : (pointInputs[teamIndex] ?? '')
+	function captainIdsFromDraft(source: AuctionSetupDraft): string[] {
+		return sortedDraftTeams(source).flatMap((team) =>
+			team.captainUserId === null ? [] : [team.captainUserId]
 		);
 	}
 
-	function captainOrder(memberId: string): number | null {
-		const index = captainIds.indexOf(memberId);
+	function pointInputsFromDraft(source: AuctionSetupDraft): string[] {
+		return sortedDraftTeams(source).map((team) => String(team.initialPoints));
+	}
+
+	let appliedRevision = $state(untrack(() => draft.revision));
+	let captainIds = $state<string[]>(untrack(() => captainIdsFromDraft(draft)));
+	let pointInputs = $state<string[]>(untrack(() => pointInputsFromDraft(draft)));
+	let query = $state('');
+
+	$effect(() => {
+		if (draft.revision === appliedRevision) return;
+		appliedRevision = draft.revision;
+		captainIds = captainIdsFromDraft(draft);
+		pointInputs = pointInputsFromDraft(draft);
+		query = '';
+	});
+
+	const teams = $derived(sortedDraftTeams(draft));
+	const teamCount = $derived(draft.teamCount);
+	const normalizedQuery = $derived(query.trim().toLocaleLowerCase('ko-KR'));
+	const participantsById = $derived(
+		new Map(participants.map((participant) => [participant.id, participant]))
+	);
+	const selectedCaptains = $derived(
+		captainIds
+			.map((id) => participantsById.get(id))
+			.filter((participant): participant is AuctionSetupParticipant => Boolean(participant))
+	);
+	const teamPoints = $derived(teams.map((_, index) => pointInputNumber(pointInputs[index] ?? '')));
+	const currentTeams = $derived(
+		teams.map((team, index) => ({
+			...team,
+			captainUserId: captainIds[index] ?? null,
+			initialPoints: pointInputNumber(pointInputs[index] ?? '') ?? team.initialPoints
+		}))
+	);
+	const isDirty = $derived(
+		currentTeams.some((team, index) => {
+			const persisted = teams[index];
+			return (
+				persisted !== undefined &&
+				(team.captainUserId !== persisted.captainUserId ||
+					team.initialPoints !== persisted.initialPoints)
+			);
+		})
+	);
+	const ready = $derived(
+		captainIds.length === teamCount &&
+			selectedCaptains.length === teamCount &&
+			teamPoints.length === teamCount &&
+			teamPoints.every((point) => point !== null)
+	);
+	const canSave = $derived(Boolean(onSave) && canEdit && !busy && ready && isDirty);
+	const canStart = $derived(Boolean(onCreate) && canCreateTournament && !busy && ready && !isDirty);
+	const saveLabel = $derived(isDirty ? '설정 저장' : ready ? '저장됨' : '설정 대기');
+	const filteredParticipants = $derived(
+		participants.filter((participant) => {
+			if (!normalizedQuery) return true;
+			return (
+				participant.displayName.toLocaleLowerCase('ko-KR').includes(normalizedQuery) ||
+				declaredLaneLabel(participant.declaredLane)
+					.toLocaleLowerCase('ko-KR')
+					.includes(normalizedQuery)
+			);
+		})
+	);
+
+	function pointInputNumber(value: string): number | null {
+		const parsed = Number(value.trim());
+		if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+		return parsed;
+	}
+
+	function participantInitial(displayName: string): string {
+		return displayName.slice(0, 1).toLocaleUpperCase('ko-KR');
+	}
+
+	function declaredLaneLabel(lane: ChampionPreferenceLane | null): string {
+		return lane ? laneLabels[lane] : '미설정';
+	}
+
+	function toggleCaptain(participantId: string) {
+		if (!canEdit || busy) return;
+		if (captainIds.includes(participantId)) {
+			captainIds = captainIds.filter((id) => id !== participantId);
+			return;
+		}
+		if (captainIds.length >= teamCount) return;
+		captainIds = [...captainIds, participantId];
+	}
+
+	function updateTeamPoint(index: number, value: string) {
+		if (!canEdit || busy) return;
+		pointInputs = pointInputs.map((point, pointIndex) => (pointIndex === index ? value : point));
+	}
+
+	function captainOrder(participantId: string): number | null {
+		const index = captainIds.indexOf(participantId);
 		return index === -1 ? null : index + 1;
 	}
 
-	function memberMeta(member: MockAuctionMember): string {
-		return `${member.riotTier ?? '-'} · MMR ${member.mmr} · ${laneLabel[member.role]}`;
+	function command(): AuctionSetupBoardCommand {
+		const configuredTeams = currentTeams.map((team) => {
+			if (team.captainUserId === null) {
+				throw new Error('auction_setup_incomplete');
+			}
+			return { ...team, captainUserId: team.captainUserId };
+		});
+		return { expectedRevision: draft.revision, teams: configuredTeams };
+	}
+
+	async function save() {
+		if (!canSave || !onSave) return;
+		await onSave(command());
+	}
+
+	async function startTournament() {
+		if (!canStart || !onCreate) return;
+		await onCreate(command());
 	}
 </script>
 
-<div class="grid gap-2 pb-2">
-	<div class="grid gap-2 xl:grid-cols-[minmax(24rem,34rem)_minmax(0,1fr)]">
+<div class="grid gap-2 pb-2" aria-busy={busy}>
+	<div class="grid gap-2 xl:grid-cols-[minmax(22rem,30rem)_minmax(0,1fr)]">
 		<section
-			class="grid h-[min(42rem,calc(100vh-14rem))] min-h-[32rem] grid-rows-[auto_minmax(0,1fr)] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)]"
+			class="grid grid-rows-[auto_minmax(0,1fr)] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] xl:h-[min(42rem,calc(100dvh-16rem))] xl:min-h-[30rem]"
 		>
 			<div class="border-b border-[var(--color-app-border-muted)] px-3 py-3">
 				<label
 					class="grid h-10 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 border border-[var(--color-app-border-muted)] bg-slate-950/35 px-3"
 				>
-					<Search size={15} class="text-slate-500" />
+					<Search size={15} class="text-slate-500" aria-hidden="true" />
 					<input
 						class="min-w-0 bg-transparent text-sm font-semibold text-slate-100 outline-none placeholder:text-slate-600"
 						placeholder="참가자 검색"
@@ -101,10 +195,10 @@
 
 			<div
 				role="list"
-				class="grid min-h-0 content-start gap-1.5 overflow-x-hidden overflow-y-auto overscroll-contain p-2 pr-[9px]"
+				class="grid min-h-0 content-start gap-1.5 p-2 pr-[9px] xl:overflow-x-hidden xl:overflow-y-auto xl:overscroll-contain"
 			>
-				{#each filteredMembers as member (member.id)}
-					{@const order = captainOrder(member.id)}
+				{#each filteredParticipants as participant (participant.id)}
+					{@const order = captainOrder(participant.id)}
 					<div role="listitem" class="min-w-0">
 						<button
 							type="button"
@@ -113,28 +207,27 @@
 									? 'border-amber-300/35 bg-amber-300/10'
 									: 'border-transparent bg-slate-950/20 hover:border-cyan-300/25 hover:bg-cyan-400/5'
 							}`}
-							onclick={() => toggleCaptain(member.id)}
-							disabled={!order && captainIds.length >= teamCount}
+							onclick={() => toggleCaptain(participant.id)}
+							disabled={!canEdit || busy || (!order && captainIds.length >= teamCount)}
 							aria-pressed={Boolean(order)}
 						>
-							<PlayerAvatar
-								name={member.name}
-								role={member.role}
-								avatarUrl={member.avatarUrl}
-								profileIconId={member.profileIconId}
-								{profileIconVersion}
-								size="sm"
-							/>
+							<span
+								class="grid size-8 shrink-0 place-items-center border border-[var(--color-app-border)] bg-[var(--color-app-control)] text-xs font-semibold text-slate-300"
+							>
+								{participantInitial(participant.displayName)}
+							</span>
 							<span class="min-w-0">
 								<span class="block truncate text-base font-semibold text-slate-100">
-									{member.name}
+									{participant.displayName}
 								</span>
 								<span class="block truncate text-xs font-medium text-slate-500">
-									{memberMeta(member)}
+									신청 라인 · {declaredLaneLabel(participant.declaredLane)}
 								</span>
 							</span>
 							<span class="grid min-w-16 justify-items-end gap-1">
-								<PositionIcon role={member.role} size="sm" />
+								{#if participant.declaredLane}
+									<PositionIcon role={participant.declaredLane} size="sm" />
+								{/if}
 								{#if order}
 									<span class="text-xs font-bold text-amber-100">{order}팀장</span>
 								{:else}
@@ -152,30 +245,28 @@
 		</section>
 
 		<section
-			class="grid h-[min(42rem,calc(100vh-14rem))] min-h-[32rem] grid-rows-[auto_minmax(0,1fr)_auto] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)]"
+			class="grid grid-rows-[auto_minmax(0,1fr)_auto] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] xl:h-[min(42rem,calc(100dvh-16rem))] xl:min-h-[30rem]"
 		>
 			<div class="border-b border-[var(--color-app-border-muted)] px-3 py-3">
-				<div>
-					<p class="text-base font-semibold text-slate-100">토너먼트 시작 설정</p>
-					<p class="mt-1 text-xs text-slate-500">
-						팀장과 팀별 시작 포인트가 확정되면 입찰 후보 풀이 생성됩니다.
-					</p>
-				</div>
+				<p class="text-base font-semibold text-slate-100">토너먼트 시작 설정</p>
+				<p class="mt-1 text-xs text-slate-500">
+					팀장과 팀별 시작 포인트를 저장한 뒤 입찰을 시작합니다.
+				</p>
 			</div>
 
 			<div
-				class="grid min-h-0 gap-2 overflow-x-hidden overflow-y-auto overscroll-contain p-3 pr-[13px]"
+				class="grid min-h-0 gap-2 p-3 pr-[13px] xl:overflow-x-hidden xl:overflow-y-auto xl:overscroll-contain"
 			>
 				<div class="grid min-h-0 content-start gap-2">
 					<div class="grid grid-cols-1 gap-2 md:grid-cols-2">
-						{#each teamIndexes as index (index)}
+						{#each teams as team, index (team.teamIndex)}
 							{@const captain = selectedCaptains[index] ?? null}
 							{@const point = teamPoints[index]}
 							<div
 								class="grid h-56 grid-rows-[auto_minmax(0,1fr)] gap-4 border border-[var(--color-app-border-muted)] bg-slate-950/20 p-4"
 							>
 								<div class="grid gap-2">
-									<p class="text-base font-semibold text-cyan-100">{index + 1}팀</p>
+									<p class="text-base font-semibold text-cyan-100">{team.teamName}</p>
 									<label class="grid gap-1">
 										<span class="text-[11px] font-semibold text-slate-500">시작 포인트</span>
 										<input
@@ -188,25 +279,25 @@
 													: 'border-amber-300/25 text-amber-100 focus:border-amber-300/50'
 											}`}
 											value={pointInputs[index] ?? ''}
+											disabled={!canEdit || busy}
 											oninput={(event) => updateTeamPoint(index, event.currentTarget.value)}
-											aria-label={`${index + 1}팀 시작 포인트`}
+											aria-label={`${team.teamName} 시작 포인트`}
 										/>
 									</label>
 								</div>
 								{#if captain}
 									<div class="flex min-h-0 items-center gap-3 overflow-hidden">
-										<PlayerAvatar
-											name={captain.name}
-											role={captain.role}
-											avatarUrl={captain.avatarUrl}
-											profileIconId={captain.profileIconId}
-											{profileIconVersion}
-											size="md"
-										/>
+										<span
+											class="grid size-12 shrink-0 place-items-center border border-[var(--color-app-border)] bg-[var(--color-app-control)] text-base font-semibold text-slate-200"
+										>
+											{participantInitial(captain.displayName)}
+										</span>
 										<div class="min-w-0">
-											<p class="truncate text-xl font-semibold text-slate-100">{captain.name}</p>
+											<p class="truncate text-xl font-semibold text-slate-100">
+												{captain.displayName}
+											</p>
 											<p class="mt-1 truncate text-sm font-medium text-slate-500">
-												{memberMeta(captain)}
+												신청 라인 · {declaredLaneLabel(captain.declaredLane)}
 											</p>
 										</div>
 									</div>
@@ -223,15 +314,39 @@
 				</div>
 			</div>
 
-			<div class="border-t border-[var(--color-app-border-muted)] p-3">
-				<button
-					type="button"
-					class="inline-flex h-12 w-full items-center justify-center gap-2 border border-emerald-300/35 bg-emerald-400/14 px-4 text-base font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-40"
-					disabled={!ready}
-				>
-					<Check size={16} />
-					입찰 준비 완료
-				</button>
+			<div class="grid gap-2 border-t border-[var(--color-app-border-muted)] p-3 sm:grid-cols-2">
+				{#if onSave}
+					<button
+						type="button"
+						class="inline-flex h-11 items-center justify-center gap-2 border border-cyan-300/35 bg-cyan-400/10 px-4 text-sm font-semibold text-cyan-100 enabled:hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-40"
+						disabled={!canSave}
+						onclick={save}
+					>
+						{#if busy}
+							<LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+						{:else if !isDirty}
+							<Check size={16} aria-hidden="true" />
+						{:else}
+							<Save size={16} aria-hidden="true" />
+						{/if}
+						{saveLabel}
+					</button>
+				{/if}
+				{#if onCreate}
+					<button
+						type="button"
+						class="inline-flex h-11 items-center justify-center gap-2 border border-emerald-300/35 bg-emerald-400/14 px-4 text-sm font-semibold text-emerald-100 enabled:hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-40"
+						disabled={!canStart}
+						onclick={startTournament}
+					>
+						{#if busy}
+							<LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+						{:else}
+							<Play size={16} aria-hidden="true" />
+						{/if}
+						입찰 시작
+					</button>
+				{/if}
 			</div>
 		</section>
 	</div>

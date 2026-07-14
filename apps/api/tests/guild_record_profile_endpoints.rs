@@ -1045,13 +1045,14 @@ async fn seed_auction_record_data(pool: &PgPool) -> TestResult {
     let semifinal_input_20 = Uuid::now_v7();
     let semifinal_game_20 = Uuid::now_v7();
 
-    for (recruitment_id, display_number, title, format, target_count) in [
+    for (recruitment_id, display_number, title, format, target_count, semifinal_best_of) in [
         (
             recruitment_10,
             10_i64,
             "10인 경매 모집",
             "TEN_PERSON",
             10_i16,
+            None,
         ),
         (
             recruitment_20,
@@ -1059,17 +1060,18 @@ async fn seed_auction_record_data(pool: &PgPool) -> TestResult {
             "20인 경매 모집",
             "TWENTY_PERSON",
             20_i16,
+            Some(3_i16),
         ),
     ] {
         sqlx::query(
             "INSERT INTO auction_recruitments (
                  guild_id, id, season_id, display_number, title, format, target_count,
-                 status, revision, channel_id, message_id, created_by, created_at,
+                 semifinal_best_of, status, revision, channel_id, message_id, created_by, created_at,
                  updated_by, updated_at, closed_at, converted_at, cancelled_at
              ) VALUES (
                  $1, $2, $3, $4, $5, $6, $7,
-                 'CONVERTED', 1, NULL, NULL, $8, clock_timestamp() - interval '10 days',
-                 $8, clock_timestamp(), clock_timestamp(), clock_timestamp(), NULL
+                 $8, 'CONVERTED', 1, NULL, NULL, $9, clock_timestamp() - interval '10 days',
+                 $9, clock_timestamp(), clock_timestamp(), clock_timestamp(), NULL
              )",
         )
         .bind(GUILD_A)
@@ -1079,18 +1081,28 @@ async fn seed_auction_record_data(pool: &PgPool) -> TestResult {
         .bind(title)
         .bind(format)
         .bind(target_count)
+        .bind(semifinal_best_of)
         .bind(VIEWER_ID)
         .execute(pool)
         .await?;
     }
 
-    for (tournament_id, recruitment_id, display_number, title, format, started_days_ago) in [
+    for (
+        tournament_id,
+        recruitment_id,
+        display_number,
+        title,
+        format,
+        semifinal_best_of,
+        started_days_ago,
+    ) in [
         (
             tournament_10,
             recruitment_10,
             10_i64,
             "10인 완료 경매",
             "TEN_PERSON",
+            None,
             5_i32,
         ),
         (
@@ -1099,20 +1111,21 @@ async fn seed_auction_record_data(pool: &PgPool) -> TestResult {
             20_i64,
             "20인 완료 경매",
             "TWENTY_PERSON",
+            Some(3_i16),
             6_i32,
         ),
     ] {
         sqlx::query(
             "INSERT INTO auction_tournaments (
                  guild_id, id, season_id, source_recruitment_id, display_number,
-                 title, format, status, revision, bracket_locked_at, bracket_locked_by,
+                 title, format, semifinal_best_of, status, revision, bracket_locked_at, bracket_locked_by,
                  champion_team_id, started_at, ended_at, created_by, updated_by,
                  updated_at, end_card_channel_id, end_card_message_id, deleted_at
              ) VALUES (
                  $1, $2, $3, $4, $5,
-                 $6, $7, 'IN_GAME', 1, clock_timestamp(), $8,
-                 NULL, clock_timestamp() - make_interval(days => $9), NULL,
-                 $8, $8, clock_timestamp(), NULL, NULL, NULL
+                 $6, $7, $8, 'IN_GAME', 1, clock_timestamp(), $9,
+                 NULL, clock_timestamp() - make_interval(days => $10), NULL,
+                 $9, $9, clock_timestamp(), NULL, NULL, NULL
              )",
         )
         .bind(GUILD_A)
@@ -1122,6 +1135,7 @@ async fn seed_auction_record_data(pool: &PgPool) -> TestResult {
         .bind(display_number)
         .bind(title)
         .bind(format)
+        .bind(semifinal_best_of)
         .bind(VIEWER_ID)
         .bind(started_days_ago)
         .execute(pool)

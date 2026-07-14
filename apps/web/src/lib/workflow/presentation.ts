@@ -118,17 +118,17 @@ export function buildSeriesView(
 	return { activeWork, completedSeries };
 }
 
-export type AuctionIconKind = 'recruitment' | 'bidding' | 'bracket' | 'completed';
+export type AuctionIconKind = 'recruitment' | 'bidding' | 'bracket' | 'completed' | 'archived';
 export interface AuctionWorkItem {
 	id: string;
 	displayNumber: number;
 	title: string;
-	kind: '모집' | '토너먼트' | '완료';
+	kind: '모집' | '토너먼트' | '완료' | '보관';
 	status: string;
 	detail: string;
 	href: string;
 	iconKind: AuctionIconKind;
-	tone: 'warning' | 'info' | 'success';
+	tone: 'neutral' | 'warning' | 'info' | 'success';
 	sortTimestamp: string;
 }
 
@@ -142,8 +142,11 @@ export function buildAuctionView(input: {
 		displayNumber: item.displayNumber,
 		title: item.title,
 		kind: '모집',
-		status: '팀장 설정',
-		detail: `${item.joinedParticipantCount}/${item.participantCount}명 · ${item.teamCount}팀`,
+		status: item.status === 'OPEN' ? '참가 모집' : '마감 명단',
+		detail:
+			item.status === 'OPEN'
+				? `${item.joinedParticipantCount}/${item.participantCount}명 · Discord 모집 중`
+				: `${item.joinedParticipantCount}/${item.participantCount}명 · ${item.teamCount}팀`,
 		href: item.href,
 		iconKind: 'recruitment',
 		tone: 'warning',
@@ -157,28 +160,48 @@ export function buildAuctionView(input: {
 			return item;
 		});
 	const completedWork = input.completedTournaments
-		.map((item) => {
-			const row: AuctionWorkItem = {
-				id: `tournament:${item.id}`,
-				displayNumber: item.displayNumber,
-				title: item.title,
-				kind: '완료',
-				status: '결과 확정',
-				detail: item.championTeam
-					? `${item.participantCount}인 · 우승 ${item.championTeam.name}`
-					: `${item.participantCount}인 · 우승팀 미정`,
-				href: item.href,
-				iconKind: 'completed',
-				tone: 'success',
-				sortTimestamp: item.updatedAt
-			};
-			return row;
-		})
+		.map((item) =>
+			item.status === 'CANCELLED'
+				? mapArchivedAuctionTournament(item)
+				: mapCompletedAuctionTournament(item)
+		)
 		.map(({ sortTimestamp, ...item }) => {
 			void sortTimestamp;
 			return item;
 		});
 	return { activeWork, completedWork };
+}
+
+function mapCompletedAuctionTournament(item: AuctionTournamentDto): AuctionWorkItem {
+	return {
+		id: `tournament:${item.id}`,
+		displayNumber: item.displayNumber,
+		title: item.title,
+		kind: '완료',
+		status: '결과 확정',
+		detail: item.championTeam
+			? `${item.participantCount}인 · 우승 ${item.championTeam.name}`
+			: `${item.participantCount}인 · 우승팀 미정`,
+		href: item.href,
+		iconKind: 'completed',
+		tone: 'success',
+		sortTimestamp: item.updatedAt
+	};
+}
+
+function mapArchivedAuctionTournament(item: AuctionTournamentDto): AuctionWorkItem {
+	return {
+		id: `tournament:${item.id}`,
+		displayNumber: item.displayNumber,
+		title: item.title,
+		kind: '보관',
+		status: '취소됨',
+		detail: `${item.participantCount}인 · 운영 취소됨`,
+		href: item.href,
+		iconKind: 'archived',
+		tone: 'neutral',
+		sortTimestamp: item.updatedAt
+	};
 }
 
 function mapActiveAuctionTournament(item: AuctionTournamentDto): AuctionWorkItem {

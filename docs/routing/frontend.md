@@ -37,7 +37,7 @@ Workflow root는 API의 UUID `id`와 사람용 `displayNumber`를 구분한다. 
 
 ## 실시간 편집 UI 규칙
 
-WebSocket을 사용하는 작업 화면은 현재 component 계약처럼 상태를 두 축으로 제공한다.
+동시 편집용 WebSocket을 사용하는 작업 화면은 현재 component 계약처럼 상태를 두 축으로 제공한다.
 
 - connection: `connected`, `reconnecting`, `offline`.
 - save: `saved`, `saving`, `dirty`, `conflict`.
@@ -52,10 +52,13 @@ WebSocket을 사용하는 작업 화면은 현재 component 계약처럼 상태�
 ```txt
 /g/[guildId]/recruitments/[id]/entry       entry draft autosave + conflict notice
 /g/[guildId]/series/[id]/pick-ban          pick/ban autosave + game result command guard
-/g/[guildId]/auction/recruitments/[id]/draft captain/point setup revision + conflict notice
-/g/[guildId]/auction/tournaments/[id]/draft live auction revision + guarded command
-/g/[guildId]/auction/tournaments/[id]/bracket lineup/result revision + command guard
+/g/[guildId]/auction/recruitments/[id]      operator roster invalidate refresh
 ```
+
+경매 준비 설정, 입찰, 브래킷, 경기 작업대는 현재 WebSocket을 열지 않는다. 해당 route는 authoritative HTTP
+snapshot, `expectedRevision`, CSRF, idempotency key로 충돌을 처리하고 `409`이면 최신 snapshot을 다시 읽는다.
+경매 모집 상세의 operator roster refresh만 `guild:{guildId}:auction-recruitment:{id}` invalidate를 구독한다.
+이는 background HTTP refresh 전용이며 local draft나 `RealtimeEditStateBar`를 표시하는 동시 편집 화면이 아니다.
 
 일반 내전 엔트리 편성은 하나의 recruitment ID를 쓰더라도 두 revision domain을 구분한다. 제한적 realtime이
 활성화되면 `guild:{guildId}:recruitment:{id}`는 `snapshot.recruitment.revision`으로,
@@ -443,14 +446,56 @@ WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 
 - 상단에는 경매 모집과 진행 중 경매 토너먼트, 하단에는 완료된 경매를 표시한다.
 - 팀장 설정, 입찰 진행, 브래킷 진행, 결과 입력, 결과 확정 상태를 구분한다.
+- ACTIVE guild member가 10인 또는 20인 형식, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
+  dialog를 제공한다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
+  목록을 낙관적으로 추가하지 않고, `201` snapshot의 `recruitment.href`로 OPEN 모집 상세 화면에 이동한다.
+- 생성 dialog는 Discord actor, title, 정원 또는 setup team 값을 직접 받지 않는다. format과 rules만 전송하고
+  target count, 표시 번호, 현재 season, Discord 발행 대상은 backend가 결정한다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/auction-recruitments?state=actionable`
 - `GET /api/guilds/:guildId/auction-tournaments?state=active`
 - `GET /api/guilds/:guildId/auction-tournaments?state=completed`
+- `POST /api/guilds/:guildId/auction-recruitments`
 
 WebSocket: 사용하지 않는다.
+
+### `/g/[guildId]/auction/recruitments/[id]`
+
+파일:
+
+- `apps/web/src/routes/g/[guildId]/auction/recruitments/[id]/+page.svelte`
+
+목적:
+
+- OPEN 경매 모집의 canonical 참가자 roster를 확인한다. Discord 참가와 Web 운영자 수동 참가가 같은 roster를
+  갱신한다.
+- 모집 header에는 backend snapshot의 규칙을 한 번만 압축해 표시한다. 10인은 `BO3 · 일반`, 20인은
+  `4강 BO1 · 결승 BO5 · 하드 피어리스`처럼 표시하며, roster와 목록에 같은 규칙을 반복하지 않는다.
+- `permissions.canManageMembers`가 true인 현재 active operator에게만 ACTIVE guild member picker를 제공한다.
+  추가할 member와 declared lane을 함께 선택하며, Discord user와 development dummy user는 같은 memberId 경로로
+  처리한다.
+- backend `permissions`가 허용할 때만 `모집 마감`, `모집 취소` action을 제공한다. 모집 마감의
+  정원/lifecycle 조건은 backend가 최종 검증한다.
+- 모집 마감 성공 응답의 `links.draft`로 실제 마감 명단 화면에 이동한다. CLOSED 모집은 같은 link를
+  바로 제공한다.
+
+Backend 데이터:
+
+- `GET /api/guilds/:guildId/auction-recruitments/:id`
+- `POST /api/guilds/:guildId/auction-recruitments/:id/members`
+- `DELETE /api/guilds/:guildId/auction-recruitments/:id/members/:userId`
+- `POST /api/guilds/:guildId/auction-recruitments/:id/close`
+- `DELETE /api/guilds/:guildId/auction-recruitments/:id`
+
+WebSocket:
+
+- `permissions.canManageMembers`가 true인 현재 active operator만
+  `guild:{guildId}:auction-recruitment:{id}`를 구독한다. `invalidate` 또는 `resync_required` 수신 뒤에는
+  authoritative HTTP snapshot을 다시 읽는다.
+- 일반 guild member는 socket을 열지 않고 HTTP read만 사용한다. 참가자 roster의 권위는 HTTP snapshot이며,
+  mutation 성공 뒤에는 응답 snapshot으로 교체한다.
 
 ### `/g/[guildId]/auction/recruitments/[id]/draft`
 
@@ -460,22 +505,27 @@ WebSocket: 사용하지 않는다.
 
 목적:
 
-- 경매 모집에서 토너먼트를 시작하는 화면.
-- 참가자 확인, 팀장 선출 단계로 전환.
+- CLOSED 경매 모집에서 팀장과 팀별 시작 포인트를 설정하고 입찰 토너먼트를 생성한다.
+- OPEN 모집으로 접근하면 모집 상세 route로 되돌린다. 팀 수는 saved format에서 정해지며 10인은 2팀,
+  20인은 4팀으로 고정한다.
+- 모집 때 확정한 준결승/결승 BO와 하드 피어리스는 header에서 읽기 전용으로 보인다. 이 route에서 format이나
+  경기 규칙을 다시 선택하지 않는다.
+- `permissions.canEdit`과 `permissions.canCreateTournament`가 허용한 operator만 설정 저장과 tournament
+  생성을 실행한다. 저장 및 생성 모두 setup draft revision을 사용한다.
 
 Bot 딥링크:
 
-- Discord 경매 모집 메시지의 `경매 시작` 액션에서 이 route로 이동한다.
+- CLOSED 모집의 `links.draft` 및 Discord 모집 메시지의 동일 링크에서 이 route로 이동한다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/auction-recruitments/:id`
+- `GET /api/guilds/:guildId/auction-recruitments/:id/setup-draft`
 - `PATCH /api/guilds/:guildId/auction-recruitments/:id/setup-draft`
 - `POST /api/guilds/:guildId/auction-tournaments`
 
-WebSocket:
-
-- `guild:{guildId}:auction-recruitment:{id}`
+WebSocket: 사용하지 않는다. 저장과 생성 성공 뒤에는 response의 authoritative setup/tournament snapshot으로
+교체하거나 응답 `tournament.href`로 이동한다.
 
 ### `/g/[guildId]/auction/tournaments/[id]/draft`
 
@@ -485,18 +535,17 @@ WebSocket:
 
 목적:
 
-- 경매 토너먼트 드래프트.
-- 후보 draw, 낙찰, 수동 배치, 유찰, 복구, 최근 단계 되돌리기.
-- 최근 입찰/수동 배치 단계 되돌리기.
+- `BIDDING` 단계의 경매 토너먼트 드래프트.
+- 후보 draw, 낙찰, 수동 배치, 유찰, 유찰 복구와 마지막 입찰/배치 단계 되돌리기를 제공한다.
+- 모든 팀 roster가 채워지면 server 상태가 `BRACKET_SETUP`으로 전환된다. Web은 local count로 다음 단계를
+  추론하지 않고 다음 snapshot의 status와 permissions를 따른다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/auction-tournaments/:id`
 - `POST /api/guilds/:guildId/auction-tournaments/:id/commands`
 
-WebSocket:
-
-- `guild:{guildId}:auction-tournament:{id}`
+WebSocket: 사용하지 않는다. command 성공과 `409` 충돌 복구 모두 tournament snapshot을 다시 적용한다.
 
 ### `/g/[guildId]/auction/tournaments/[id]/bracket`
 
@@ -506,31 +555,44 @@ WebSocket:
 
 목적:
 
-- 경매 브래킷, match별 라인업 입력, match game result 입력.
-- `?view=result`로 진입하면 `AuctionTournamentBracketResultBoard` 결과 입력 탭을 바로 연다.
-- 신규 match는 BO3이며 저장된 legacy BO1/BO3와 향후 BO5는 read DTO에서 그대로 표시한다. 현재
-  MVP에는 format 변경 control을 만들지 않는다.
-- match 생성, 양 팀 5인 라인업 확정, match game result 입력, 마지막 게임 삭제.
-- 게임 시작 전 TOP/JUNGLE/MID/BOTTOM/SUPPORT 라인업 입력을 반드시 지원한다.
-- 라인업 확정 취소와 match result 되돌리기는 길드 관리의 checkpoint 복구를 사용한다. bracket
-  화면에 별도 unlock command는 현재 제공하지 않는다.
-- 브래킷 화면은 운영자용 readiness/control dashboard를 별도로 두지 않는다.
-- match 상태 표시는 `AuctionMatchSummaryCard` 같은 compact 진입 카드 안에서만 최소한으로 제공한다.
-- match game result 입력은 별도 경매 전용 결과 입력 컴포넌트를 새로 만들지 않고 기존 game result 입력 흐름을 사용한다.
-
-컴포넌트 계획:
-
-- 완료: `AuctionTournamentBracketMatchSetupBoard`
-- 완료: `AuctionMatchStartingLineupInputBoard`
-- 다음: `AuctionMatchSummaryCard`
+- `BRACKET_SETUP` 단계에서 tournament 팀을 slot에 배치하고 bracket을 확정한다.
+- 10인은 결승 slot 두 개만, 20인은 두 준결승 slot 네 개를 표시한다. match의 BO는 saved rules에서 읽으며
+  화면이 BO3을 기본값으로 만들거나 바꾸지 않는다.
+- lock 뒤에는 현재 가능한 canonical match card를 `/g/[guildId]/auction/matches/[matchId]`로 연다.
+  라인업·픽밴·세트 결과는 이 route에 넣지 않는다.
+- 브래킷에는 결과 입력 탭이나 page-local 결과 board를 두지 않는다.
 
 Backend 데이터:
 
-- `GET /api/guilds/:guildId/auction-tournaments/:id`
+- `GET /api/guilds/:guildId/auction-tournaments/:id/bracket`
 - `POST /api/guilds/:guildId/auction-tournaments/:id/bracket/commands`
+
+WebSocket: 사용하지 않는다. bracket command 성공과 `409` 충돌 복구는 bracket snapshot을 다시 적용한다.
+
+### `/g/[guildId]/auction/matches/[matchId]`
+
+파일:
+
+- `apps/web/src/routes/g/[guildId]/auction/matches/[matchId]/+page.svelte`
+
+목적:
+
+- 한 경기에 대한 canonical 작업대다. 브래킷에서 선택한 match의 라인업 확정과 게임별 pick/ban·승패 입력을
+  한 authoritative snapshot으로 렌더링한다.
+- operator는 양 팀의 TOP/JUNGLE/MID/BOTTOM/SUPPORT를 각각 한 명씩 배치한 뒤 라인업을 확정한다. 확정 전에는
+  결과 입력을 허용하지 않는다.
+- 확정 뒤에는 saved `bestOf`, `hardFearless`, 이전 확정 게임, 현재 라인업을 기준으로 다음 세트만 입력한다.
+  같은 세트의 pick/ban 중복은 막고, 하드 피어리스는 이전 확정 세트의 pick을 현재 pick으로 다시 선택하지
+  못하게 한다. bans 자체는 과거 세트의 피어리스 금지 대상이 아니다.
+- 마지막 확정 게임은 capability가 있을 때만 되돌린다. 점수, match 상태, MMR은 client가 계산하지 않고
+  response snapshot으로 갱신한다.
+
+Backend 데이터:
+
 - `GET /api/guilds/:guildId/auction-matches/:matchId`
 - `PATCH /api/guilds/:guildId/auction-matches/:matchId/lineup`
 - `POST /api/guilds/:guildId/auction-matches/:matchId/lineup/lock`
+- `POST /api/guilds/:guildId/auction-matches/:matchId/lineup/unlock`
 - `POST /api/guilds/:guildId/auction-matches/:matchId/games`
 - `DELETE /api/guilds/:guildId/auction-matches/:matchId/games/last`
 
@@ -538,11 +600,11 @@ Backend 데이터:
 
 - lineups locked 전에는 `POST /api/guilds/:guildId/auction-matches/:matchId/games`를 호출할 수 없다.
 - 각 팀은 TOP/JUNGLE/MID/BOTTOM/SUPPORT가 정확히 1명씩 있어야 한다.
+- `permissions.canUnlockLineup`이 true일 때만 lock된 lineup의 recovery control을 보인다. unlock은 `READY`
+  상태이며 games와 game_inputs가 전혀 없는 경우에만 성공하므로 client가 자체 조건으로 override하지 않는다.
 
-WebSocket:
-
-- `guild:{guildId}:auction-tournament:{id}`
-- `guild:{guildId}:auction-match:{matchId}`
+WebSocket: 사용하지 않는다. 모든 mutation은 match revision과 idempotency key를 보내며, 충돌 뒤에는 같은
+canonical match snapshot을 다시 읽는다.
 
 ### `/g/[guildId]/auction/tournaments/[id]/result`
 
@@ -552,24 +614,17 @@ WebSocket:
 
 목적:
 
-- 경매 토너먼트 결과.
-- 우승 팀, match 결과, game ledger, pick/ban 기록 표시.
-- 경매 진행 요약은 self-service 입력 완료 후 참가자가 확인하는 원장으로 둔다.
-- 운영자용 control dashboard가 아니라 팀 구성, 포인트 정산, MMR 변화, match 스코어를 읽기 쉽게 정리한다.
-- 예외적으로 operator에게만 `결과 입력 되돌리기` 단일 command를 제공한다.
-
-컴포넌트 계획:
-
-- 완료: `AuctionTournamentOverviewBoard`
-- 통합: `AuctionPlayerLedgerBoard` 역할은 overview board의 참가자 정산 섹션에 포함한다.
-- 연결 필요: `onRevert(checkpointId, expectedRevision)` callback.
+- 경매 토너먼트의 read-only 결과 및 진행 요약이다.
+- 우승 팀이 아직 없거나 진행 중인 match가 있더라도 동일 snapshot을 일관되게 표시하며, 완료 후에는 팀 구성,
+  획득 포인트, MMR 변화, match score를 정리한다.
+- 이 route에는 결과 입력이나 checkpoint revert control을 두지 않는다. 해당 입력은 canonical match route에서
+  수행한다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/auction-tournaments/:id/result`
-- `POST /api/guilds/:guildId/reverts/:checkpointId/apply`
 
-WebSocket은 사용하지 않는다. Revert 성공 후 HTTP response/snapshot으로 이동하거나 갱신한다.
+WebSocket은 사용하지 않는다.
 
 ## 사용자 / 통계 Routes
 
@@ -985,9 +1040,11 @@ Backend 데이터:
 
 - `/g/[guildId]/series`
 - `/g/[guildId]/auction`
+- `/g/[guildId]/auction/recruitments/[id]`
 - `/g/[guildId]/auction/recruitments/[id]/draft`
 - `/g/[guildId]/auction/tournaments/[id]/draft`
 - `/g/[guildId]/auction/tournaments/[id]/bracket`
+- `/g/[guildId]/auction/matches/[matchId]`
 - `/g/[guildId]/auction/tournaments/[id]/result`
 - `/users/[discordId]`
 - `/g/[guildId]/leaderboard`

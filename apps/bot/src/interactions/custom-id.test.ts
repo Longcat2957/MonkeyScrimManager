@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseRecruitmentCustomId, recruitmentCustomId } from './custom-id.js';
+import {
+	auctionRecruitmentCustomId,
+	parseAuctionRecruitmentCustomId,
+	parseRecruitmentCustomId,
+	recruitmentCustomId
+} from './custom-id.js';
 
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 
@@ -25,5 +30,30 @@ describe('recruitment custom IDs', () => {
 
 	it('refuses to generate an ID for a non-UUID resource', () => {
 		expect(() => recruitmentCustomId('join', '214')).toThrow('requires a UUID');
+	});
+});
+
+describe('auction recruitment custom IDs', () => {
+	it('roundtrips join, leave, and lane actions without sharing the general recruitment namespace', () => {
+		for (const action of ['join', 'leave', 'lane'] as const) {
+			const customId = auctionRecruitmentCustomId(action, recruitmentId);
+			expect(customId.length).toBeLessThanOrEqual(100);
+			expect(parseAuctionRecruitmentCustomId(customId)).toEqual({ action, recruitmentId });
+			expect(parseRecruitmentCustomId(customId)).toBeNull();
+		}
+	});
+
+	it.each([
+		'',
+		`recruit:join:${recruitmentId}`,
+		`auction-recruit:start:${recruitmentId}`,
+		`auction-recruit:join:not-a-uuid`,
+		`auction-recruit:join:${recruitmentId}:extra`
+	])('rejects malformed or unsupported IDs: %s', (customId) => {
+		expect(parseAuctionRecruitmentCustomId(customId)).toBeNull();
+	});
+
+	it('refuses to generate an ID for a non-UUID resource', () => {
+		expect(() => auctionRecruitmentCustomId('join', '214')).toThrow('requires a UUID');
 	});
 });

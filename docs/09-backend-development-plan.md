@@ -58,7 +58,8 @@ Valkey는 Pub/Sub, presence, rate limit, 재생성 가능한 cache만 담당한�
 | Auction format    | TEN_PERSON, TWENTY_PERSON         |
 | Best of storage   | 1, 3, 5                           |
 | 일반 내전 format  | 모집 생성 시 BO1, BO3, BO5 선택   |
-| 경매 신규 match   | BO3                               |
+| 경매 10인 match   | 결승 BO1, BO3 또는 BO5            |
+| 경매 20인 match   | 4강/결승 각각 BO1, BO3 또는 BO5   |
 | Conflict          | HTTP 409 + revision_conflict      |
 
 상대 시각은 frontend가 만든다. BOTTOM의 UI label은 원딜로 표시할 수 있다.
@@ -663,7 +664,9 @@ Auction invariant:
 
 - TEN_PERSON: 2팀 결승.
 - TWENTY_PERSON: 4팀 준결승 A/B와 결승.
-- 신규 match는 BO3. 저장된 legacy BO1/BO3와 향후 BO5는 조회/score 계산에서 보존.
+- 모집 create에서 확정한 rules가 tournament와 match에 immutable snapshot으로 복사된다. 10인은 결승 BO,
+  20인은 두 준결승 공통 BO와 결승 BO를 독립 적용한다. 하드 피어리스는 각 match 내부의 이전 확정 세트에만
+  적용한다.
 - 양 팀 TOP/JUNGLE/MID/BOTTOM/SUPPORT 각 한 명.
 - lineup lock 전 result 거부.
 - 경매도 guild MMR 반영.
