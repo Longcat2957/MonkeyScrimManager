@@ -15,11 +15,6 @@
 		kicker="공유 기능"
 		title="Data Dragon 챔피언 카탈로그"
 		description="챔피언 얼굴, 이름, id, key, 검색 slug를 모든 작업대가 같은 방식으로 쓰기 위한 기반 화면입니다."
-		metrics={[
-			{ label: '버전', value: data.championCatalog.version, tone: 'info' },
-			{ label: '언어', value: data.championCatalog.locale },
-			{ label: '결과', value: data.results.length, tone: 'success' }
-		]}
 	>
 		{#snippet actions()}
 			<form

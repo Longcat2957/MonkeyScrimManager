@@ -57,6 +57,11 @@ WebSocket을 사용하는 작업 화면은 현재 component 계약처럼 상태�
 /g/[guildId]/auction/tournaments/[id]/bracket lineup/result revision + command guard
 ```
 
+일반 내전 엔트리 편성은 하나의 recruitment ID를 쓰더라도 두 revision domain을 구분한다. 제한적 realtime이
+활성화되면 `guild:{guildId}:recruitment:{id}`는 `snapshot.recruitment.revision`으로,
+`guild:{guildId}:recruitment-entry-draft:{id}`는 `snapshot.draft.revision`으로만 중복/역순 event를
+판정한다. 두 숫자를 서로 비교하거나 대체하지 않는다.
+
 상태 전이, autosave, 충돌 처리와 재연결 계약은 [Realtime Collaboration](../07-realtime-collaboration.md)을 따른다.
 
 ## App Shell
@@ -227,6 +232,45 @@ API 한 번으로 확정한다. 선택 group 추가는 별도 revision mutation�
 
 ## 일반 내전 Routes
 
+### `/g/[guildId]/recruitments/[id]`
+
+파일:
+
+- `apps/web/src/routes/g/[guildId]/recruitments/[id]/+page.server.ts`
+- `apps/web/src/routes/g/[guildId]/recruitments/[id]/+page.svelte`
+
+목적:
+
+- `OPEN` 모집의 엔트리 모집 현황과 참가자 roster를 확인한다.
+- 참가, 취소, 선호 라인 선택은 Discord 모집 메시지에서 처리한다.
+- `CLOSED` 모집일 때만 엔트리 편성 route로 이동한다.
+- 더미 참가자 전용 조작 UI는 두지 않는다. 더미 데이터는 persistent DB/API 개발 도구에서만 관리한다.
+- `OPEN`일 때 active operator에게만 현재 guild의 ACTIVE member를 추가하는 control을 제공한다.
+  대상은 Discord user와 dummy user를 같은 member picker에서 다루며 별도 더미 panel/filter를 만들지 않는다.
+- `OPEN`일 때 active operator에게만 각 roster 행의 compact 제거 control을 제공한다. 제거 성공 시 API가
+  반환한 snapshot으로 roster를 즉시 바꾸며, 동일 참가자에 대한 재시도는 같은 idempotency key를 사용한다.
+- 정원이 정확히 찬 `OPEN` 모집에서는 active operator에게만 `엔트리 편성 시작` action을 제공한다. 성공하면
+  close snapshot의 canonical entry link로 바로 이동하며, 요청 중에는 roster mutation과 모집 취소를 함께 막는다.
+- 모집 생성자 또는 active operator에게만 `OPEN|CLOSED` 취소 confirmation을 제공한다. `CLOSED`에서는
+  entry snapshot의 `canCancel`이 같은 권한/상태를 나타내며 entry route도 같은 DELETE command를 사용한다.
+  성공하면 series 작업 목록으로 이동하며, 취소된 모집 detail 또는 entry route를 계속 렌더링하지 않는다.
+- `Discord 모집 현황`, `참가 n / n`, `상태 모집 중`처럼 roster/header와 같은 정보를 반복하는 공통 summary
+  block은 이 route나 다른 컴포넌트에 사용하지 않는다.
+
+Backend 데이터:
+
+- `GET /api/guilds/:guildId/recruitments/:id`
+- operator member add: `POST /api/guilds/:guildId/recruitments/:id/members` with `{ memberId }`
+- operator participant remove: `DELETE /api/guilds/:guildId/recruitments/:id/members/:memberId` with `{}`
+- operator close for entry: `POST /api/guilds/:guildId/recruitments/:id/close` with `{}`
+- creator/operator cancel: `DELETE /api/guilds/:guildId/recruitments/:id` with no body
+
+WebSocket: 사용하지 않는다. Discord 변경 뒤 route 재진입 또는 새로고침은 최신 snapshot을 다시 조회한다.
+Browser-created 모집의 Discord 게시는 비동기 queue로 처리되므로 create 성공 직후 message ID가 null일 수
+있다. 운영자 수동 추가, 참가자 제거, 엔트리 편성 시작과 취소는 bound Discord message의 UPDATE/DELETE
+delivery를 queue에 맡긴다. UI는
+이를 별도 dashboard card로 중복 표현하지 않는다.
+
 ### `/g/[guildId]/recruitments/[id]/entry`
 
 파일:
@@ -237,9 +281,9 @@ API 한 번으로 확정한다. 선택 group 추가는 별도 revision mutation�
 
 - 일반 내전 엔트리 편성.
 - 참가자 팀/라인 배치.
-- draft autosave.
-- 모집 reopen.
-- series 생성. 현재 format control이 없으므로 신규 series는 BO3다.
+- server가 반환한 draft snapshot을 기준으로 한 즉시 저장.
+- `CLOSED` 모집을 다시 `OPEN` 모집 단계로 되돌리기.
+- 현재 배치를 미리보기로 확인.
 
 Bot 딥링크:
 
@@ -247,29 +291,27 @@ Bot 딥링크:
 
 Backend 데이터:
 
-- `GET /api/guilds/:guildId/recruitments/:id`
+- `GET /api/guilds/:guildId/recruitments/:id/entry-draft`
 - `PATCH /api/guilds/:guildId/recruitments/:id/entry-draft`
 - `POST /api/guilds/:guildId/recruitments/:id/entry-draft/reset`
 - `POST /api/guilds/:guildId/recruitments/:id/reopen`
-- `POST /api/guilds/:guildId/series`
+- creator/operator cancel: `DELETE /api/guilds/:guildId/recruitments/:id` with no body
 
-Service admin이면서 현재 길드 operator인 경우에만 `더미 참가자` 개발 panel을 추가로 표시한다.
+더미 참가자 배치는 persistent DB/API 개발 도구로만 처리한다. 일반 엔트리 모집과 엔트리 편성 route에는
+더미 전용 panel을 렌더링하지 않는다.
 
-- `GET /api/dev/guilds/:guildId/recruitments/:id/participants`
-- `POST /api/dev/guilds/:guildId/recruitments/:id/participants/preview`
-- `POST|DELETE /api/dev/guilds/:guildId/recruitments/:id/participants`
-- `GET /api/dev/dummy-users?state=ACTIVE&guildId=:guildId&limit=100&offset=0`
+route는 mount 시 `EntryDraftSnapshot`을 조회하고 loading/error/retry state를 직접 렌더링한다. 보드는
+controlled `participants`/`assignments`를 받고, drag/click 이동과 초기화는 현재 draft revision,
+CSRF, 새 browser idempotency key를 사용해 mutation한다. mutation 성공 후에는 optimistic local patch 대신
+반환된 snapshot 전체로 화면을 교체한다. `canEdit`/`canReset`/`canReopen`이 false면 해당 action을 숨기거나
+read-only로 둔다. `canCancel`은 creator 또는 active operator가 `OPEN|CLOSED` 모집을 취소할 수 있음을 뜻하며,
+성공하면 series 작업 목록으로 이동한다. 모집 되돌리기 성공 시 모집 detail route로 이동한다.
 
-Panel은 먼저 preview의 전체 issue와 예상 인원을 보여주고 `canApply=true`일 때만 적용한다. Apply에는
-preview의 `currentRevision`과 새 idempotency key를 전달하며 성공한 authoritative overview로 panel을
-갱신한다. 실제 참가자/entry draft 화면 갱신은 같은 recruitment topic invalidate 후 재조회 계약을 따른다.
-
-현재 mock page에 없는 reset/reopen/createSeries control은 API adapter 단계에서
-`EntryDraftBoard` callback으로 연결해야 하며 backend만 구현하고 숨겨 두지 않는다.
-
-WebSocket:
-
-- `guild:{guildId}:recruitment:{id}`
+route는 same-origin `/ws`에서 모집 topic과 entry-draft topic을 함께 구독하고, 두 topic이 모두 포함된
+`subscribed` ack 뒤에만 `RealtimeEditStateBar`를 connected로 표시한다. 전자는 roster/status/capability
+변경을 recruitment revision으로, 후자는 assignment/draft metadata 변경을 draft revision으로 처리한다. 더 큰
+revision의 invalidate, reconnect, browser focus, `resync_required`에서만 authoritative snapshot을 다시 조회한다.
+저장 중인 mutation은 완료될 때까지 재조회를 queue하고, server snapshot만 현재 화면의 source of truth로 사용한다.
 
 ### `/g/[guildId]/series`
 
@@ -279,7 +321,7 @@ WebSocket:
 
 목적:
 
-- 상단에는 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 일반 내전 작업 목록으로 보여준다.
+- 상단에는 엔트리 모집, 엔트리 편성, 픽밴, 결과 입력 상태를 일반 내전 작업 목록으로 보여준다.
 - 하단에는 완료된 일반 내전을 최신 순으로 보여준다.
 - pick-ban 또는 result route로 이동한다.
 - `RESULT`처럼 아직 game 입력이 필요한 작업은 pick-ban route로 이동하고, 완료된 row만 result
@@ -329,17 +371,19 @@ Bot 딥링크:
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/series/:id`
-- `PATCH /api/guilds/:guildId/series/:id/pickban`
-- `POST /api/guilds/:guildId/series/:id/games`
-- `DELETE /api/guilds/:guildId/series/:id/games/last`
 - `POST /api/guilds/:guildId/series/:id/revert`
+- `DELETE /api/guilds/:guildId/series/:id`
 
-현재 mock page에 연결되지 않은 submit/deleteLast/revert는 API adapter 단계에서
-`ScrimPickBanResultInputBoard` control로 연결한다.
+현재 page는 authoritative GET snapshot으로 frozen roster, MMR, Riot tier, 선호 챔피언과 현재 draft를
+렌더링한다. `canRevert`/`canDelete`가 true인 active operator만 명시 확인 dialog를 거쳐 lifecycle request를
+보낸다. `POST .../revert`는 source entry route로, `DELETE`는 series list로 이동한다. 두 action 모두
+CSRF, `Idempotency-Key`, `series.revision`을 사용하고 backend의 safe error message/request ID를 그대로
+표시한다. pick/ban 저장, game 확정, last-game rollback은 아직 endpoint가 없으므로 완료된 것처럼 표시하지
+않는다.
 
 WebSocket:
 
-- `guild:{guildId}:series:{id}`
+- 첫 slice에서는 사용하지 않는다. series realtime topic은 이후 game command가 추가될 때 연결한다.
 
 ### `/g/[guildId]/series/[id]/result`
 
@@ -902,6 +946,7 @@ Backend 데이터:
 - `/api/[...path]`
 - `/dd/[...path]`
 - `/g/[guildId]`
+- `/g/[guildId]/recruitments/[id]`
 - `/g/[guildId]/recruitments/[id]/entry`
 - `/g/[guildId]/series/[id]/pick-ban`
 - `/g/[guildId]/series/[id]/result`

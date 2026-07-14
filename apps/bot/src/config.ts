@@ -38,6 +38,7 @@ const environmentSchema = z
 		MONKEYBOT_BOT_HEALTH_ADDR: z.string().default('127.0.0.1:30030'),
 		MONKEYBOT_BOT_API_TIMEOUT_MS: positiveIntegerFromEnv(10_000, 100, 120_000),
 		MONKEYBOT_BOT_HEARTBEAT_INTERVAL_MS: positiveIntegerFromEnv(30_000, 1_000, 300_000),
+		MONKEYBOT_BOT_NOTIFICATION_POLL_INTERVAL_MS: positiveIntegerFromEnv(1_000, 250, 30_000),
 		MONKEYBOT_BOT_LOG_LEVEL: z
 			.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
 			.default('info')
@@ -60,6 +61,7 @@ export interface BotConfig {
 	healthPort: number;
 	apiTimeoutMs: number;
 	heartbeatIntervalMs: number;
+	notificationPollIntervalMs: number;
 	logLevel: BotLogLevel;
 }
 
@@ -100,6 +102,7 @@ export function loadBotConfig(environment: NodeJS.ProcessEnv = process.env): Bot
 		healthPort: health.port,
 		apiTimeoutMs: parsed.data.MONKEYBOT_BOT_API_TIMEOUT_MS,
 		heartbeatIntervalMs: parsed.data.MONKEYBOT_BOT_HEARTBEAT_INTERVAL_MS,
+		notificationPollIntervalMs: parsed.data.MONKEYBOT_BOT_NOTIFICATION_POLL_INTERVAL_MS,
 		logLevel: parsed.data.MONKEYBOT_BOT_LOG_LEVEL
 	};
 }

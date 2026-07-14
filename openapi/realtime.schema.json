@@ -1,19 +1,95 @@
 {
-	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"$id": "https://monkeybot.lol/schemas/realtime.schema.json",
-	"title": "MonkeyBot realtime event",
-	"type": "object",
-	"additionalProperties": false,
-	"required": ["type", "eventId", "topic", "resourceId", "revision", "occurredAt"],
-	"properties": {
-		"type": { "const": "invalidate" },
-		"eventId": { "type": "string", "format": "uuid" },
-		"topic": {
-			"type": "string",
-			"pattern": "^guild:[^:]+:(recruitment|series|auction-recruitment|auction-tournament|auction-match):[^:]+$"
-		},
-		"resourceId": { "type": "string", "minLength": 1 },
-		"revision": { "type": "integer", "minimum": 0 },
-		"occurredAt": { "type": "string", "format": "date-time" }
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://monkeybot.lol/schemas/realtime.schema.json",
+  "title": "MonkeyBot realtime frame",
+  "oneOf": [
+    { "$ref": "#/$defs/subscribe" },
+    { "$ref": "#/$defs/unsubscribe" },
+    { "$ref": "#/$defs/subscribed" },
+    { "$ref": "#/$defs/resyncRequired" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/invalidate" }
+  ],
+  "$defs": {
+    "topic": {
+      "type": "string",
+      "description": "Canonical aggregate topic. Only recruitment and recruitment-entry-draft subscriptions are active; the remaining kinds are reserved.",
+      "pattern": "^guild:[^:]+:(recruitment-entry-draft|recruitment|series|auction-recruitment|auction-tournament|auction-match):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "topicList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/topic" },
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true
+    },
+    "subscribe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "topics"],
+      "properties": {
+        "type": { "const": "subscribe" },
+        "topics": { "$ref": "#/$defs/topicList" }
+      }
+    },
+    "unsubscribe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "topics"],
+      "properties": {
+        "type": { "const": "unsubscribe" },
+        "topics": { "$ref": "#/$defs/topicList" }
+      }
+    },
+    "subscribed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "topics"],
+      "properties": {
+        "type": { "const": "subscribed" },
+        "topics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/topic" },
+          "maxItems": 16,
+          "uniqueItems": true
+        }
+      }
+    },
+    "resyncRequired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "resync_required" },
+        "topics": { "$ref": "#/$defs/topicList" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "code", "message"],
+      "properties": {
+        "type": { "const": "error" },
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "invalidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "eventId", "topic", "resourceId", "revision", "occurredAt"],
+      "properties": {
+        "type": { "const": "invalidate" },
+        "eventId": { "type": "string", "format": "uuid" },
+        "topic": { "$ref": "#/$defs/topic" },
+        "resourceId": { "type": "string", "format": "uuid" },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Revision of the aggregate selected by topic; never compare a recruitment-entry-draft event to a recruitment revision."
+        },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
 }

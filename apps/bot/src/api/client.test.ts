@@ -14,6 +14,8 @@ const dummyUserId = 'dmy_01900000-0000-7000-8000-000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const serviceToken = 's'.repeat(32);
+const notificationId = '01900000-0000-7000-8000-000000000301';
+const leaseToken = '01900000-0000-7000-8000-000000000302';
 
 const actor: Actor = {
 	id: userId,
@@ -31,6 +33,7 @@ const snapshot: RecruitmentSnapshot = {
 		status: 'OPEN',
 		targetCount: 10,
 		revision: 3,
+		createdById: userId,
 		channelId: null,
 		messageId: null,
 		updatedAt: '2026-07-13T10:00:00Z'
@@ -230,6 +233,78 @@ describe('MonkeyBotApiClient', () => {
 		expect(headers.get('authorization')).toBe(`Bearer ${serviceToken}`);
 		expect(headers.get('content-type')).toBe('application/json');
 		expect(headers.has('idempotency-key')).toBe(false);
+	});
+
+	it('uses internal notification routes with the typed contracts and no idempotency header', async () => {
+		const notifications = [
+			{
+				id: notificationId,
+				guildId,
+				leaseToken,
+				leaseUntil: '2026-07-13T10:00:30Z',
+				channelId: '500000000000000001',
+				type: 'RECRUITMENT_MESSAGE_CREATE',
+				payload: { schemaVersion: 1, recruitmentId, snapshot },
+				discordNonce: 'abcdefghijklmnopqrstuv',
+				attempts: 1
+			}
+		];
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			void init;
+			const path = new URL(String(input)).pathname;
+			if (path.endsWith('/claim')) return envelope({ notifications });
+			if (path.endsWith('/recruitment-message/ack')) {
+				return envelope({
+					acknowledged: true,
+					deliveredAt: '2026-07-13T10:00:01Z',
+					recruitment: { id: recruitmentId, revision: 4 }
+				});
+			}
+			if (path.endsWith('/ack')) {
+				return envelope({ acknowledged: true, deliveredAt: '2026-07-13T10:00:01Z' });
+			}
+			return envelope({ state: 'FAILED', failureCode: 'invalid_notification', attempts: 1 });
+		});
+		const client = createClient(fetchMock);
+		const claimInput = { instanceId: 'bot-test', limit: 10 };
+		const acknowledgement = {
+			instanceId: 'bot-test',
+			notificationId,
+			leaseToken,
+			discordMessageId: '600000000000000001'
+		};
+
+		await expect(client.claimNotifications(claimInput)).resolves.toEqual({ notifications });
+		await expect(client.acknowledgeNotification(acknowledgement)).resolves.toMatchObject({
+			acknowledged: true
+		});
+		await expect(client.acknowledgeRecruitmentMessage(acknowledgement)).resolves.toMatchObject({
+			acknowledged: true,
+			recruitment: { id: recruitmentId, revision: 4 }
+		});
+		await expect(
+			client.nackNotification({
+				instanceId: 'bot-test',
+				notificationId,
+				leaseToken,
+				failure: { kind: 'HTTP', status: 422, message: 'Unsupported bot notification type' }
+			})
+		).resolves.toMatchObject({ state: 'FAILED' });
+
+		expect(
+			fetchMock.mock.calls.map(([input, init]) => [String(input), (init as RequestInit).method])
+		).toEqual([
+			['http://api.local:8080/internal/notifications/claim', 'POST'],
+			['http://api.local:8080/internal/notifications/ack', 'POST'],
+			['http://api.local:8080/internal/notifications/recruitment-message/ack', 'POST'],
+			['http://api.local:8080/internal/notifications/nack', 'POST']
+		]);
+		for (const [, init] of fetchMock.mock.calls) {
+			const headers = new Headers((init as RequestInit).headers);
+			expect(headers.get('authorization')).toBe(`Bearer ${serviceToken}`);
+			expect(headers.get('content-type')).toBe('application/json');
+			expect(headers.has('idempotency-key')).toBe(false);
+		}
 	});
 
 	it('strictly validates Discord catalog request and response limits', async () => {

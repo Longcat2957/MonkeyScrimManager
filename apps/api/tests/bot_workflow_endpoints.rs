@@ -324,20 +324,39 @@ async fn run_bot_workflow() -> TestResult {
     )
     .await?;
 
-    assert_error(
-        bot_request(
-            &app,
-            Method::POST,
-            &format!("/api/guilds/{GUILD_A}/recruitments"),
-            BOT_TOKEN,
-            "non-operator-create",
-            &json!({ "actor": non_operator }),
-        )
-        .await?,
-        StatusCode::FORBIDDEN,
-        "operator_required",
+    let non_operator_created = bot_request(
+        &app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_A}/recruitments"),
+        BOT_TOKEN,
+        "non-operator-create",
+        &json!({ "actor": non_operator }),
     )
     .await?;
+    assert_eq!(non_operator_created.status(), StatusCode::CREATED);
+    let non_operator_created = body_json(non_operator_created).await?;
+    let non_operator_recruitment_id = non_operator_created["data"]["recruitment"]["id"]
+        .as_str()
+        .ok_or("non-operator create response did not contain a recruitment ID")?;
+
+    let non_operator_bound = bot_request(
+        &app,
+        Method::PUT,
+        &format!("/api/guilds/{GUILD_A}/recruitments/{non_operator_recruitment_id}/message"),
+        BOT_TOKEN,
+        "non-operator-bind-own-message",
+        &json!({
+            "actor": actor(MEMBER_IDS[1], "Non Operator", &[]),
+            "channelId": "400000000000000002",
+            "messageId": "500000000000000002"
+        }),
+    )
+    .await?;
+    assert_eq!(non_operator_bound.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(non_operator_bound).await?["data"]["recruitment"]["messageId"],
+        "500000000000000002"
+    );
 
     let bind_response = bot_request(
         &app,

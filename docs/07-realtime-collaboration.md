@@ -50,10 +50,12 @@ MVP의 충돌 정책은 `revision 검증 -> 409 Conflict -> 최신 snapshot 조�
 
 ## Aggregate와 Revision
 
-동시 편집 단위마다 하나의 aggregate revision을 가진다.
+동시 편집 단위마다 하나의 aggregate revision을 가진다. 일반 내전 모집과 엔트리 draft는 같은
+`recruitmentId`를 사용해도 별도 aggregate다.
 
 ```txt
-recruitment_entry_drafts.revision
+recruitments.revision                모집 상태, roster, Discord message lifecycle
+recruitment_entry_drafts.revision    참가자 배치와 entry workspace
 auction_setup_drafts.revision
 series.revision
 auction_tournament.revision
@@ -67,6 +69,14 @@ auction_match.revision
 - 실패하거나 rollback된 transaction은 revision을 증가시키지 않는다.
 - audit log, updated_at, updated_by는 같은 transaction에서 기록한다.
 - 같은 aggregate의 모든 GET 응답과 mutation 응답에 revision을 포함한다.
+- `guild:{guildId}:recruitment:{recruitmentId}` invalidate의 revision은 반드시
+  `recruitments.revision`이다.
+- `guild:{guildId}:recruitment-entry-draft:{recruitmentId}` invalidate의 revision은 반드시
+  `recruitment_entry_drafts.revision`이다.
+- 한 command가 모집과 entry draft를 함께 바꾸면 각 aggregate의 revision을 독립적으로 올린다. outbox는
+  해당 화면을 invalidate해야 하는 aggregate에 대해 하나 또는 두 topic을 선택할 수 있지만, 한 topic에
+  다른 aggregate revision을 넣지 않는다. 엔트리 route는 어느 topic event든 받은 뒤 composite snapshot을
+  다시 조회한다.
 
 조회 응답 예시:
 
@@ -182,16 +192,69 @@ Backend는 다음 순서를 지킨다.
 - subscribe 요청마다 guild membership과 resource 조회 권한을 확인한다.
 - client가 임의 guild 또는 다른 사용자의 topic을 구독하게 두지 않는다.
 - session이 만료되거나 권한이 제거되면 해당 subscription을 종료한다.
+- browser는 같은 origin의 `wss://<origin>/ws`(local에서는 `ws://`)만 연결한다. handshake에는 정확히 하나의
+  `Origin` header가 `MONKEYBOT_PUBLIC_ORIGIN`과 일치해야 한다.
+- handshake 전 session 검사를 수행한다. 인증되지 않은 요청은 websocket close가 아니라 일반 `401` JSON 오류로
+  끝난다.
+- frame/message 크기는 8 KiB, socket당 topic은 16개로 제한한다. server는 25초 ping, 75초 idle timeout을
+  사용하며 느린 client는 close할 수 있다.
 
 ### Topic 형식
 
 ```txt
 guild:{guildId}:recruitment:{recruitmentId}
+guild:{guildId}:recruitment-entry-draft:{recruitmentId}
 guild:{guildId}:series:{seriesId}
 guild:{guildId}:auction-recruitment:{recruitmentId}
 guild:{guildId}:auction-tournament:{tournamentId}
 guild:{guildId}:auction-match:{matchId}
 ```
+
+엔트리 편성 route는 제한적 realtime 단계가 활성화되면 두 topic을 모두 구독한다. 모집 topic은
+roster/status/capability 변경을, entry-draft topic은 assignment/draft metadata 변경을 알린다. 현재
+WebSocket을 사용하지 않는 HTTP-only route는 이 topic을 구독하지 않고 다음 snapshot 조회로 복구한다.
+
+현재 subscribe를 허용하는 범위는 일반 내전 엔트리의 아래 두 topic뿐이다.
+
+```txt
+guild:{guildId}:recruitment:{recruitmentId}
+guild:{guildId}:recruitment-entry-draft:{recruitmentId}
+```
+
+나머지 topic 형식은 outbox/namespace의 예약 계약이다. 해당 화면의 HTTP snapshot, 권한 검사, frontend
+재조회가 함께 준비되기 전에는 `/ws` subscribe가 `unsupported_topic`을 반환한다.
+
+### Client frame
+
+```json
+{ "type": "subscribe", "topics": ["guild:123:recruitment:0190f4a2-8b3c-7d5e-8f01-23456789abcd"] }
+```
+
+```json
+{ "type": "unsubscribe", "topics": ["guild:123:recruitment:0190f4a2-8b3c-7d5e-8f01-23456789abcd"] }
+```
+
+- unknown field, empty/duplicate/non-canonical topic은 거부한다.
+- subscribe 전체를 먼저 parse하고 각 topic의 guild membership과 현재 resource visibility를 확인한다.
+- client는 필요한 두 topic을 한 `subscribe` frame으로 보내고, 두 topic 모두 들어 있는 `subscribed` ack를
+  받은 뒤에만 `connected`를 표시한다.
+
+### Server control frame
+
+```json
+{ "type": "subscribed", "topics": ["guild:123:recruitment:0190f4a2-8b3c-7d5e-8f01-23456789abcd"] }
+```
+
+```json
+{ "type": "resync_required", "topics": ["guild:123:recruitment:0190f4a2-8b3c-7d5e-8f01-23456789abcd"] }
+```
+
+```json
+{ "type": "error", "code": "subscription_forbidden", "message": "해당 길드의 실시간 정보를 볼 권한이 없습니다." }
+```
+
+`resync_required`는 bounded local hub에서 lag가 발생했을 때 보내며, client는 revision 비교 없이 route의
+authoritative GET snapshot을 다시 읽는다. `error`는 민감한 내부 원인을 포함하지 않는다.
 
 MVP에서는 dashboard, 목록, records, leaderboard, profile, admin, result 원장에 WebSocket을 사용하지
 않는다. 경매 result의 operator 전용 checkpoint revert도 단일 HTTP command 후 snapshot을 갱신하며
@@ -214,10 +277,28 @@ MVP에서는 dashboard, 목록, records, leaderboard, profile, admin, result 원
 
 - event에 전체 aggregate 또는 민감한 payload를 넣지 않는다.
 - 단일 resource topic은 `resourceId`와 `revision`을 포함한다.
+- recruitment topic event는 `snapshot.recruitment.revision`과만 비교하고, entry-draft topic event는
+  `snapshot.draft.revision`과만 비교한다. 두 revision은 같은 숫자여도 상호 대체할 수 없다.
 - client는 현재 revision 이하의 중복 또는 역순 event를 무시한다.
 - 현재 revision보다 큰 event를 받으면 HTTP GET으로 snapshot을 다시 조회한다.
 - WebSocket event의 도착 순서와 HTTP response의 도착 순서는 보장된다고 가정하지 않는다.
 - outbox 전달은 at-least-once이므로 client는 eventId와 revision으로 중복을 허용하고 제거한다.
+
+## Relay 실행 경계
+
+각 API process는 process-wide outbox relay 하나를 실행한다. relay는 guild를 순회하지 않고
+`FOR UPDATE SKIP LOCKED`로 publish 가능한 row를 claim한 뒤 claim transaction을 먼저 commit한다. 이후에만
+Valkey `PUBLISH`를 수행하고, 성공하면 같은 lease owner/token으로 ack한다. publish 실패나 invalid event는
+짧은 retry delay로 nack한다. 외부 I/O 중 PostgreSQL row lock을 유지하지 않는다.
+
+Valkey가 설정된 development/production instance는
+`monkeybot:{env}:pubsub:{topic}` pattern을 구독해 local hub로 fan-out한다. publishing instance도 local hub에
+즉시 fan-out할 수 있으므로 subscriber 재연결 순간의 손실을 줄인다. 이 경로는 의도적으로 at-least-once이며
+중복 invalidate가 가능하다.
+
+Local/test에서 `MONKEYBOT_VALKEY_URL`이 비어 있으면 local hub relay를 사용한다. 이는 단일 API process
+개발 편의용일 뿐 multi-instance delivery를 보장하지 않는다. shared development traffic을 함께 검증할 때는
+반드시 private Valkey URL을 설정한다.
 
 ## Frontend 상태 머신
 
@@ -465,13 +546,13 @@ B가 최신 상태 반영 후 정상 저장
 - [ ] aggregate별 revision column과 migration.
 - [ ] 공통 `expectedRevision` request schema.
 - [ ] 공통 `revision_conflict` response schema.
-- [ ] guild-scoped topic builder.
-- [ ] session/guild permission 기반 subscribe guard.
-- [ ] transaction과 같은 commit에 outbox event 기록.
-- [ ] outbox relay와 resource invalidate client store.
+- [x] guild-scoped topic builder.
+- [x] session/guild permission 기반 subscribe guard.
+- [x] transaction과 같은 commit에 outbox event 기록.
+- [x] outbox relay와 resource invalidate client store.
 - [ ] aggregate별 single-flight autosave queue.
-- [ ] reconnect 후 subscribe + full refetch.
-- [ ] `RealtimeEditStateBar` 연결.
+- [x] reconnect 후 subscribe + full refetch.
+- [x] `RealtimeEditStateBar` 연결.
 - [ ] 일반 엔트리 two-client test.
 - [ ] 픽밴 two-client test.
 - [ ] 경매 finalize 경쟁 test.

@@ -675,7 +675,7 @@ export const recruitmentSchema = z
 		id: uuidSchema,
 		displayNumber: z.number().int().positive(),
 		title: z.string(),
-		status: z.literal('CLOSED'),
+		status: z.enum(['OPEN', 'CLOSED']),
 		targetCount: z.literal(10),
 		joinedCount: nonnegativeInteger,
 		assignedCount: nonnegativeInteger,

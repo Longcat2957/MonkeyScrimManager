@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::domain::{
     AuctionMatchId, AuctionRecruitmentId, AuctionTournamentId, AuctionTournamentStatus, GuildId,
-    RecruitmentId, SeriesId, SeriesStatus, UserId,
+    RecruitmentId, RecruitmentStatus, SeriesId, SeriesStatus, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,6 +132,7 @@ pub struct RecruitmentRecord {
     pub id: RecruitmentId,
     pub display_number: i64,
     pub title: String,
+    pub status: RecruitmentStatus,
     pub target_count: i16,
     pub participant_count: i64,
     pub assigned_count: i64,
@@ -435,6 +436,7 @@ pub async fn list_actionable_recruitments(
                     recruitment.id,
                     recruitment.display_number,
                     recruitment.title,
+                    recruitment.status,
                     recruitment.target_count,
                     recruitment.revision,
                     recruitment.updated_at
@@ -447,7 +449,7 @@ pub async fn list_actionable_recruitments(
               AND viewer.user_id = $1
               AND viewer.status = 'ACTIVE'
              WHERE recruitment.guild_id = $2
-               AND recruitment.status = 'CLOSED'
+               AND recruitment.status IN ('OPEN', 'CLOSED')
                AND recruitment.converted_at IS NULL
                AND NOT EXISTS (
                    SELECT 1
@@ -467,6 +469,7 @@ pub async fn list_actionable_recruitments(
          SELECT page.id,
                 page.display_number,
                 page.title,
+                page.status,
                 page.target_count,
                 page.revision,
                 page.updated_at,
@@ -988,6 +991,7 @@ struct RecruitmentRow {
     id: RecruitmentId,
     display_number: i64,
     title: String,
+    status: RecruitmentStatus,
     target_count: i16,
     revision: i64,
     updated_at: OffsetDateTime,
@@ -1008,6 +1012,7 @@ impl RecruitmentRow {
             id: self.id,
             display_number: self.display_number,
             title: self.title,
+            status: self.status,
             target_count: self.target_count,
             participant_count: self.participant_count,
             assigned_count: self.assigned_count,

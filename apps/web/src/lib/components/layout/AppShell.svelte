@@ -90,7 +90,13 @@
 		activeGuildId ? resolve('/g/[guildId]', { guildId: activeGuildId }) : ''
 	);
 	const staticDocumentRouteIds = ['/docs', '/terms', '/privacy'];
-	const showQuickActionFab = $derived(!staticDocumentRouteIds.includes(page.route.id ?? ''));
+	const viewportWorkspaceRouteIds = ['/g/[guildId]/recruitments/[id]'];
+	const usesViewportWorkspace = $derived(
+		viewportWorkspaceRouteIds.includes(page.route.id ?? '')
+	);
+	const showQuickActionFab = $derived(
+		!staticDocumentRouteIds.includes(page.route.id ?? '') && !usesViewportWorkspace
+	);
 	const navItems: NavItem[] = $derived(
 		activeGuildId
 			? [
@@ -246,7 +252,11 @@
 	}
 </script>
 
-<div class="flex min-h-screen flex-col bg-[var(--color-app-bg)] text-slate-100">
+<div
+	class={`flex flex-col bg-[var(--color-app-bg)] text-slate-100 ${
+		usesViewportWorkspace ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'
+	}`}
+>
 	<header
 		class="sticky top-0 z-20 shrink-0 border-b border-[var(--color-app-border)] bg-[var(--color-app-header)] backdrop-blur"
 	>
@@ -539,7 +549,7 @@
 		></button>
 	{/if}
 
-	<div class="flex min-h-0 flex-1 flex-col">
+	<div class={`flex min-h-0 flex-1 flex-col ${usesViewportWorkspace ? 'overflow-hidden' : ''}`}>
 		{#if navigating.to}
 			<div
 				transition:fade={{ duration: 120, easing: cubicOut }}
@@ -561,9 +571,9 @@
 
 		<main
 			inert={searchOpen}
-			class={`mx-auto w-full min-w-0 max-w-[1680px] flex-1 px-4 pt-5 transition-[filter,opacity] duration-150 lg:px-6 ${
+			class={`mx-auto flex min-h-0 w-full min-w-0 max-w-[1680px] flex-1 flex-col px-4 pt-5 transition-[filter,opacity] duration-150 lg:px-6 ${
 				showQuickActionFab ? 'pb-40 lg:pb-36' : 'pb-5'
-			} ${searchOpen ? 'blur-[2px] opacity-55' : ''}`}
+			} ${usesViewportWorkspace ? 'overflow-hidden' : ''} ${searchOpen ? 'blur-[2px] opacity-55' : ''}`}
 		>
 			{#if navigating.to}
 				<section
@@ -625,7 +635,9 @@
 				</section>
 			{:else}
 				{#key page.url.pathname}
-					<div in:fade={{ duration: 120, easing: cubicOut }}>{@render children()}</div>
+					<div class="flex min-h-0 flex-1 flex-col" in:fade={{ duration: 120, easing: cubicOut }}>
+						{@render children()}
+					</div>
 				{/key}
 			{/if}
 		</main>

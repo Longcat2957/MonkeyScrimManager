@@ -70,6 +70,12 @@ Discord command
 - audit log는 추적용이고, 실제 복구 기준은 revert checkpoint다.
 - series/tournament/bracket 생성 되돌리기는 기존 row를 CANCELLED로 보존한다. 다시 생성할 때는
   새 domain ID를 발급한다.
+- 일반 내전은 어느 lifecycle 상태에서도 운영자가 현재 작업을 수정하고, 직전 단계로 복구하고,
+  삭제 요청을 수행할 수 있어야 한다. 이는 임의 시점 복원이 아니라 각 단계의 명시 lifecycle
+  command이며, 종속 game/MMR은 역순 `VOIDED`/reversal 뒤에만 상위 aggregate를 취소한다.
+- 위 일반 내전 복구성은 **필수 목표 계약**이다. 현재 entry-draft API가 존재한다는 사실만으로
+  `CONVERTED` 이후 series/game cascade rollback까지 구현되었다고 해석하지 않는다. 해당 command가
+  OpenAPI와 router에 추가되기 전에는 그 상태의 수정/복구/삭제 기능을 제공한다고 표시하지 않는다.
 
 ## 1. 길드 설치 / 초기 설정
 
@@ -154,6 +160,7 @@ admin_audit_log
 
 ```txt
 Discord /내전모집
+Web /g/{guildId}/series 내전 모집
 ```
 
 흐름:
@@ -163,13 +170,32 @@ Discord /내전모집
   -> recruitments(guild_id) 생성
   -> Discord 모집 메시지 발행
 
+Web 내전 모집 (ACTIVE guild member)
+  -> 모집 채널 설정 여부 확인
+  -> recruitments(guild_id), 빈 entry draft, RECRUITMENT_MESSAGE_CREATE outbox row를 한 transaction으로 생성
+  -> /g/{guildId}/recruitments/{id} 엔트리 모집 화면 이동
+  -> Bot worker가 configured 모집 채널에 /내전모집과 같은 메시지 게시
+  -> typed ack이 Discord channel/message ID를 recruitment에 원자적으로 bind
+  -> Discord 모집 메시지에서 참가 / 취소 / 선호 라인 수집
+
+Web 운영자 수동 참가자 추가
+  -> OPEN 모집에서 ACTIVE guild member 선택
+  -> backend가 operator/정원/중복/멤버 상태를 transaction 안에서 검증
+  -> participant, audit, invalidate, bound message UPDATE notification 기록
+
+Web 모집 취소 (생성자 또는 운영자)
+  -> OPEN 또는 CLOSED recruitment를 CANCELLED로 soft transition
+  -> participant/entry assignment/draft history 보존, audit/invalidate/bound message DELETE notification 기록
+  -> initial CREATE가 아직 bind 전이면 typed ack이 현재 status를 확인해 DELETE를 후속 적재
+  -> 취소 모집은 목록, detail, entry-draft read에서 제외
+
 참가자 button/select interaction
   -> 참가 / 취소 / 선호 라인 저장
   -> Discord 모집 메시지 갱신
-  -> 열려 있는 entry workspace invalidate
+  -> 열려 있는 엔트리 모집 화면 invalidate
 
-정원 도달 또는 운영자 마감
-  -> Bot이 entry editor link 제공
+정원 도달 후 운영자가 Discord 또는 Web에서 엔트리 편성 시작
+  -> recruitment CLOSED, entry editor link 제공
   -> /g/{guildId}/recruitments/{id}/entry
 
 운영자가 Web에서 엔트리 편성
@@ -194,6 +220,7 @@ Discord /내전모집
 
 ```txt
 /g/{guildId}
+/g/{guildId}/recruitments/{id}
 /g/{guildId}/recruitments/{id}/entry
 /g/{guildId}/series
 /g/{guildId}/series/{id}/pick-ban
@@ -206,6 +233,12 @@ Discord /내전모집
 - `games.guild_id`가 전적과 MMR 변경의 경계다.
 - 게임 결과와 MMR 변경은 반드시 되돌릴 수 있어야 한다.
 - 되돌리기/강제 취소/조기 종료는 checkpoint 또는 audit log를 남긴다.
+- 일반 내전은 `OPEN`, `CLOSED`, `CONVERTED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` 어느
+  시점에서도 active operator가 수정, 직전 운영 단계 복귀, 삭제를 요청할 수 있어야 한다.
+  완료된 결과는 덮어쓰거나 물리 삭제하지 않고 마지막 game부터 ledger tail을 검증해 void/reversal한
+  뒤에만 series와 source recruitment를 복구한다.
+- 이는 일반 내전 lifecycle의 필수 완성 기준이며 현재 공개된 route 목록이 아니다. 구현되지 않은
+  converted/series/game cascade action은 UI와 Bot에서 실행 가능하다고 노출하지 않는다.
 
 ## 4. 경매 내전 운영
 

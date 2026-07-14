@@ -62,8 +62,16 @@ export function buildSeriesView(
 		displayNumber: item.displayNumber,
 		title: item.title,
 		format: `${item.targetCount}인`,
-		status: item.assignedCount >= item.targetCount ? '시리즈 생성 대기' : '엔트리 편성',
-		detail: `${item.joinedCount}/${item.targetCount}명 · ${Math.max(item.joinedCount - item.assignedCount, 0)}명 미배정`,
+		status:
+			item.status === 'OPEN'
+				? '엔트리 모집'
+				: item.assignedCount >= item.targetCount
+					? '시리즈 생성 대기'
+					: '엔트리 편성',
+		detail:
+			item.status === 'OPEN'
+				? `${item.joinedCount}/${item.targetCount}명 · Discord 모집 중`
+				: `${item.joinedCount}/${item.targetCount}명 · ${Math.max(item.joinedCount - item.assignedCount, 0)}명 미배정`,
 		updatedAt: formatRelativeTime(item.updatedAt, now),
 		href: item.href,
 		sortTimestamp: item.updatedAt

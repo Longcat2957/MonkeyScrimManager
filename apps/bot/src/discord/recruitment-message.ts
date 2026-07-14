@@ -3,8 +3,7 @@ import {
 	ButtonBuilder,
 	ButtonStyle,
 	EmbedBuilder,
-	StringSelectMenuBuilder,
-	type InteractionEditReplyOptions
+	StringSelectMenuBuilder
 } from 'discord.js';
 import type { RecruitmentSnapshot } from '../api/contracts.js';
 import { recruitmentCustomId } from '../interactions/custom-id.js';
@@ -19,10 +18,7 @@ const LANE_LABELS = {
 
 const LANES = Object.keys(LANE_LABELS) as Array<keyof typeof LANE_LABELS>;
 
-export function renderRecruitmentMessage(
-	snapshot: RecruitmentSnapshot,
-	webOrigin: URL
-): InteractionEditReplyOptions {
+export function renderRecruitmentMessage(snapshot: RecruitmentSnapshot, webOrigin: URL) {
 	const recruitment = snapshot.recruitment;
 	const joinedCount = snapshot.participants.length;
 	const full = joinedCount >= recruitment.targetCount;

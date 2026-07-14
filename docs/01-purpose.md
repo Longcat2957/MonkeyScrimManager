@@ -89,7 +89,9 @@ MMR, game 기록, revert checkpoint, audit log, soft-delete 같은 운영 신뢰
 
 ### 되돌리기 우선
 
-운영자는 실수할 수 있다. 하지만 범용 undo/redo를 만들지는 않는다. 엔트리 편성, 마지막 게임 결과, 경매 입찰 단계, 라인업 확정 취소처럼 정해진 운영 지점에서만 되돌리기를 제공한다.
+운영자는 실수할 수 있다. 일반 내전은 모집, 엔트리 편성, 시리즈 진행, 완료 어느 단계에 있든 권한 있는 운영자가 현재 상태를 수정하고, 직전 운영 단계로 전환하고, 삭제 요청을 수행할 수 있어야 한다. 이는 범용 undo/redo가 아니라 각 lifecycle command가 제공하는 명시적인 복구, 취소, 삭제 경로다.
+
+일반 내전의 삭제는 물리 삭제가 아니다. 모집과 series는 `CANCELLED` 또는 soft-delete로, 확정 game과 MMR 원장은 `VOIDED`와 reversal ledger로 보존한다. 모든 상태 전환과 삭제는 revision, audit log, 필요한 revert checkpoint를 남기며, 후속 aggregate가 있으면 역순으로 void 또는 cancel한 뒤 이전 단계로 복구한다.
 
 ### 작은 표면
 

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { RotateCcw } from 'lucide-svelte';
 	import { Dialog } from 'bits-ui';
-	import { untrack } from 'svelte';
 	import {
 		LANES,
 		TEAMS,
@@ -15,27 +14,36 @@
 	import EntryHeadToHeadRail from './EntryHeadToHeadRail.svelte';
 	import EntrySynergyRail from './EntrySynergyRail.svelte';
 	import EntryTeamColumn from './EntryTeamColumn.svelte';
-	import { entrySlots, entryTeamAverage, moveEntryParticipant } from './entryDraft';
+	import { entrySlots, entryTeamAverage } from './entryDraft';
 
 	interface Props {
 		participants: MockEntryParticipant[];
-		initialAssignments: Record<string, EntrySlot>;
+		assignments: Record<string, EntrySlot>;
 		synergies?: MockEntrySynergyRecord[];
 		headToHead?: MockEntryHeadToHeadRecord[];
 		targetCount?: number;
 		profileIconVersion?: string | null;
+		readOnly?: boolean;
+		busy?: boolean;
+		canReset?: boolean;
+		onMoveParticipant?: (userId: string, slot: EntrySlot | null) => void | Promise<void>;
+		onReset?: () => void | Promise<void>;
 	}
 
 	let {
 		participants,
-		initialAssignments,
+		assignments,
 		synergies = [],
 		headToHead = [],
 		targetCount = 10,
-		profileIconVersion = null
+		profileIconVersion = null,
+		readOnly = false,
+		busy = false,
+		canReset = true,
+		onMoveParticipant,
+		onReset
 	}: Props = $props();
 
-	let assignments = $state<Record<string, EntrySlot>>(untrack(() => ({ ...initialAssignments })));
 	let dragUserId = $state<string | null>(null);
 	let overSlot = $state<EntrySlot | null>(null);
 	let overPool = $state(false);
@@ -51,19 +59,27 @@
 	const unassigned = $derived(
 		participants.filter((participant) => !activeSlotSet.has(assignments[participant.id]))
 	);
+	const canMoveParticipants = $derived(!readOnly && !busy && Boolean(onMoveParticipant));
+	const canResetDraft = $derived(!readOnly && !busy && canReset && Boolean(onReset));
 
-	function moveUserToSlot(userId: string, slot: EntrySlot | null) {
-		assignments = moveEntryParticipant(assignments, participants, userId, slot);
+	async function moveUserToSlot(userId: string, slot: EntrySlot | null) {
+		if (!canMoveParticipants || !onMoveParticipant) return;
+		clearDragState();
+		await onMoveParticipant(userId, slot);
 	}
 
-	function resetDraft() {
-		assignments = {};
+	async function resetDraft() {
+		if (!canResetDraft || !onReset) return;
 		clearDragState();
-		confirmResetOpen = false;
+		try {
+			await onReset();
+		} finally {
+			confirmResetOpen = false;
+		}
 	}
 
 	function handleDragStart(event: globalThis.DragEvent, userId: string) {
-		if (!event.dataTransfer) return;
+		if (!canMoveParticipants || !event.dataTransfer) return;
 		dragUserId = userId;
 		event.dataTransfer.setData('text/plain', userId);
 		event.dataTransfer.effectAllowed = 'move';
@@ -76,7 +92,7 @@
 	}
 
 	function handleSlotDragOver(event: globalThis.DragEvent, slot: EntrySlot) {
-		if (!event.dataTransfer) return;
+		if (!canMoveParticipants || !event.dataTransfer) return;
 		event.preventDefault();
 		event.dataTransfer.dropEffect = 'move';
 		overSlot = slot;
@@ -84,15 +100,15 @@
 	}
 
 	function handleSlotDrop(event: globalThis.DragEvent, slot: EntrySlot) {
-		if (!event.dataTransfer) return;
+		if (!canMoveParticipants || !event.dataTransfer) return;
 		event.preventDefault();
 		const userId = event.dataTransfer.getData('text/plain');
-		if (userId) moveUserToSlot(userId, slot);
+		if (userId) void moveUserToSlot(userId, slot);
 		clearDragState();
 	}
 
 	function handlePoolDragOver(event: globalThis.DragEvent) {
-		if (!event.dataTransfer) return;
+		if (!canMoveParticipants || !event.dataTransfer) return;
 		event.preventDefault();
 		event.dataTransfer.dropEffect = 'move';
 		overPool = true;
@@ -100,10 +116,10 @@
 	}
 
 	function handlePoolDrop(event: globalThis.DragEvent) {
-		if (!event.dataTransfer) return;
+		if (!canMoveParticipants || !event.dataTransfer) return;
 		event.preventDefault();
 		const userId = event.dataTransfer.getData('text/plain');
-		if (userId) moveUserToSlot(userId, null);
+		if (userId) void moveUserToSlot(userId, null);
 		clearDragState();
 	}
 
@@ -119,6 +135,7 @@
 <div class="grid gap-2">
 	<div
 		class="flex flex-col gap-2 border-t border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] px-3 py-2 md:flex-row md:items-center md:justify-between"
+		aria-busy={busy}
 	>
 		<div class="min-w-0">
 			<p class="text-xs font-semibold text-slate-500">엔트리 편성</p>
@@ -140,16 +157,19 @@
 			>
 				상세
 			</button>
-			<button
-				type="button"
-				class="inline-flex h-8 items-center gap-1.5 rounded-sm px-2.5 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-cyan-100"
-				onclick={() => {
-					confirmResetOpen = true;
-				}}
-			>
-				<RotateCcw size={14} />
-				초기화
-			</button>
+			{#if onReset}
+				<button
+					type="button"
+					disabled={!canResetDraft}
+					class="inline-flex h-8 items-center gap-1.5 rounded-sm px-2.5 text-xs font-semibold text-slate-300 enabled:hover:bg-[var(--color-app-hover)] enabled:hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-35"
+					onclick={() => {
+						confirmResetOpen = true;
+					}}
+				>
+					<RotateCcw size={14} />
+					초기화
+				</button>
+			{/if}
 		</div>
 	</div>
 
@@ -171,6 +191,7 @@
 						{dragUserId}
 						{overSlot}
 						{profileIconVersion}
+						interactive={canMoveParticipants}
 						{moveUserToSlot}
 						{handleDragStart}
 						{clearDragState}
@@ -188,6 +209,7 @@
 						{dragUserId}
 						{overSlot}
 						{profileIconVersion}
+						interactive={canMoveParticipants}
 						{moveUserToSlot}
 						{handleDragStart}
 						{clearDragState}
@@ -213,6 +235,7 @@
 							{dragUserId}
 							{overSlot}
 							{profileIconVersion}
+							interactive={canMoveParticipants}
 							{moveUserToSlot}
 							{handleDragStart}
 							{clearDragState}
@@ -231,6 +254,7 @@
 			{dragUserId}
 			{overPool}
 			{profileIconVersion}
+			interactive={canMoveParticipants}
 			{handleDragStart}
 			{clearDragState}
 			{handlePoolDragOver}
@@ -258,7 +282,8 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					class="inline-flex h-8 items-center rounded-sm border border-red-300/30 bg-red-500/10 px-3 text-xs font-semibold text-red-100 hover:bg-red-500/15"
+					disabled={!canResetDraft}
+					class="inline-flex h-8 items-center rounded-sm border border-red-300/30 bg-red-500/10 px-3 text-xs font-semibold text-red-100 enabled:hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-35"
 					onclick={resetDraft}
 				>
 					되돌리기

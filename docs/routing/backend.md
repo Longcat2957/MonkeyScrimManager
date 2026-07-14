@@ -500,13 +500,36 @@ limit
 Bot/service principal은 필요한 create/member operation을 같은 application
 service를 통해 사용한다.
 
+actionable row의 `href`는 `OPEN`이면 `/g/{guildId}/recruitments/{id}`로, `CLOSED`이면
+`/g/{guildId}/recruitments/{id}/entry`로 내려준다. 클라이언트는 이 링크를 그대로 사용한다.
+
 ### POST /api/guilds/{guildId}/recruitments
 
-일반 모집 생성. Bot command가 주 사용자다.
+일반 모집 생성. Discord `/내전모집`과 `/g/{guildId}/series`의 내전 모집 버튼이 같은 command를 쓴다.
 
-Bot service principal과 `Idempotency-Key`가 필요하며 body의 actor role snapshot에 현재
-`guild_config.operator_role_id`가 포함돼야 한다. backend는 actor user/member/role snapshot을
-동기화하고 ACTIVE season과 guild counter를 잠근 뒤 모집과 빈 entry draft를 함께 만든다.
+Bot request는 service principal, Discord interaction `Idempotency-Key`, actor snapshot을 사용한다.
+Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`, 빈 `{}` body를 사용하며 actor를
+지정할 수 없다. 둘 다 ACTIVE guild member면 생성할 수 있다. Bot은 생성 전에 actor user/member/role
+snapshot을 동기화하고, backend는 ACTIVE season과 guild counter를 잠근 뒤 OPEN 모집과 빈 entry draft를
+함께 만든다.
+
+Browser 생성에는 `guild_config.recruitment_channel_id`가 반드시 설정되어 있어야 한다. 같은 transaction에
+그 채널을 대상으로 하는 `bot_notification_outbox`의 `RECRUITMENT_MESSAGE_CREATE` row도 적재한다.
+payload는 아래처럼 renderer가 필요한 완전한 recruitment snapshot을 고정한다.
+
+```json
+{
+	"schemaVersion": 1,
+	"recruitmentId": "01900000-0000-7000-8000-000000000001",
+	"snapshot": { "recruitment": {}, "participants": [], "links": {} }
+}
+```
+
+`201 Created`는 DB 상태와 발행 작업이 함께 확정되었다는 뜻이며 Discord 게시 완료를 의미하지 않는다.
+모집 채널이 없으면 transaction 전체를 취소하고 `409 recruitment_channel_not_configured`를 반환한다.
+Discord slash command 생성은 기존 interaction reply를 직접 게시하고 아래의 message bind command를
+사용한다. Browser 생성은 그 bind command를 호출하지 않고 Bot relay의 typed acknowledgement로만 message
+reference를 연결한다.
 
 ```json
 {
@@ -525,27 +548,76 @@ backend product contract에 추가하지 않는다.
 
 ### PUT /api/guilds/{guildId}/recruitments/{id}/message
 
-모집 생성 후 Discord channel/message snowflake를 바인딩한다. Bot service principal,
-`Idempotency-Key`, operator actor가 필요하다. Discord message 전송은 DB transaction 밖에서 먼저
-완료하고 이 command를 호출한다.
+모집 생성 후 Discord channel/message snowflake를 바인딩한다. Bot service principal과
+`Idempotency-Key`가 필요하며, actor는 모집 생성자이거나 operator여야 한다. Discord message 전송은 DB
+transaction 밖에서 먼저 완료하고 이 command를 호출한다. 이 route는 Discord interaction으로 시작된
+`/내전모집` reply bind 전용이다. Browser 생성의 queue worker는 아래 internal
+`/internal/notifications/recruitment-message/ack`를 사용한다.
 
 ### GET /api/guilds/{guildId}/recruitments/{id}
 
-entry route snapshot:
+엔트리 모집 snapshot:
 
 ```text
 recruitment
   id, displayNumber, title, status, targetCount, revision
 participants[]
-entryDraft
-  revision, assignments, updatedAt, updatedBy
-synergies[]
-headToHead[]
+links
+  entry
 ```
+
+ACTIVE guild member만 조회한다. `OPEN`은 Discord에서 참가/취소/선호 라인을 수집하는 엔트리 모집
+단계이고, `CLOSED`일 때만 Web 엔트리 편성 화면으로 이동한다. `CANCELLED` 모집은 이 read route와
+actionable list에서 숨긴다. 취소 mutation의 idempotency replay 응답만 마지막 CANCELLED snapshot을
+반환한다.
+
+### DELETE /api/guilds/{guildId}/recruitments/{id}
+
+Browser session, CSRF, browser `Idempotency-Key`를 사용하는 bodyless soft-cancel command다. `OPEN` 또는
+`CLOSED` 모집을 생성자 또는 현재 guild의 active operator가 취소할 수 있다. participant와 entry
+draft/history row는 보존하고 recruitment status를 `CANCELLED`로 전이하며 audit 및 invalidate outbox를
+같은 transaction으로 기록한다. `CLOSED` 취소는 기존 assignment를 물리 삭제하지 않으며, entry-draft
+snapshot의 `canCancel`은 이 권한과 상태를 반영한다. 동일 idempotency key는 취소 snapshot을 replay하고,
+새 key로 다시 취소하면 `409 invalid_recruitment_state`를 반환한다. 이미 message reference가 있으면 같은
+transaction에 `RECRUITMENT_MESSAGE_DELETE` notification을 적재한다. 초기 `CREATE`가 아직 bind되기 전
+취소되면 create ack transaction이 현재 CANCELLED 상태를 확인해 DELETE notification을 후속 적재하므로,
+오래된 create payload가 취소된 모집을 남겨 두지 않는다.
+
+### GET /api/guilds/{guildId}/recruitments/{id}/entry-draft
+
+ACTIVE guild member의 session read다. 아래 `EntryDraftSnapshot`을 반환한다. `OPEN`과 `CLOSED`만
+읽을 수 있으며, 취소된 모집은 `404`로 숨긴다.
+
+```text
+recruitment
+  id, displayNumber, title, status OPEN|CLOSED, targetCount 10, revision, updatedAt
+draft
+  revision, updatedAt, updatedBy { id, displayName } | null
+  participants[]
+    id, displayName, preferredLanes, mainLane | null, mmr, games, wins,
+    riotTier | null, profileIconId | null, championIds
+  assignments[]
+    participantId, team TEAM_1|TEAM_2, lane
+capabilities
+  canEdit, canReset, canCreateSeries, canReopen, canCancel
+```
+
+`capabilities`는 현재 viewer와 상태에서 계산한 snapshot hint다. `canCancel`은 생성자 또는 active
+operator가 `OPEN|CLOSED` 모집을 취소할 수 있을 때 true다. 취소는 recruitment lifecycle command이며
+entry-draft route 자체는 취소 후 `404`가 된다. `canCreateSeries`는 current active operator가 `CLOSED`
+모집의 정확히 10명 JOINED 참가자를 `TEAM_1|TEAM_2`의 `TOP|JUNGLE|MID|BOTTOM|SUPPORT` 10개 slot에 각각
+한 번씩 배치했을 때만 true다. 이 값은 UI hint이므로 시리즈 시작 command는 transaction 안에서 같은
+조건을 다시 검증한다.
+
+`riotTier`는 참가자의 `origin=RIOT` 주 계정과 일치하는 캐시 전적 snapshot의
+`RANKED_SOLO_5x5`만 compact 표기(`P3`, `E2` 등)로 투영한다. 이 read는 Riot API를 호출하거나 Riot ID,
+PUUID를 노출하지 않는다. 주 계정, cache, 솔로랭크가 없거나 cache 값이 canonical tier/division이 아니면
+`null`이다.
 
 ### PATCH /api/guilds/{guildId}/recruitments/{id}/entry-draft
 
-최소 operation:
+Browser session, CSRF, browser `Idempotency-Key`가 필요하다. 현재 active operator만 `CLOSED` 모집의
+draft revision을 기준으로 수정할 수 있다.
 
 ```json
 {
@@ -558,25 +630,57 @@ headToHead[]
 }
 ```
 
-slot null은 후보로 이동한다. frontend entry swap 규칙을 server에서 동일하게
-적용한다. 전체 assignment JSON replace endpoint는 만들지 않는다.
+`slot`은 `TEAM_1|TEAM_2`와 `TOP|JUNGLE|MID|BOTTOM|SUPPORT`를 조합한 문자열 또는 `null`이다. `null`은
+후보로 이동한다. 대상 slot에 다른 참가자가 있으면 server는 이전 slot으로 교환하고, 이동한 참가자가
+후보였다면 기존 occupant를 후보로 보낸다. 전체 assignment JSON replace endpoint는 만들지 않는다.
+성공과 idempotency replay 모두 최신 `EntryDraftSnapshot`을 반환하며, draft revision mismatch는
+`entry_draft_revision_conflict`로 반환한다. 제한적 realtime에서 이 mutation의 invalidate는
+`guild:{guildId}:recruitment-entry-draft:{id}` topic과 `draft.revision`을 사용하며, recruitment topic에
+draft revision을 넣지 않는다.
 
 ### POST /api/guilds/{guildId}/recruitments/{id}/entry-draft/reset
 
-entry draft를 모집 참가자 기준으로 명시적으로 초기화한다.
+같은 Browser session, CSRF, browser `Idempotency-Key`와 `{ "expectedRevision": <draft revision> }`를
+사용한다. 현재 active operator가 `CLOSED` 모집의 모든 assignment를 제거하고 최신
+`EntryDraftSnapshot`을 반환한다. 제한적 realtime invalidate는 entry-draft topic과 새 draft revision을
+사용한다.
 
 ### POST /api/guilds/{guildId}/recruitments/{id}/reopen
 
-CLOSED/CANCELLED 모집을 정책상 허용되는 OPEN 상태로 복구한다. operator,
-expectedRevision, audit가 필요하다.
+같은 Browser session, CSRF, browser `Idempotency-Key`와
+`{ "expectedRevision": <recruitment revision> }`를 사용한다. 현재 active operator만 `CLOSED` 모집을
+`OPEN`으로 되돌릴 수 있다. 기존 entry assignment는 보존하며, recruitment revision을 증가시키고 bound
+Discord 모집 메시지가 있으면 같은 transaction에 UPDATE delivery를 적재한다. 성공과 idempotency replay는
+최신 `EntryDraftSnapshot`을 반환한다. 제한적 realtime에서 recruitment lifecycle invalidate는 recruitment
+topic과 recruitment revision을, draft metadata가 바뀐 경우 entry-draft invalidate는 entry-draft topic과
+draft revision을 각각 사용한다. `CANCELLED` 모집 또는 series 생성은 이 endpoint가 처리하지 않는다.
 
 ### POST /api/guilds/{guildId}/recruitments/{id}/members
 
+Bot request는 service principal과 Discord actor/member snapshot을 사용한다. actor와 대상 user가 같으면
+self join, 다르면 operator 강제 참가로 처리한다. Browser request는 session, CSRF, browser
+`Idempotency-Key`, 아래 body를 사용하며 active operator만 호출할 수 있다.
+
+```json
+{ "memberId": "dmy_01900000-0000-7000-8000-000000000001" }
+```
+
+Browser의 `memberId`는 현재 guild의 ACTIVE member여야 하며 Discord user와 development dummy user를
+같은 opaque `UserId` 계약으로 다룬다. 모집 row를 잠근 뒤 OPEN 상태, 정원, 중복 참가, target member
+상태를 다시 검증한다. Bot과 browser 모두 PostgreSQL participant를 직접 수정하지 않고 동일 application
+service를 사용한다. Browser 수동 추가가 이미 bind된 Discord 모집 메시지를 변경하면 같은 transaction에
+`RECRUITMENT_MESSAGE_UPDATE`를 적재한다. initial create delivery와 경합한 경우 typed create ack이 최신
+revision을 비교하고 필요한 UPDATE를 후속 적재한다.
+
 ### DELETE /api/guilds/{guildId}/recruitments/{id}/members/{userId}
 
-Bot service principal과 `Idempotency-Key`를 사용한다. actor와 대상 user가 같으면 self join/leave,
-다르면 operator 강제 참가/제거로 처리한다. OPEN recruitment row를 잠근 뒤 정원과 현재 참가 상태를
-다시 검증한다. Bot은 PostgreSQL participant를 직접 수정하지 않는다.
+Bot request는 service principal과 Discord actor를 사용한다. 자기 자신은 직접 참가 취소할 수 있고, 다른
+참가자를 대상으로 하면 operator가 필요하다. Browser request는 session, CSRF, browser
+`Idempotency-Key`, 빈 `{}` body를 사용하며 현재 active operator만 호출할 수 있다. 대상 participant를
+`WITHDRAWN`으로 전환하고 이미 만든 entry assignment를 지운 뒤 recruitment/draft revision을 올린다.
+이미 bind된 Discord 모집 메시지는 같은 transaction에 `RECRUITMENT_MESSAGE_UPDATE`를 적재한다.
+개발용 더미 참가자 일괄 추가/제거도 bound 모집이면 같은 canonical UPDATE 대기열을 적재하므로, UI에서
+실제 모집 흐름을 검증해도 Discord 모집 현황이 뒤처지지 않는다.
 
 ### PUT /api/guilds/{guildId}/recruitments/{id}/members/{userId}/preferred-lanes
 
@@ -585,24 +689,52 @@ Bot service principal과 `Idempotency-Key`를 사용한다. actor와 대상 user
 
 ### POST /api/guilds/{guildId}/recruitments/{id}/close
 
-`recruit:start-entry:{id}` component command다. operator, OPEN, 참가자 10명을 transaction 안에서 다시
-검증하고 CLOSED로 전이한 뒤 entry deep link가 포함된 최신 recruitment snapshot을 반환한다.
+`recruit:start-entry:{id}` Bot component command와 Web의 엔트리 편성 시작 action이 같은 command를 쓴다.
+Bot request는 operator actor snapshot을, Browser request는 session, CSRF, browser `Idempotency-Key`, 빈 `{}`
+body를 사용한다. 두 흐름 모두 current active operator, OPEN, 참가자 10명을 transaction 안에서 다시
+검증하고 CLOSED로 전이한 뒤 entry deep link가 포함된 최신 recruitment snapshot을 반환한다. Browser action은
+이미 bind된 Discord 모집 메시지의 `RECRUITMENT_MESSAGE_UPDATE`를 같은 transaction에 적재한다.
 
 ### POST /api/guilds/{guildId}/series
 
-recruitment를 별도 series ID로 전환한다.
+일반 내전의 엔트리 편성을 실제 series로 전환하는 browser command다. Discord OAuth session, CSRF,
+browser `Idempotency-Key`와 아래 body가 필요하며, 현재 active operator만 호출할 수 있다.
 
-request:
-
-```text
-sourceRecruitmentId
-expectedRevision
+```json
+{
+	"sourceRecruitmentId": "01900000-0000-7000-8000-000000000001",
+	"expectedRevision": 12
+}
 ```
 
-series.id와 recruitment.id가 같아야 한다는 규칙은 없다. 같은 recruitment에는 non-cancelled
-series가 최대 하나다. 생성 되돌리기로 CANCELLED된 뒤 다시 전환하면 새 series ID를 발급한다.
-현재 frontend에 format control이 없으므로 신규 series의 `bestOf`는 서버가 3으로 기록한다. DB와
-read DTO는 legacy/향후 1/3/5를 보존한다.
+`expectedRevision`은 entry draft revision이 아니라 source recruitment의 현재 `revision`이다. backend는
+source recruitment를 먼저 잠근 뒤 entry draft를 잠그고, source가 `CLOSED`인지, 정확히 10명의 JOINED
+참가자가 있는지, 각 참가자가 중복 없이 `TEAM_1|TEAM_2`의
+`TOP|JUNGLE|MID|BOTTOM|SUPPORT` 10개 slot을 모두 채웠는지를 다시 확인한다.
+
+성공 transaction은 source recruitment의 season에서 각 배정 lane의 MMR row를 잠근다. 아직 MMR row가
+없으면 1500으로 초기화한 후 `series_participants`에 모두 `CAPTURED` snapshot으로 고정한다. 이어서
+별도 series ID의 `IN_PROGRESS` `bestOf=3` series를 만들고, source recruitment를 `CONVERTED`로 전이하며,
+recruitment revision, audit, idempotency response, realtime outbox를 함께 확정한다. 응답은 `201 Created`다.
+
+```json
+{
+	"data": {
+		"series": {
+			"id": "01900000-0000-7000-8000-000000000002",
+			"href": "/g/1525851181157580861/series/01900000-0000-7000-8000-000000000002/pick-ban"
+		}
+	},
+	"meta": { "requestId": "01900000-0000-7000-8000-000000000003" }
+}
+```
+
+동일 `Idempotency-Key`와 body는 같은 `201` 결과를 replay한다. stale recruitment revision은
+`409 recruitment_revision_conflict`, source가 더 이상 `CLOSED`가 아닌 경우는
+`409 series_source_not_ready`, 10인 편성이 완성되지 않은 경우는
+`422 entry_draft_incomplete`(joined/assigned/target count detail 포함)로 반환한다. format control은 아직
+frontend에 없으므로 신규 series의 `bestOf`는 서버가 3으로 기록한다. DB와 read DTO는 legacy/향후
+1/3/5를 보존한다.
 
 ### GET /api/guilds/{guildId}/series
 
@@ -618,30 +750,22 @@ active row는 다음 작업 URL을, completed row는 score/outcome/nullable winn
 
 ### GET /api/guilds/{guildId}/series/{id}
 
-pick-ban input과 result ledger가 공통으로 읽는 series snapshot. 필요하면
-view=input 또는 view=ledger query로 payload 크기를 나눈다.
-
-input:
-
-```text
-series metadata(id/displayNumber/title)/revision/bestOf
-teams와 lane별 participant
-games와 current draft
-sidePreset
-picks/bans
-updatedAt/updatedBy
-```
-
-ledger:
+현재 `IN_PROGRESS` 일반 series의 첫 pick-ban read slice다. Discord OAuth session의 active guild
+member만 읽을 수 있다. 응답은 immutable `series_participants` roster(MMR snapshot, tier, 선호 챔피언),
+현재 set의 draft, lifecycle capability를 반환한다. `expectedRevision`에 쓰는 값은 `series.revision`이다.
 
 ```text
-series metadata/completedAt/score/outcome/terminalReason/nullable winner
-teams/participants
-game별 side/winner/durationSeconds(null 허용)/picks/bans
-participant별 MMR before/after/delta
+data.series: id/displayNumber/title/bestOf/status/revision/sourceRecruitmentId/updatedAt
+data.teams: TEAM_1|TEAM_2 각각 TOP/JUNGLE/MID/BOTTOM/SUPPORT 5명
+data.currentGame: setNumber/sidePreset/winner/picks(10명 모두)/bans(BLUE·RED 각 5칸)/patchVersion
+data.games: []
+data.capabilities: canRevert/canDelete
 ```
 
-Custom match submit에는 duration 입력이 없으므로 값을 추측하거나 문자열로 합성하지 않는다.
+첫 slice는 완료 game ledger를 중복 전송하지 않는다. `games`는 항상 빈 배열이고, 확정 game 수는 다음
+`currentGame.setNumber`과 lifecycle capability 계산에만 쓴다. game result/ledger endpoint가 구현되기 전에는
+frontend가 이를 임의의 전적이나 목업으로 채우지 않는다. Custom match submit에는 duration 입력이 없으므로
+값을 추측하거나 문자열로 합성하지 않는다.
 
 ### PATCH /api/guilds/{guildId}/series/{id}/pickban
 
@@ -688,8 +812,42 @@ revision을 같은 transaction에서 기록한다.
 
 ### POST /api/guilds/{guildId}/series/{id}/revert
 
-정의된 series checkpoint만 복구한다. 범용 undo endpoint가 아니다.
-Series 생성 revert는 game이 없을 때 series를 CANCELLED, source recruitment를 CLOSED로 되돌린다.
+첫 lifecycle checkpoint를 복구한다. 범용 undo endpoint가 아니다. Browser session, CSRF,
+`Idempotency-Key`와 아래 body가 필요하며 active operator만 호출할 수 있다.
+
+```json
+{ "expectedRevision": 0 }
+```
+
+source recruitment -> series 순서로 lock하고, series가 `IN_PROGRESS`, source가 `CONVERTED`, `revision`이
+일치하며 확정 game이 0개인지 한 transaction에서 다시 검증한다. 성공하면 series는 retained history로
+`CANCELLED`/`terminal_reason=CANCELLED`가 되고 source recruitment는 `CLOSED`로 복구한다. audit와 두
+aggregate의 realtime outbox도 같은 transaction에 기록한다.
+
+```json
+{
+  "data": { "nextHref": "/g/{guildId}/recruitments/{sourceRecruitmentId}/entry" },
+  "meta": { "requestId": "01900000-0000-7000-8000-000000000003" }
+}
+```
+
+확정 game이 하나라도 있으면 `409 series_has_confirmed_games`로 거절한다. stale series revision은
+`409 series_revision_conflict`다. 동일 key/body는 같은 성공 응답을 replay한다.
+
+### DELETE /api/guilds/{guildId}/series/{id}
+
+물리 삭제가 아니라 첫 series lifecycle 취소 command다. request/권한/lock/revision/confirmed-game guard는
+`POST .../revert`와 동일하다. 성공하면 series는 `CANCELLED` history로 남고 source recruitment는 다시
+모집으로 열리지 않도록 `CANCELLED`로 전이한다.
+
+```json
+{
+  "data": { "nextHref": "/g/{guildId}/series" },
+  "meta": { "requestId": "01900000-0000-7000-8000-000000000003" }
+}
+```
+
+연결된 `series_participants`, audit, outbox 등 보존 row 때문에 physical DELETE/cascade는 금지한다.
 
 ### GET /api/guilds/{guildId}/series/{id}/balance.svg
 
@@ -1584,18 +1742,35 @@ Bot status 갱신.
 
 ### POST /internal/notifications/claim
 
-Bot worker가 available/expired-lease row를 claim한다. response는 notification ID, leaseToken,
-channelId, type, payload, stable Discord nonce를 포함한다.
+Bot service principal만 사용한다. request는 `{ "instanceId": "bot-1", "limit": 20 }`이고 `limit`은
+1..50이다. Worker가 available 또는 expired-lease row를 claim하며 response notification은
+`id`, `guildId`, `leaseToken`, `leaseUntil`, `channelId`, `type`, `payload`, `discordNonce`, `attempts`를
+포함한다. lease는 30초이고 하나의 row는 최대 8회 claim한다. `discordNonce`는 notification ID에서
+유도한 stable 22-character base64url 값이므로 create 재시도 중 Discord 중복을 구분할 수 있다.
 
 ### POST /internal/notifications/ack
 
-notification ID, leaseToken, Discord message ID를 받아 owner+token이 현재 lease와 일치할 때만
-delivered로 전이한다.
+request는 `{ "instanceId", "notificationId", "leaseToken", "discordMessageId" }`다. owner+token이
+현재 lease와 일치할 때만 generic notification을 delivered로 전이한다. `RECRUITMENT_MESSAGE_UPDATE`와
+`RECRUITMENT_MESSAGE_DELETE`는 Discord edit/delete 성공 뒤 이 route를 사용한다. Browser-created
+`RECRUITMENT_MESSAGE_CREATE`에는 이 route를 사용하지 않으며 호출하면 `422
+recruitment_message_create_requires_typed_ack`로 거절한다.
+
+### POST /internal/notifications/recruitment-message/ack
+
+`RECRUITMENT_MESSAGE_CREATE` 전용 acknowledgement다. request shape은 generic ack와 같고 Bot은 Discord
+채널 send가 성공한 뒤 message ID를 보낸다. Backend는 notification delivered 전이와
+`recruitments.channel_id/message_id` bind를 하나의 transaction으로 확정한다. bind 시 create payload보다
+현재 revision이 앞서 있으면 UPDATE를, 현재 status가 CANCELLED면 DELETE를 같은 transaction에 후속
+적재한다. generic ack 뒤 별도 bind를 호출하는 흐름은 crash window와 duplicate message 위험 때문에
+금지한다.
 
 ### POST /internal/notifications/nack
 
-notification ID, leaseToken, Discord status/error/retryAfter를 받는다. Backend가 retryable 여부,
-backoff, MAX_ATTEMPTS, DELIVERY_UNKNOWN terminal 전이를 결정한다.
+request는 `{ "instanceId", "notificationId", "leaseToken", "failure" }`다. failure는
+`HTTP` (`status`, 429일 때 선택 `retryAfterMs`), `TRANSPORT`, `DELIVERY_UNKNOWN` 중 하나다. Backend가
+retryable 여부, backoff, MAX_ATTEMPTS, DELIVERY_UNKNOWN terminal 전이를 결정한다. 429/5xx/transport만
+retry하며 ordinary 4xx, unknown delivery, 8회 소진은 terminal failure다.
 
 Bot의 domain command는 별도 약식 로직을 만들지 않고 위 guild-scoped
 application command를 service principal로 호출한다. Discord interaction ID를
@@ -1607,15 +1782,18 @@ Idempotency-Key로 사용한다.
 
 cookie session으로 handshake한다.
 
-허용 topic:
+현재 subscribe를 허용하는 topic:
 
 ```text
 guild:{guildId}:recruitment:{id}
-guild:{guildId}:series:{id}
-guild:{guildId}:auction-recruitment:{id}
-guild:{guildId}:auction-tournament:{id}
-guild:{guildId}:auction-match:{id}
+guild:{guildId}:recruitment-entry-draft:{id}
 ```
+
+series/auction topic은 namespace 예약 상태이며 endpoint가 아직 subscribe하지 않는다.
+
+client는 `{ "type": "subscribe", "topics": [...] }` 또는 `unsubscribe` frame을 보낸다. 성공하면
+`{ "type": "subscribed", "topics": [...] }`, hub lag에는 `{ "type": "resync_required" }`, 거부에는
+`{ "type": "error", "code", "message" }`를 보낸다. Origin/session 검사는 HTTP upgrade 전에 수행한다.
 
 event:
 
@@ -1638,6 +1816,9 @@ event:
 - bounded queue와 slow-client 종료
 - at-least-once event 중복 허용
 - PostgreSQL outbox -> Valkey -> WS
+- recruitment topic event의 revision은 recruitment aggregate만, entry-draft topic event의 revision은
+  `recruitment_entry_drafts` aggregate만 나타낸다. 두 topic은 동일 recruitment ID를 써도 revision을
+  교환하거나 비교하지 않는다.
 
 ## 구현 순서
 

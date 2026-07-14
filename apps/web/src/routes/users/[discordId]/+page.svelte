@@ -14,9 +14,5 @@
 		kicker="사용자"
 		title={data.displayName}
 		description="3개 Discord 서버에서 활동 중"
-		metrics={[
-			{ label: 'Discord', value: data.discordId, tone: 'neutral' },
-			{ label: '시즌', value: '3', tone: 'info' }
-		]}
 	/>
 </div>

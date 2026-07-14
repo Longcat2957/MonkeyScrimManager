@@ -45,6 +45,8 @@ const OPERATOR_CSRF: &str = "dummy-recruitment-operator-csrf";
 const MEMBER_SESSION: &str = "dummy-recruitment-member-session";
 const MEMBER_CSRF: &str = "dummy-recruitment-member-csrf";
 const RECRUITMENT_ID: &str = "01900000-0000-7000-8000-000000000100";
+const RECRUITMENT_CHANNEL_ID: &str = "400000000000000001";
+const RECRUITMENT_MESSAGE_ID: &str = "500000000000000001";
 const DUMMY_A: &str = "dmy_01900000-0000-7000-8000-000000000001";
 const DUMMY_B: &str = "dmy_01900000-0000-7000-8000-000000000002";
 const DUMMY_C: &str = "dmy_01900000-0000-7000-8000-000000000003";
@@ -207,6 +209,34 @@ async fn run_flow() -> TestResult {
     assert!(preferred_lanes(&pool, DUMMY_B).await?.is_empty());
     assert_eq!(audit_count(&pool).await?, 1);
     assert_eq!(outbox_count(&pool).await?, 1);
+    let updates = recruitment_message_updates(&pool).await?;
+    assert_eq!(updates.len(), 1);
+    let add_update_key = format!("recruitment:{RECRUITMENT_ID}:message:update:1");
+    let add_update = updates
+        .iter()
+        .find(|(key, _)| key == &add_update_key)
+        .ok_or("missing dummy recruitment add message update")?;
+    assert_eq!(
+        add_update.1["snapshot"]["recruitment"]["revision"],
+        json!(1)
+    );
+    assert_eq!(
+        add_update.1["snapshot"]["recruitment"]["channelId"],
+        json!(RECRUITMENT_CHANNEL_ID)
+    );
+    assert_eq!(
+        add_update.1["snapshot"]["recruitment"]["messageId"],
+        json!(RECRUITMENT_MESSAGE_ID)
+    );
+    let add_participants = add_update.1["snapshot"]["participants"]
+        .as_array()
+        .ok_or("dummy recruitment add notification did not contain participants")?;
+    assert_eq!(add_participants.len(), 10);
+    let added_dummy_a = add_participants
+        .iter()
+        .find(|participant| participant["id"] == DUMMY_A)
+        .ok_or("dummy recruitment add notification omitted Dummy A")?;
+    assert_eq!(added_dummy_a["preferredLanes"], json!(["MID"]));
 
     let replay = send(
         &app,
@@ -222,6 +252,7 @@ async fn run_flow() -> TestResult {
     assert_eq!(replay.status(), StatusCode::OK);
     assert_eq!(body_json(replay).await?["data"], added_body["data"]);
     assert_eq!(audit_count(&pool).await?, 1);
+    assert_eq!(recruitment_message_updates(&pool).await?.len(), 1);
 
     let conflict = send(
         &app,
@@ -273,6 +304,26 @@ async fn run_flow() -> TestResult {
     assert_eq!(participant_status(&pool, DUMMY_B).await?, "WITHDRAWN");
     assert!(preferred_lanes(&pool, DUMMY_B).await?.is_empty());
     assert_eq!(audit_count(&pool).await?, 2);
+    let updates = recruitment_message_updates(&pool).await?;
+    assert_eq!(updates.len(), 2);
+    let remove_update_key = format!("recruitment:{RECRUITMENT_ID}:message:update:2");
+    let remove_update = updates
+        .iter()
+        .find(|(key, _)| key == &remove_update_key)
+        .ok_or("missing dummy recruitment remove message update")?;
+    assert_eq!(
+        remove_update.1["snapshot"]["recruitment"]["revision"],
+        json!(2)
+    );
+    let remove_participants = remove_update.1["snapshot"]["participants"]
+        .as_array()
+        .ok_or("dummy recruitment remove notification did not contain participants")?;
+    assert_eq!(remove_participants.len(), 9);
+    assert!(
+        remove_participants
+            .iter()
+            .all(|participant| participant["id"] != DUMMY_B)
+    );
 
     let stale = send(
         &app,
@@ -427,13 +478,15 @@ async fn seed(pool: &PgPool) -> TestResult {
     sqlx::query(
         "INSERT INTO recruitments (
              guild_id, id, season_id, display_number, title, target_count, status,
-             revision, created_by, created_at, updated_by, updated_at
+             revision, channel_id, message_id, created_by, created_at, updated_by, updated_at
          ) VALUES ($1, $2, $3, 1, 'Dummy Test Recruitment', 10, 'CLOSED',
-                   0, $4, $5, $4, $5)",
+                   0, $4, $5, $6, $7, $6, $7)",
     )
     .bind(GUILD_ID)
     .bind(Uuid::parse_str(RECRUITMENT_ID)?)
     .bind(season_id)
+    .bind(RECRUITMENT_CHANNEL_ID)
+    .bind(RECRUITMENT_MESSAGE_ID)
     .bind(OPERATOR_ID)
     .bind(now)
     .execute(pool)
@@ -611,6 +664,17 @@ async fn outbox_count(pool: &PgPool) -> TestResult<i64> {
     )
     .bind(GUILD_ID)
     .fetch_one(pool)
+    .await?)
+}
+
+async fn recruitment_message_updates(pool: &PgPool) -> TestResult<Vec<(String, Value)>> {
+    Ok(sqlx::query_as(
+        "SELECT deduplication_key, payload
+         FROM bot_notification_outbox
+         WHERE guild_id = $1 AND notification_type = 'RECRUITMENT_MESSAGE_UPDATE'",
+    )
+    .bind(GUILD_ID)
+    .fetch_all(pool)
     .await?)
 }
 

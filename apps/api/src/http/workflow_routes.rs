@@ -11,13 +11,16 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 use crate::{
-    domain::{AuctionTournamentStatus, GuildId},
+    domain::{AuctionTournamentStatus, GuildId, RecruitmentId, RecruitmentStatus, SeriesId},
     error::{self, ApiError},
     http::extractors::AuthenticatedSession,
-    repository::workflow::{
-        self, AuctionMatchSummaryRecord, AuctionRecruitmentRecord, AuctionTournamentRecord,
-        ListState, OperationRecord, Page, PageCursor, RecruitmentRecord, SeriesRecord,
-        WorkflowRepositoryError,
+    repository::{
+        bot_workflow::{self, BotWorkflowError},
+        workflow::{
+            self, AuctionMatchSummaryRecord, AuctionRecruitmentRecord, AuctionTournamentRecord,
+            ListState, OperationRecord, Page, PageCursor, RecruitmentRecord, SeriesRecord,
+            WorkflowRepositoryError,
+        },
     },
     state::{AppState, RequestId},
 };
@@ -251,6 +254,41 @@ pub async fn recruitments(
     Ok(error::success(StatusCode::OK, &request_id, data))
 }
 
+pub async fn recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_recruitment_snapshot(pool, &guild_id, recruitment_id)
+        .await
+        .map_err(|error| recruitment_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn entry_draft(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_entry_draft_snapshot(
+        pool,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| recruitment_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
 pub async fn series(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -274,6 +312,26 @@ pub async fn series(
     let data = map_series_page(page, &guild_id, &request_id)?;
 
     Ok(error::success(StatusCode::OK, &request_id, data))
+}
+
+pub async fn series_detail(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    let pool = database(&state, &request_id)?;
+    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+    let snapshot = bot_workflow::get_series_pick_ban_snapshot(
+        pool,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+    )
+    .await
+    .map_err(|error| series_snapshot_error(error, &request_id))?;
+
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
 }
 
 pub async fn auction_recruitments(
@@ -374,12 +432,17 @@ fn map_recruitment_page(
         .into_iter()
         .map(|record| {
             let id = record.id.to_string();
+            let href = if record.status == RecruitmentStatus::Closed {
+                format!("/g/{}/recruitments/{id}/entry", guild_id.as_str())
+            } else {
+                format!("/g/{}/recruitments/{id}", guild_id.as_str())
+            };
             Ok(RecruitmentData {
-                href: format!("/g/{}/recruitments/{id}/entry", guild_id.as_str()),
+                href,
                 id,
                 display_number: record.display_number,
                 title: record.title,
-                status: "CLOSED",
+                status: record.status.as_str(),
                 target_count: record.target_count,
                 joined_count: record.participant_count,
                 assigned_count: record.assigned_count,
@@ -655,6 +718,68 @@ fn repository_error(error: WorkflowRepositoryError, request_id: &RequestId) -> A
         WorkflowRepositoryError::Sql(source) => error::database_failure(&source, request_id),
         WorkflowRepositoryError::InvalidProjection(message) => {
             invalid_projection(message, request_id)
+        }
+    }
+}
+
+fn recruitment_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::RecruitmentNotFound | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 모집을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "recruitment snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
+        }
+    }
+}
+
+fn series_snapshot_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::SeriesNotFound
+        | BotWorkflowError::SeriesNotInProgress(_)
+        | BotWorkflowError::GuildNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "not_found",
+            "요청한 진행 중 시리즈를 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
+        BotWorkflowError::DatabaseBusy => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_busy",
+            "데이터베이스가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
+            None,
+        ),
+        error => {
+            tracing::error!(%error, "series pick-ban snapshot query failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "internal_error",
+                "요청을 처리하는 중 내부 오류가 발생했습니다.",
+                None,
+            )
         }
     }
 }

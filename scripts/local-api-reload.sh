@@ -8,9 +8,9 @@ web_origin=${MONKEYBOT_LOCAL_WEB_ORIGIN:-http://127.0.0.1:5173}
 smoke_path=${1:-/api/me}
 
 case "$smoke_path" in
-	/api/*) ;;
+	/api/*|/ws) ;;
 	*)
-		printf 'Smoke path must start with /api/: %s\n' "$smoke_path" >&2
+		printf 'Smoke path must start with /api/ or equal /ws: %s\n' "$smoke_path" >&2
 		exit 2
 		;;
 esac

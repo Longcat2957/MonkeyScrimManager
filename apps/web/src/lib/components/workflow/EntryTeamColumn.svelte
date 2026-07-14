@@ -21,6 +21,7 @@
 		dragUserId: string | null;
 		overSlot: EntrySlot | null;
 		profileIconVersion?: string | null;
+		interactive?: boolean;
 		moveUserToSlot: (userId: string, slot: EntrySlot | null) => void;
 		handleDragStart: (event: globalThis.DragEvent, userId: string) => void;
 		clearDragState: () => void;
@@ -38,6 +39,7 @@
 		dragUserId,
 		overSlot,
 		profileIconVersion = null,
+		interactive = true,
 		moveUserToSlot,
 		handleDragStart,
 		clearDragState,
@@ -53,7 +55,8 @@
 	function participantClass(participant: MockEntryParticipant): string {
 		const dragging = dragUserId === participant.id;
 		return [
-			'rounded-sm border-transparent bg-slate-800/65 text-slate-100 hover:bg-slate-700/60',
+			'rounded-sm border-transparent bg-slate-800/65 text-slate-100',
+			interactive ? 'cursor-grab active:cursor-grabbing hover:bg-slate-700/60' : 'cursor-default',
 			dragging ? 'opacity-60' : ''
 		].join(' ');
 	}
@@ -105,8 +108,8 @@
 				</span>
 				{#if placed}
 					<span
-						class={`flex min-w-0 cursor-grab items-center gap-1 rounded-sm px-1.5 py-1 active:cursor-grabbing sm:gap-2 sm:px-2 ${participantClass(placed)}`}
-						draggable="true"
+						class={`flex min-w-0 items-center gap-1 rounded-sm px-1.5 py-1 sm:gap-2 sm:px-2 ${participantClass(placed)}`}
+						draggable={interactive}
 						ondragstart={(event) => handleDragStart(event, placed.id)}
 						ondragend={clearDragState}
 						role="presentation"
@@ -133,7 +136,7 @@
 					</span>
 				{/if}
 				<span class="grid place-items-center">
-					{#if placed}
+					{#if placed && interactive}
 						<span
 							role="button"
 							tabindex="0"

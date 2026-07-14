@@ -18,10 +18,13 @@ services:
       MONKEYBOT_REQUEST_TIMEOUT_MS: 10000
       MONKEYBOT_SHUTDOWN_TIMEOUT_MS: 20000
       MONKEYBOT_MAX_BODY_BYTES: 1048576
+      MONKEYBOT_VALKEY_URL: redis://valkey:6379/
     ports:
       - '127.0.0.1:30020:8080'
     depends_on:
       postgres:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     networks:
       - shared-edge

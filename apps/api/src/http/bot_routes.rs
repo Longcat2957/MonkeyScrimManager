@@ -5,22 +5,26 @@ use axum::{
     response::Response,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     domain::{
         DiscordChannelId, DiscordInteractionId, DiscordMessageId, DiscordRoleId, DiscordUserId,
-        GuildId, Lane, RecruitmentId, UserId,
+        GuildId, Lane, RecruitmentId, SeriesId, UserId,
     },
     error::{self, ApiError},
-    http::extractors::BotServicePrincipal,
+    http::extractors::{
+        AuthenticatedSession, BotServicePrincipal, RecruitmentCreatePrincipal, require_csrf,
+    },
     repository::bot_workflow::{
-        self, BotActor, BotRecruitmentCommand, BotWorkflowError, RegisterGuildMemberCommand,
-        RegisterGuildMemberInput, SetupGuildCommand,
+        self, BotActor, BotRecruitmentCommand, BotWorkflowError, EntryDraftOperation,
+        RegisterGuildMemberCommand, RegisterGuildMemberInput, SetupGuildCommand,
     },
     state::{AppState, RequestId},
 };
 
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
+const MAX_BROWSER_IDEMPOTENCY_KEY_BYTES: usize = 128;
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -46,6 +50,50 @@ pub struct SetupGuildRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActorOnlyRequest {
     actor: ActorRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserCreateRecruitmentRequest {}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserAddRecruitmentMemberRequest {
+    member_id: UserId,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserRemoveRecruitmentMemberRequest {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserCloseRecruitmentRequest {}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserEntryDraftMutationRequest {
+    expected_revision: i64,
+    operation: EntryDraftOperation,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserEntryDraftRevisionRequest {
+    expected_revision: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserSeriesCreateRequest {
+    source_recruitment_id: RecruitmentId,
+    expected_revision: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BrowserSeriesLifecycleRequest {
+    expected_revision: i64,
 }
 
 #[derive(Deserialize)]
@@ -212,20 +260,42 @@ pub async fn create_recruitment(
     Extension(request_id): Extension<RequestId>,
     Path(guild_id): Path<GuildId>,
     headers: HeaderMap,
-    _principal: BotServicePrincipal,
-    Json(request): Json<ActorOnlyRequest>,
+    principal: RecruitmentCreatePrincipal,
+    Json(request): Json<Value>,
 ) -> Result<Response, ApiError> {
-    recruitment_command(
-        &state,
-        &request_id,
-        &headers,
-        &guild_id,
-        StatusCode::CREATED,
-        BotRecruitmentCommand::Create {
-            actor: actor(request.actor, &request_id)?,
-        },
-    )
-    .await
+    match principal {
+        RecruitmentCreatePrincipal::Bot(_) => {
+            let request = serde_json::from_value::<ActorOnlyRequest>(request)
+                .map_err(|_| invalid_request("body", &request_id))?;
+            recruitment_command(
+                &state,
+                &request_id,
+                &headers,
+                &guild_id,
+                StatusCode::CREATED,
+                BotRecruitmentCommand::Create {
+                    actor: actor(request.actor, &request_id)?,
+                },
+            )
+            .await
+        }
+        RecruitmentCreatePrincipal::Session(principal) => {
+            serde_json::from_value::<BrowserCreateRecruitmentRequest>(request)
+                .map_err(|_| invalid_browser_create_request(&request_id))?;
+            require_csrf(&headers, &state, &principal, &request_id)?;
+            let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+            let snapshot = bot_workflow::create_web_recruitment(
+                database(&state, &request_id)?,
+                &guild_id,
+                &principal.session.user_id,
+                &idempotency_key,
+                &request_id,
+            )
+            .await
+            .map_err(|error| web_create_error(error, &request_id))?;
+            Ok(error::success(StatusCode::CREATED, &request_id, snapshot))
+        }
+    }
 }
 
 pub async fn bind_recruitment_message(
@@ -257,22 +327,68 @@ pub async fn join_recruitment(
     Extension(request_id): Extension<RequestId>,
     Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
     headers: HeaderMap,
-    _principal: BotServicePrincipal,
-    Json(request): Json<JoinMemberRequest>,
+    principal: RecruitmentCreatePrincipal,
+    Json(request): Json<Value>,
 ) -> Result<Response, ApiError> {
-    recruitment_command(
-        &state,
-        &request_id,
-        &headers,
+    match principal {
+        RecruitmentCreatePrincipal::Bot(_) => {
+            let request = serde_json::from_value::<JoinMemberRequest>(request)
+                .map_err(|_| invalid_request("body", &request_id))?;
+            recruitment_command(
+                &state,
+                &request_id,
+                &headers,
+                &guild_id,
+                StatusCode::OK,
+                BotRecruitmentCommand::Join {
+                    actor: actor(request.actor, &request_id)?,
+                    recruitment_id,
+                    participant: actor(request.member, &request_id)?,
+                },
+            )
+            .await
+        }
+        RecruitmentCreatePrincipal::Session(principal) => {
+            let request = serde_json::from_value::<BrowserAddRecruitmentMemberRequest>(request)
+                .map_err(|_| invalid_browser_recruitment_member_request(&request_id))?;
+            require_csrf(&headers, &state, &principal, &request_id)?;
+            let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+            let snapshot = bot_workflow::add_web_recruitment_member(
+                database(&state, &request_id)?,
+                &guild_id,
+                recruitment_id,
+                &principal.session.user_id,
+                request.member_id,
+                &idempotency_key,
+                &request_id,
+            )
+            .await
+            .map_err(|error| web_recruitment_mutation_error(error, &request_id))?;
+            Ok(error::success(StatusCode::OK, &request_id, snapshot))
+        }
+    }
+}
+
+pub async fn cancel_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+) -> Result<Response, ApiError> {
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::cancel_web_recruitment(
+        database(&state, &request_id)?,
         &guild_id,
-        StatusCode::OK,
-        BotRecruitmentCommand::Join {
-            actor: actor(request.actor, &request_id)?,
-            recruitment_id,
-            participant: actor(request.member, &request_id)?,
-        },
+        recruitment_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
     )
     .await
+    .map_err(|error| web_recruitment_mutation_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
 }
 
 pub async fn leave_recruitment(
@@ -280,22 +396,46 @@ pub async fn leave_recruitment(
     Extension(request_id): Extension<RequestId>,
     Path((guild_id, recruitment_id, user_id)): Path<(GuildId, RecruitmentId, UserId)>,
     headers: HeaderMap,
-    _principal: BotServicePrincipal,
-    Json(request): Json<ActorOnlyRequest>,
+    principal: RecruitmentCreatePrincipal,
+    Json(request): Json<Value>,
 ) -> Result<Response, ApiError> {
-    recruitment_command(
-        &state,
-        &request_id,
-        &headers,
-        &guild_id,
-        StatusCode::OK,
-        BotRecruitmentCommand::Leave {
-            actor: actor(request.actor, &request_id)?,
-            recruitment_id,
-            user_id,
-        },
-    )
-    .await
+    match principal {
+        RecruitmentCreatePrincipal::Bot(_) => {
+            let request = serde_json::from_value::<ActorOnlyRequest>(request)
+                .map_err(|_| invalid_request("body", &request_id))?;
+            recruitment_command(
+                &state,
+                &request_id,
+                &headers,
+                &guild_id,
+                StatusCode::OK,
+                BotRecruitmentCommand::Leave {
+                    actor: actor(request.actor, &request_id)?,
+                    recruitment_id,
+                    user_id,
+                },
+            )
+            .await
+        }
+        RecruitmentCreatePrincipal::Session(principal) => {
+            serde_json::from_value::<BrowserRemoveRecruitmentMemberRequest>(request)
+                .map_err(|_| invalid_browser_recruitment_member_request(&request_id))?;
+            require_csrf(&headers, &state, &principal, &request_id)?;
+            let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+            let snapshot = bot_workflow::remove_web_recruitment_member(
+                database(&state, &request_id)?,
+                &guild_id,
+                recruitment_id,
+                &principal.session.user_id,
+                user_id,
+                &idempotency_key,
+                &request_id,
+            )
+            .await
+            .map_err(|error| web_recruitment_mutation_error(error, &request_id))?;
+            Ok(error::success(StatusCode::OK, &request_id, snapshot))
+        }
+    }
 }
 
 pub async fn set_preferred_lanes(
@@ -339,21 +479,207 @@ pub async fn close_recruitment(
     Extension(request_id): Extension<RequestId>,
     Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
     headers: HeaderMap,
-    _principal: BotServicePrincipal,
-    Json(request): Json<ActorOnlyRequest>,
+    principal: RecruitmentCreatePrincipal,
+    Json(request): Json<Value>,
 ) -> Result<Response, ApiError> {
-    recruitment_command(
-        &state,
-        &request_id,
-        &headers,
+    match principal {
+        RecruitmentCreatePrincipal::Bot(_) => {
+            let request = serde_json::from_value::<ActorOnlyRequest>(request)
+                .map_err(|_| invalid_request("body", &request_id))?;
+            recruitment_command(
+                &state,
+                &request_id,
+                &headers,
+                &guild_id,
+                StatusCode::OK,
+                BotRecruitmentCommand::Close {
+                    actor: actor(request.actor, &request_id)?,
+                    recruitment_id,
+                },
+            )
+            .await
+        }
+        RecruitmentCreatePrincipal::Session(principal) => {
+            serde_json::from_value::<BrowserCloseRecruitmentRequest>(request)
+                .map_err(|_| invalid_browser_recruitment_close_request(&request_id))?;
+            require_csrf(&headers, &state, &principal, &request_id)?;
+            let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+            let snapshot = bot_workflow::close_web_recruitment(
+                database(&state, &request_id)?,
+                &guild_id,
+                recruitment_id,
+                &principal.session.user_id,
+                &idempotency_key,
+                &request_id,
+            )
+            .await
+            .map_err(|error| web_recruitment_mutation_error(error, &request_id))?;
+            Ok(error::success(StatusCode::OK, &request_id, snapshot))
+        }
+    }
+}
+
+pub async fn create_series(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(guild_id): Path<GuildId>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserSeriesCreateRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_series_create_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::create_web_series(
+        database(&state, &request_id)?,
         &guild_id,
-        StatusCode::OK,
-        BotRecruitmentCommand::Close {
-            actor: actor(request.actor, &request_id)?,
-            recruitment_id,
-        },
+        &principal.session.user_id,
+        request.source_recruitment_id,
+        request.expected_revision,
+        &idempotency_key,
+        &request_id,
     )
     .await
+    .map_err(|error| web_series_create_error(error, &request_id))?;
+    Ok(error::success(StatusCode::CREATED, &request_id, result))
+}
+
+pub async fn revert_series(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserSeriesLifecycleRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_series_lifecycle_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::revert_web_series(
+        database(&state, &request_id)?,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+        request.expected_revision,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_series_lifecycle_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
+}
+
+pub async fn delete_series(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, series_id)): Path<(GuildId, SeriesId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserSeriesLifecycleRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_series_lifecycle_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::delete_web_series(
+        database(&state, &request_id)?,
+        &guild_id,
+        series_id,
+        &principal.session.user_id,
+        request.expected_revision,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_series_lifecycle_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
+}
+
+pub async fn update_entry_draft(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserEntryDraftMutationRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_entry_draft_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::update_web_entry_draft(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        request.expected_revision,
+        request.operation,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_entry_draft_mutation_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn reset_entry_draft(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserEntryDraftRevisionRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_entry_draft_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::reset_web_entry_draft(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        request.expected_revision,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_entry_draft_mutation_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn reopen_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<BrowserEntryDraftRevisionRequest>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_entry_draft_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::reopen_web_recruitment(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        request.expected_revision,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_entry_draft_mutation_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
 }
 
 async fn recruitment_command(
@@ -440,6 +766,92 @@ fn interaction_id(
     DiscordInteractionId::parse(value.to_owned()).map_err(|_| invalid_idempotency_key(request_id))
 }
 
+fn browser_idempotency_key(
+    headers: &HeaderMap,
+    request_id: &RequestId,
+) -> Result<String, ApiError> {
+    let mut values = headers.get_all(IDEMPOTENCY_KEY).iter();
+    let value = values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            values.next().is_none()
+                && !value.is_empty()
+                && value.len() <= MAX_BROWSER_IDEMPOTENCY_KEY_BYTES
+                && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+        })
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                request_id,
+                "invalid_idempotency_key",
+                "Idempotency-Key 헤더가 필요합니다.",
+                Some(serde_json::json!({ "maxLength": MAX_BROWSER_IDEMPOTENCY_KEY_BYTES })),
+            )
+        })?;
+    Ok(value.to_owned())
+}
+
+fn invalid_browser_create_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_recruitment_create_request",
+        "내전 생성 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_recruitment_member_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_recruitment_member_request",
+        "모집 참가자 변경 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_recruitment_close_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_recruitment_close_request",
+        "엔트리 편성 시작 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_entry_draft_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_entry_draft_request",
+        "엔트리 편성 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_series_create_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_series_create_request",
+        "시리즈 시작 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn invalid_browser_series_lifecycle_request(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_series_lifecycle_request",
+        "시리즈 상태 변경 요청 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
 fn invalid_idempotency_key(request_id: &RequestId) -> ApiError {
     ApiError::new(
         StatusCode::BAD_REQUEST,
@@ -486,7 +898,9 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "Bot command 요청 형식이 올바르지 않습니다.",
             None,
         ),
-        BotWorkflowError::GuildNotFound | BotWorkflowError::RecruitmentNotFound => ApiError::new(
+        BotWorkflowError::GuildNotFound
+        | BotWorkflowError::RecruitmentNotFound
+        | BotWorkflowError::SeriesNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             request_id,
             "not_found",
@@ -521,6 +935,13 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "길드 초기 설정을 먼저 완료해야 합니다.",
             None,
         ),
+        BotWorkflowError::RecruitmentChannelNotConfigured => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "recruitment_channel_not_configured",
+            "Discord 모집 채널을 먼저 설정해야 내전을 만들 수 있습니다.",
+            None,
+        ),
         BotWorkflowError::OperatorRequired => ApiError::new(
             StatusCode::FORBIDDEN,
             request_id,
@@ -533,6 +954,27 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             request_id,
             "member_inactive",
             "비활성화된 길드 멤버는 이 작업을 수행할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::RecruitmentMemberNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "guild_member_not_found",
+            "길드에 소속된 사용자를 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::RecruitmentMemberInactive => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "guild_member_inactive",
+            "비활성화된 길드 멤버는 모집에 추가할 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 이 작업을 수행할 수 있습니다.",
             None,
         ),
         BotWorkflowError::RiotAccountAlreadyLinked => ApiError::new(
@@ -563,6 +1005,84 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "invalid_recruitment_state",
             "현재 모집 상태에서는 이 작업을 수행할 수 없습니다.",
             Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::EntryDraftNotEditable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "entry_draft_not_editable",
+            "현재 모집 상태에서는 엔트리 편성을 수정할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::EntryDraftRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "entry_draft_revision_conflict",
+            "다른 운영자가 엔트리 편성을 변경했습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::RecruitmentRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "recruitment_revision_conflict",
+            "모집 상태가 변경되었습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::SeriesSourceNotReady(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_source_not_ready",
+            "모집 마감 후 엔트리 편성이 완료된 상태에서만 시리즈를 시작할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::SeriesNotInProgress(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_not_in_progress",
+            "진행 중인 시리즈에서만 이 작업을 수행할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::SeriesRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_revision_conflict",
+            "시리즈 상태가 변경되었습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::SeriesSourceNotConverted(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_source_not_converted",
+            "원본 모집 상태가 변경되어 시리즈 상태를 변경할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::SeriesHasConfirmedGames { count } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_has_confirmed_games",
+            "확정된 게임이 있어 지금은 시리즈를 되돌리거나 삭제할 수 없습니다. 마지막 게임부터 되돌린 뒤 다시 시도해 주세요.",
+            Some(serde_json::json!({ "confirmedGameCount": count })),
+        ),
+        BotWorkflowError::EntryDraftIncomplete {
+            joined,
+            assigned,
+            target,
+        } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "entry_draft_incomplete",
+            "참가자 10명을 양 팀의 모든 라인에 배치한 뒤 시리즈를 시작할 수 있습니다.",
+            Some(serde_json::json!({
+                "joinedCount": joined,
+                "assignedCount": assigned,
+                "targetCount": target,
+            })),
+        ),
+        BotWorkflowError::InvalidEntrySlot => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "invalid_entry_slot",
+            "엔트리 배치 위치가 올바르지 않습니다.",
+            None,
         ),
         BotWorkflowError::RecruitmentFull => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -638,6 +1158,198 @@ fn registration_command_error(error: BotWorkflowError, request_id: &RequestId) -
             request_id,
             "guild_setup_required",
             "길드 초기 설정을 먼저 완료해야 합니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_create_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 내전을 만들 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::NoActiveSeason => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "no_active_season",
+            "길드에 진행 중인 시즌이 없어 내전을 만들 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 내전 생성 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_recruitment_mutation_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 모집을 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 모집 변경 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_entry_draft_mutation_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 엔트리 편성을 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 엔트리 편성 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_series_create_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::RecruitmentRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "recruitment_revision_conflict",
+            "모집 상태가 변경되었습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::SeriesSourceNotReady(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_source_not_ready",
+            "모집 마감 후 엔트리 편성이 완료된 상태에서만 시리즈를 시작할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::EntryDraftIncomplete {
+            joined,
+            assigned,
+            target,
+        } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "entry_draft_incomplete",
+            "참가자 10명을 양 팀의 모든 라인에 배치한 뒤 시리즈를 시작할 수 있습니다.",
+            Some(serde_json::json!({
+                "joinedCount": joined,
+                "assignedCount": assigned,
+                "targetCount": target,
+            })),
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 시리즈 시작 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_series_lifecycle_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
+    match error {
+        BotWorkflowError::SeriesRevisionConflict { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_revision_conflict",
+            "시리즈 상태가 변경되었습니다. 최신 상태를 확인해 주세요.",
+            Some(serde_json::json!({ "expectedRevision": expected, "actualRevision": actual })),
+        ),
+        BotWorkflowError::SeriesNotInProgress(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_not_in_progress",
+            "진행 중인 시리즈에서만 이 작업을 수행할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::SeriesSourceNotConverted(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_source_not_converted",
+            "원본 모집 상태가 변경되어 시리즈 상태를 변경할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::SeriesHasConfirmedGames { count } => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "series_has_confirmed_games",
+            "확정된 게임이 있어 지금은 시리즈를 되돌리거나 삭제할 수 없습니다. 마지막 게임부터 되돌린 뒤 다시 시도해 주세요.",
+            Some(serde_json::json!({ "confirmedGameCount": count })),
+        ),
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 시리즈 상태를 변경할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 시리즈 상태 변경 요청을 처리하고 있습니다.",
             None,
         ),
         error => command_error(error, request_id),

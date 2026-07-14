@@ -22,6 +22,7 @@ use crate::{
         discord::{DiscordClientError, ReqwestDiscordClient},
         riot::{ReqwestRiotClient, RiotClientError},
     },
+    realtime::{RealtimeRuntime, RealtimeRuntimeError},
     repository::auth::AuthRepository,
     state::{AppState, AuthRuntime},
 };
@@ -29,13 +30,14 @@ use crate::{
 pub async fn run(config: Config) -> Result<(), BootstrapError> {
     let bind_addr = config.bind_addr();
     let environment = config.environment().as_str();
+    let realtime = RealtimeRuntime::from_config(&config)?;
     let mut state = if let Some(database_config) = config.database() {
         let pool = postgres::connect(database_config).await?;
-        let probe = Arc::new(PostgresReadinessProbe::new(
-            pool.clone(),
-            database_config.probe_timeout(),
-        ));
-        AppState::with_postgres(config, pool, probe)
+        let mut probe = PostgresReadinessProbe::new(pool.clone(), database_config.probe_timeout());
+        if let Some(valkey) = realtime.as_ref().and_then(RealtimeRuntime::valkey_client) {
+            probe = probe.with_valkey(valkey);
+        }
+        AppState::with_postgres(config, pool, Arc::new(probe))
     } else {
         AppState::phase_one(config)
     };
@@ -68,6 +70,20 @@ pub async fn run(config: Config) -> Result<(), BootstrapError> {
         state = state.with_riot(Arc::new(riot));
     }
 
+    match (state.postgres().cloned(), realtime) {
+        (Some(pool), Some(realtime)) => {
+            realtime.start(pool);
+            state = state.with_realtime(realtime);
+        }
+        (Some(_), None) => {
+            tracing::warn!(
+                environment,
+                "realtime WebSocket is disabled because MONKEYBOT_VALKEY_URL is not configured"
+            );
+        }
+        (None, _) => {}
+    }
+
     let app = build_router(state.clone());
     let listener = TcpListener::bind(bind_addr)
         .await
@@ -89,6 +105,7 @@ where
     let drain_timeout = state.config().shutdown_timeout();
     let readiness = state.readiness().clone();
     let postgres = state.postgres().cloned();
+    let realtime = state.realtime().cloned();
     drop(state);
     let (shutdown_started_tx, shutdown_started_rx) = watch::channel(None::<Instant>);
     let graceful_signal = async move {
@@ -120,13 +137,21 @@ where
     tokio::select! {
         result = &mut server => {
             let server_result = result.map_err(BootstrapError::Serve);
+            if let Some(realtime) = &realtime {
+                realtime.shutdown();
+            }
             if let Some(pool) = postgres {
                 let shutdown_deadline = *shutdown_started_rx.borrow();
                 close_pool(pool, shutdown_deadline, drain_timeout).await?;
             }
             server_result
         },
-        () = &mut drain_deadline => Err(BootstrapError::DrainTimeout(drain_timeout)),
+        () = &mut drain_deadline => {
+            if let Some(realtime) = &realtime {
+                realtime.shutdown();
+            }
+            Err(BootstrapError::DrainTimeout(drain_timeout))
+        },
     }
 }
 
@@ -188,6 +213,8 @@ pub enum BootstrapError {
     Discord(#[from] DiscordClientError),
     #[error("Riot integration client initialization failed")]
     Riot(#[from] RiotClientError),
+    #[error("realtime runtime initialization failed")]
+    Realtime(#[from] RealtimeRuntimeError),
     #[error("API server failed: {0}")]
     Serve(#[source] std::io::Error),
     #[error("graceful shutdown exceeded {0:?}")]

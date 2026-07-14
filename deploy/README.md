@@ -41,6 +41,12 @@ OAUTH_BASE_URL=http://127.0.0.1:30020/
 MONKEYBOT_PUBLIC_ORIGIN=http://localhost:5173
 ```
 
+`/ws`도 같은 origin으로 Axum에 proxy된다. Development API는 private `deploy_data` network의
+`redis://valkey:6379/`을 사용해 outbox invalidate를 모든 API instance에 fan-out한다. 로컬 API는
+`MONKEYBOT_VALKEY_URL`이 비어 있으면 단일 process hub를 사용하므로, 여러 API instance 또는 shared
+development traffic을 함께 검증할 때는 Valkey URL을 명시해야 한다. Valkey는 원장이나 draft를 저장하지
+않고 Pub/Sub delivery에만 사용한다.
+
 Proxy target은 Axum bind와 같은 IPv4 loopback을 명시해 `localhost`가 IPv6 `::1`로 해석되는 환경의
 connection failure를 피한다. `API_BASE_URL`은 `/api/`와 trailing slash를 모두 포함하고 OAuth base는
 root trailing slash로 끝나야 한다. 따라서 frontend의

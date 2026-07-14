@@ -12,6 +12,8 @@ mod guild_leaderboard_routes;
 mod guild_record_profile_routes;
 mod guild_season_routes;
 mod middleware;
+mod notification_routes;
+mod realtime_routes;
 mod riot_routes;
 mod routes;
 mod search_suggestion_routes;
@@ -41,6 +43,7 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
     Router::new()
         .route("/healthz", get(routes::healthz))
         .route("/readyz", get(routes::readyz))
+        .route("/ws", get(realtime_routes::websocket))
         .route("/oauth/discord/start", get(auth_routes::oauth_start))
         .route("/oauth/callback", get(auth_routes::oauth_callback))
         .route("/api/logout", post(auth_routes::logout))
@@ -109,6 +112,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             get(workflow_routes::recruitments).post(bot_routes::create_recruitment),
         )
         .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}",
+            get(workflow_routes::recruitment).delete(bot_routes::cancel_recruitment),
+        )
+        .route(
             "/api/guilds/{guild_id}/recruitments/{recruitment_id}/message",
             put(bot_routes::bind_recruitment_message),
         )
@@ -129,8 +136,28 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             post(bot_routes::close_recruitment),
         )
         .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}/entry-draft",
+            get(workflow_routes::entry_draft).patch(bot_routes::update_entry_draft),
+        )
+        .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}/entry-draft/reset",
+            post(bot_routes::reset_entry_draft),
+        )
+        .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}/reopen",
+            post(bot_routes::reopen_recruitment),
+        )
+        .route(
             "/api/guilds/{guild_id}/series",
-            get(workflow_routes::series),
+            get(workflow_routes::series).post(bot_routes::create_series),
+        )
+        .route(
+            "/api/guilds/{guild_id}/series/{series_id}",
+            get(workflow_routes::series_detail).delete(bot_routes::delete_series),
+        )
+        .route(
+            "/api/guilds/{guild_id}/series/{series_id}/revert",
+            post(bot_routes::revert_series),
         )
         .route(
             "/api/guilds/{guild_id}/auction-recruitments",
@@ -182,6 +209,7 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             "/api/me/privacy",
             get(riot_routes::privacy).put(riot_routes::update_privacy),
         )
+        .merge(notification_routes::router())
         .merge(dummy_user_routes)
         .merge(extra_routes)
         .fallback(routes::not_found)

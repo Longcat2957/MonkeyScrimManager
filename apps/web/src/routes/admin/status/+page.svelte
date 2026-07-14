@@ -101,19 +101,7 @@
 </svelte:head>
 
 <div class="space-y-5">
-	<WorkspaceHeader
-		kicker="Admin"
-		title="운영 상태"
-		description="서비스 연결 상태를 확인합니다."
-		metrics={[
-			{
-				label: '현재 상태',
-				value: issues.length > 0 ? '점검 필요' : '정상',
-				tone: issues.length > 0 ? 'warning' : 'success'
-			},
-			{ label: '문제', value: issues.length, tone: issues.length > 0 ? 'warning' : 'neutral' }
-		]}
-	>
+	<WorkspaceHeader kicker="Admin" title="운영 상태" description="서비스 연결 상태를 확인합니다.">
 		{#snippet actions()}
 			<button
 				type="button"

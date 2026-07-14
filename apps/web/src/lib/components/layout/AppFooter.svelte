@@ -8,7 +8,7 @@
 	let { reserveFabSpace = true }: Props = $props();
 </script>
 
-<footer class="border-t border-[var(--color-app-border)] bg-[var(--color-app-header)]">
+<footer class="shrink-0 border-t border-[var(--color-app-border)] bg-[var(--color-app-header)]">
 	<div
 		class={`mx-auto flex min-h-14 max-w-[1680px] flex-wrap items-center justify-between gap-3 py-3 pl-4 lg:pl-6 ${
 			reserveFabSpace ? 'pr-24' : 'pr-4 lg:pr-6'

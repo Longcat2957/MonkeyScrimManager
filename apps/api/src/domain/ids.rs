@@ -188,6 +188,7 @@ uuid_id!(AuctionMatchId);
 uuid_id!(GameId);
 uuid_id!(IdempotencyRecordId);
 uuid_id!(OutboxEventId);
+uuid_id!(NotificationId);
 
 fn validate_snowflake(value: &str) -> Result<(), SnowflakeError> {
     if value.is_empty()

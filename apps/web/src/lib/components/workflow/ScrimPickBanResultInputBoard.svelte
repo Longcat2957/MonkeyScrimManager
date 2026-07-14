@@ -22,6 +22,7 @@
 		initialGame?: ScrimPickBanResultInputGame;
 		champions?: ScrimPickBanResultInputChampion[];
 		patchVersion?: string;
+		teamsAreGameSides?: boolean;
 		onSubmit?: (game: ScrimPickBanResultInputGame) => void | Promise<void>;
 	}
 
@@ -31,6 +32,7 @@
 		initialGame = mockScrimPickBanResultInputGames[0]!,
 		champions = scrimPickBanResultInputChampions,
 		patchVersion = mockScrimPickBanResultInputPatch,
+		teamsAreGameSides = false,
 		onSubmit
 	}: Props = $props();
 
@@ -67,6 +69,7 @@
 	const pickBanDone = $derived(allBansFilled && allPicksFilled);
 	const canLeavePickBan = $derived(!strict || pickBanDone);
 	const ready = $derived(sideDone && canLeavePickBan && winner !== null);
+	const canSubmit = $derived(ready && onSubmit !== undefined);
 	const progressSteps = $derived([
 		{ key: 'SIDE' as const, label: '사이드', done: sideDone },
 		{ key: 'PICKBAN' as const, label: '픽밴', done: pickBanDone },
@@ -76,6 +79,7 @@
 	const canRedo = $derived(redoStack.length > 0);
 	const sidePresets: ScrimPickBanResultInputSidePreset[] = ['DEFAULT', 'SWAPPED'];
 	const winnerSides: ScrimPickBanResultInputSide[] = ['BLUE', 'RED'];
+	const boardColumns: Array<'LEFT' | 'RIGHT'> = ['LEFT', 'RIGHT'];
 
 	function captureSnapshot(): ScrimPickBanResultInputSnapshot {
 		return {
@@ -172,6 +176,7 @@
 	}
 
 	function teamForSide(side: ScrimPickBanResultInputSide) {
+		if (teamsAreGameSides) return teams[side];
 		return sideForColumn(sidePreset, 'LEFT') === side ? teams.BLUE : teams.RED;
 	}
 
@@ -202,10 +207,10 @@
 	}
 
 	async function submit() {
-		if (!ready || submitting) return;
+		if (!canSubmit || submitting || !onSubmit) return;
 		submitting = true;
 		try {
-			await onSubmit?.({
+			await onSubmit({
 				id: initialGame.id,
 				label: initialGame.label,
 				sidePreset,
@@ -291,22 +296,28 @@
 						<div
 							class="grid min-w-[34rem] grid-cols-2 gap-1 overflow-x-auto bg-[var(--color-app-surface)]"
 						>
-							{#each [{ column: 'LEFT' as const, team: teams.BLUE }, { column: 'RIGHT' as const, team: teams.RED }] as item (item.column)}
-								<section class={sidePanelClass(sideForColumn(preset, item.column))}>
+							{#each boardColumns as column (column)}
+								{@const side = sideForColumn(preset, column)}
+								{@const team = teamsAreGameSides
+									? teams[side]
+									: column === 'LEFT'
+										? teams.BLUE
+										: teams.RED}
+								<section class={sidePanelClass(side)}>
 									<div class="flex h-11 items-center justify-between px-2">
 										<div>
 											<p class="text-sm font-semibold text-slate-100">
-												{item.team.name}
+												{team.name}
 											</p>
 										</div>
 										<span
-											class={`bg-slate-950/35 px-2 py-1 text-[11px] font-semibold ${sideClass(sideForColumn(preset, item.column))}`}
+											class={`bg-slate-950/35 px-2 py-1 text-[11px] font-semibold ${sideClass(side)}`}
 										>
-											{sideLabel(sideForColumn(preset, item.column))}
+											{sideLabel(side)}
 										</span>
 									</div>
 									<div class="grid grid-rows-[repeat(5,3rem)] gap-1 px-1.5 pb-1.5">
-										{#each item.team.players as player (player.id)}
+										{#each team.players as player (player.id)}
 											<div
 												class="grid min-h-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-1 rounded-sm bg-slate-950/25 p-1"
 											>
@@ -463,7 +474,8 @@
 				<button
 					type="button"
 					class="inline-flex h-9 items-center justify-center rounded-sm bg-emerald-400/14 px-4 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-					disabled={!ready || submitting}
+					disabled={!canSubmit || submitting}
+					title={onSubmit ? undefined : '결과 기록 API가 연결되면 사용할 수 있습니다.'}
 					onclick={submit}
 				>
 					{submitting ? '기록 중' : '결과 기록'}

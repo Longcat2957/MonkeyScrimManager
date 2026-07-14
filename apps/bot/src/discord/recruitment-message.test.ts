@@ -21,6 +21,7 @@ function snapshot(
 			revision: 3,
 			channelId: null,
 			messageId: null,
+			createdById: '100000000000000001',
 			updatedAt: '2026-07-13T10:00:00Z'
 		},
 		participants: Array.from({ length: participantCount }, (_, index) => ({

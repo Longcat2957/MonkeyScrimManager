@@ -12,6 +12,7 @@ pub mod guild_record_profiles;
 pub mod guild_seasons;
 pub mod idempotency;
 pub mod mmr;
+pub mod notification_outbox;
 pub mod outbox;
 pub mod riot;
 pub mod riot_records;

@@ -362,6 +362,15 @@ async fn seed_identity_and_guilds(pool: &PgPool) -> TestResult {
         .bind(display_name)
         .execute(pool)
         .await?;
+
+        sqlx::query(
+            "INSERT INTO user_discord_identities (
+                user_id, discord_id, created_at, updated_at
+             ) VALUES ($1, $1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
     }
 
     sqlx::query(

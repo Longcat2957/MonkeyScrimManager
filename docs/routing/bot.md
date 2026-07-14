@@ -16,7 +16,7 @@ Bot route의 책임:
 - 모집 메시지 렌더링.
 - button/select interaction 처리.
 - 웹 딥링크 생성.
-- API -> Bot internal notify 수신 후 Discord 알림 발행.
+- API notification outbox claim 후 Discord 알림 발행.
 
 Bot route의 비책임:
 
@@ -196,6 +196,11 @@ MVP command registry에 등록하지 않는다. Screening UI와 API 계약이 �
 2. interaction ID를 `Idempotency-Key`로 Axum create command에 전달한다.
 3. response snapshot으로 모집 메시지를 게시한다.
 4. 게시된 channel/message ID를 별도 idempotent bind command로 저장한다.
+
+Web에서 생성된 모집은 interaction reply가 없다. Backend가 configured recruitment channel을 대상으로
+`RECRUITMENT_MESSAGE_CREATE` notification을 transactionally enqueue하고, ready Bot worker가 같은
+`renderRecruitmentMessage` renderer로 채널 message를 발행한다. send 성공 뒤 typed acknowledgement가
+message reference를 원자적으로 bind한다.
 
 Bot은 guild counter, ACTIVE season, 참가자, audit, outbox를 직접 변경하지 않는다.
 
@@ -611,25 +616,36 @@ Web link:
 
 ## API -> Bot Internal Routing
 
-Bot은 Backend internal notify를 받아 Discord 메시지/알림을 best-effort로 발행한다.
+Bot은 ready 이후 polling worker로 internal notification outbox를 claim한다. 이 worker는 browser session을
+사용하지 않고 Bot service principal과 고유 `instanceId`를 사용한다.
 
-Internal events:
+일반 모집 typed notification:
 
-- `recruit-refresh`
-- `series-created`
-- `series-completed`
-- `auction-tournament-completed`
-- `auction-match-created`
-- generic `notify`
-- heartbeat
+```text
+RECRUITMENT_MESSAGE_CREATE
+RECRUITMENT_MESSAGE_UPDATE
+RECRUITMENT_MESSAGE_DELETE
+payload = { schemaVersion: 1, recruitmentId, snapshot }
+```
 
-Bot 처리:
+처리 순서:
 
-- 모집 메시지 갱신.
-- 라인업 이미지 발행.
-- 종료 카드 발행.
-- 경매 matchup/end card 발행.
-- slash command 등록 이후 health/heartbeat 유지.
+1. `POST /internal/notifications/claim`으로 최대 50개의 lease row를 claim한다.
+2. payload version과 full recruitment snapshot을 검증하고 configured recruitment channel에
+   `renderRecruitmentMessage(snapshot)`을 보낸다. CREATE에는 `discordNonce`를 그대로 Discord nonce로
+   사용한다.
+3. CREATE send가 성공하면 `POST /internal/notifications/recruitment-message/ack`로 message ID를 보낸다.
+   이 acknowledgement는 delivered 전이와 recruitment message bind를 원자적으로 처리하고, create와
+   경합한 수동 추가/취소가 있으면 최신 UPDATE 또는 DELETE를 후속 적재한다.
+4. UPDATE는 payload snapshot의 bound message를 같은 renderer 결과로 edit한 뒤 generic
+   `POST /internal/notifications/ack`를 호출한다. DELETE는 bound message를 삭제한 뒤 generic ack을
+   호출한다. Discord가 이미 삭제된 message를 반환하면 DELETE delivery는 완료로 처리해 ack한다.
+5. send/edit/delete 전에 실패하면 `POST /internal/notifications/nack`을 보낸다. 429/5xx/transport은 retry이고,
+   ordinary 4xx 또는 delivery result가 불명확하면 terminal failure다.
+
+UPDATE deduplication key는 recruitment revision을 포함하고 DELETE key는 recruitment마다 하나다. Browser
+수동 추가와 soft-cancel은 bound message가 있을 때 각각 UPDATE와 DELETE를 적재한다. message bind 전의
+mutation은 typed CREATE ack의 revision/status check가 보완한다.
 
 ## Web Deep Links
 

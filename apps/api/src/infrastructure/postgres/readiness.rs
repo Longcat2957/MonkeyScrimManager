@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::future::BoxFuture;
 use sqlx::{PgPool, Row};
@@ -10,11 +10,21 @@ use crate::state::{ComponentStatus, DependencyProbe, DependencySnapshot};
 pub struct PostgresReadinessProbe {
     pool: PgPool,
     timeout: Duration,
+    valkey: Option<Arc<redis::Client>>,
 }
 
 impl PostgresReadinessProbe {
     pub const fn new(pool: PgPool, timeout: Duration) -> Self {
-        Self { pool, timeout }
+        Self {
+            pool,
+            timeout,
+            valkey: None,
+        }
+    }
+
+    pub fn with_valkey(mut self, valkey: Arc<redis::Client>) -> Self {
+        self.valkey = Some(valkey);
+        self
     }
 
     async fn check_with_connection(&self) -> Result<bool, sqlx::Error> {
@@ -52,26 +62,46 @@ impl PostgresReadinessProbe {
                     })
             }))
     }
+
+    async fn check_valkey(&self) -> ComponentStatus {
+        let Some(client) = &self.valkey else {
+            return ComponentStatus::NotConfigured;
+        };
+        let probe = async {
+            let mut connection = client.get_multiplexed_async_connection().await?;
+            redis::cmd("PING")
+                .query_async::<String>(&mut connection)
+                .await
+        };
+        match tokio::time::timeout(self.timeout, probe).await {
+            Ok(Ok(response)) if response == "PONG" => ComponentStatus::Available,
+            _ => ComponentStatus::Unavailable,
+        }
+    }
 }
 
 impl DependencyProbe for PostgresReadinessProbe {
     fn check(&self) -> BoxFuture<'_, DependencySnapshot> {
         Box::pin(async move {
-            match tokio::time::timeout(self.timeout, self.check_with_connection()).await {
+            let (postgres, valkey) = tokio::join!(
+                tokio::time::timeout(self.timeout, self.check_with_connection()),
+                self.check_valkey(),
+            );
+            match postgres {
                 Ok(Ok(true)) => DependencySnapshot {
                     postgres: ComponentStatus::Available,
                     migration: ComponentStatus::Available,
-                    valkey: ComponentStatus::NotConfigured,
+                    valkey,
                 },
                 Ok(Ok(false)) => DependencySnapshot {
                     postgres: ComponentStatus::Available,
                     migration: ComponentStatus::Unavailable,
-                    valkey: ComponentStatus::NotConfigured,
+                    valkey,
                 },
                 Ok(Err(_)) | Err(_) => DependencySnapshot {
                     postgres: ComponentStatus::Unavailable,
                     migration: ComponentStatus::Unavailable,
-                    valkey: ComponentStatus::NotConfigured,
+                    valkey,
                 },
             }
         })

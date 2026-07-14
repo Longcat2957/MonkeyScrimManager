@@ -94,6 +94,7 @@ route는 이 shell 안에서 작업대 내용을 채운다. route마다 별도�
 규칙:
 
 - panel은 작업 영역, 반복 row, table, modal 같은 명확한 프레임에만 쓴다.
+- 참가자, roster, 감사 로그처럼 길어지는 반복 목록 panel은 고정 px 높이 대신 viewport의 남은 높이를 쓰는 내부 ScrollArea를 사용한다. panel header와 actions는 scroll 영역 밖에 두어 항상 보이게 하고, 목록은 Footer 직전의 남은 영역에서만 스크롤한다.
 - card 안의 card는 만들지 않는다.
 - route-local 색상, spacing, badge 변형을 늘리지 않는다.
 - 사용자가 선택할 수 없는 항목은 `border-radius: 0`으로 처리한다.

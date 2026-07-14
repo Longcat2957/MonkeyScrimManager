@@ -11,8 +11,10 @@
 		connectionState: RealtimeConnectionState;
 		saveState: RealtimeSaveState;
 		editors?: RealtimeEditor[];
+		showEditors?: boolean;
 		lastSavedAt?: string;
 		conflictMessage?: string;
+		offlineMessage?: string;
 		onReconnect?: () => void;
 		onAcceptServer?: () => void;
 		onKeepLocal?: () => void;
@@ -23,8 +25,10 @@
 		connectionState,
 		saveState,
 		editors = [],
+		showEditors = true,
 		lastSavedAt = '방금',
 		conflictMessage = '다른 운영자가 먼저 저장한 변경이 있습니다.',
+		offlineMessage = '변경 알림을 받을 수 없습니다.',
 		onReconnect,
 		onAcceptServer,
 		onKeepLocal
@@ -83,25 +87,27 @@
 			</span>
 		</div>
 
-		<div class="flex shrink-0 items-center gap-1.5" title={`${editors.length}명 편집 중`}>
-			<div class="flex -space-x-1.5">
-				{#each editors.slice(0, 3) as editor (editor.id)}
-					<span
-						title={`${editor.name}${editor.isSelf ? ' (나)' : ''}`}
-						class={`grid size-6 place-items-center rounded-full border text-[9px] font-bold ${
-							editor.isSelf
-								? 'border-cyan-300/45 bg-cyan-400/15 text-cyan-100'
-								: 'border-slate-600 bg-slate-800 text-slate-300'
-						}`}
-					>
-						{initials(editor.name)}
-					</span>
-				{/each}
+		{#if showEditors}
+			<div class="flex shrink-0 items-center gap-1.5" title={`${editors.length}명 편집 중`}>
+				<div class="flex -space-x-1.5">
+					{#each editors.slice(0, 3) as editor (editor.id)}
+						<span
+							title={`${editor.name}${editor.isSelf ? ' (나)' : ''}`}
+							class={`grid size-6 place-items-center rounded-full border text-[9px] font-bold ${
+								editor.isSelf
+									? 'border-cyan-300/45 bg-cyan-400/15 text-cyan-100'
+									: 'border-slate-600 bg-slate-800 text-slate-300'
+							}`}
+						>
+							{initials(editor.name)}
+						</span>
+					{/each}
+				</div>
+				<span class="hidden whitespace-nowrap text-[10px] text-slate-500 md:inline">
+					{editors.length > 0 ? `${editors.length}명 편집 중` : '편집자 없음'}
+				</span>
 			</div>
-			<span class="hidden whitespace-nowrap text-[10px] text-slate-500 md:inline">
-				{editors.length > 0 ? `${editors.length}명 편집 중` : '편집자 없음'}
-			</span>
-		</div>
+		{/if}
 
 		<div
 			class="flex shrink-0 items-center gap-1.5 border-l border-[var(--color-app-border-muted)] pl-3"
@@ -127,13 +133,15 @@
 				<p class="text-xs leading-5 text-red-100">{conflictMessage}</p>
 			</div>
 			<div class="flex shrink-0 justify-end gap-1.5">
-				<button
-					type="button"
-					onclick={onKeepLocal}
-					class="inline-flex h-7 items-center rounded-sm px-2.5 text-[10px] font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
-				>
-					내 입력 유지
-				</button>
+				{#if onKeepLocal}
+					<button
+						type="button"
+						onclick={onKeepLocal}
+						class="inline-flex h-7 items-center rounded-sm px-2.5 text-[10px] font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
+					>
+						내 입력 유지
+					</button>
+				{/if}
 				<button
 					type="button"
 					onclick={onAcceptServer}
@@ -147,7 +155,7 @@
 		<div
 			class="flex items-center justify-between gap-3 border-t border-red-400/20 bg-red-500/[0.06] px-3 py-2"
 		>
-			<p class="text-xs text-red-100">변경 알림을 받을 수 없습니다.</p>
+			<p class="text-xs text-red-100">{offlineMessage}</p>
 			<button
 				type="button"
 				onclick={onReconnect}

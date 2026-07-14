@@ -543,14 +543,22 @@ EXPLAIN ANALYZE로 실제 query를 검증한 index만 유지한다.
 
 ## 10. 상태와 transaction
 
+아래 일반 내전 상태 그래프와 cascade 규칙은 제품이 충족해야 하는 **필수 목표 계약**이다. 이 계획에
+적힌 전이만으로 현재 Axum router가 converted/series/game rollback endpoint를 이미 제공한다는 뜻은
+아니다. 구현된 route는 OpenAPI와 route registration을 기준으로 확인하고, 아직 없는 lifecycle action은
+별도 vertical slice로 추가해야 한다.
+
 ```text
 Recruitment
-  OPEN -> CLOSED -> CONVERTED
+  OPEN <-> CLOSED
+  CLOSED -> CONVERTED
   OPEN/CLOSED -> CANCELLED
-  CLOSED/CANCELLED -> OPEN은 explicit reopen
+  CONVERTED -> CLOSED는 child series를 취소한 뒤 explicit revert
+  CONVERTED -> OPEN은 child series를 취소한 뒤 explicit reopen
 
 Series
-  IN_PROGRESS -> COMPLETED/CANCELLED
+  IN_PROGRESS <-> COMPLETED (마지막 confirmed game을 void/reversal하는 explicit revert)
+  IN_PROGRESS/COMPLETED -> CANCELLED (남은 confirmed game을 역순 void/reversal한 뒤 explicit delete)
   COMPLETED terminalReason = SCORE_REACHED | EARLY_WIN | EARLY_DRAW
   생성 revert: game 전 IN_PROGRESS -> CANCELLED, source recruitment -> CLOSED
 
@@ -598,7 +606,8 @@ revision을 올린다. 기존 tournament를 먼저 잠근 뒤 source recruitment
 
 ### 10.1 Entry
 
-MOVE_PARTICIPANT는 frontend swap 규칙을 유지한다.
+MOVE_PARTICIPANT는 frontend swap 규칙을 유지한다. entry-draft revision은 recruitment revision과 별도이며,
+realtime invalidate도 `guild:{guildId}:recruitment-entry-draft:{id}` topic에서 draft revision만 사용한다.
 
 - 빈 slot: 이동.
 - 기존 slot이 있는 사용자가 점유 slot으로 이동: 교환.
@@ -626,6 +635,13 @@ v3 MMR input/output을 golden test로 고정한 뒤 Rust로 이식한다.
 Game revert는 game void, reversal MMR ledger, summary/score/status 복구를 한
 transaction에서 처리한다. 대상 game entry가 모든 참가자의 해당 season/lane ledger tail일
 때만 허용하며 이후 변경이 있으면 dependency conflict로 거부한다.
+
+필수 목표 계약에서 일반 내전의 lifecycle command는 어느 상태에서도 운영자를 막다른 상태에 남겨 두지
+않아야 한다. 현재 단계 수정, 직전 단계 복귀, 삭제는 명시 command로 제공해야 하며, 후속 aggregate가 있으면
+`last game -> series -> recruitment` 순으로 종속성을 해소한다. 즉 완료 series의 삭제는 확정
+game을 역순 void/reversal한 뒤 series를 `CANCELLED`로 보존하고 source recruitment를 복구해야 한다.
+직접 row를 지우거나 결과/원장을 덮어쓰는 command는 만들지 않는다. 이 cascade를 구현하지 않은 상태에서
+converted 또는 series 이후의 삭제 action을 UI에 노출해 "복구 가능"하다고 표시하지 않는다.
 
 ### 10.3 Auction
 
@@ -688,7 +704,10 @@ schema_version, restore_payload, status
 created_by/at, reverted_by/at
 ```
 
-checkpoint 이후 종속 결과가 있으면 unsafe revert를 거부한다.
+범용 checkpoint restore는 checkpoint 이후 종속 결과가 있으면 unsafe revert를 거부한다. 단, 일반 내전의
+필수 lifecycle revert/delete 구현은 종속 game과 MMR을 역순으로 void/reversal하는 cascade를 수행해야
+하므로, 완료 시 단순히 후속 row가 존재한다는 이유만으로 운영자를 막지 않는다. 이 cascade endpoint가
+구현되기 전에는 해당 state에서의 action을 지원한다고 주장하지 않는다.
 
 Transactional outbox:
 
@@ -721,6 +740,7 @@ Endpoint는 /ws 하나다.
 
 ```text
 guild:{guildId}:recruitment:{id}
+guild:{guildId}:recruitment-entry-draft:{id}
 guild:{guildId}:series:{id}
 guild:{guildId}:auction-recruitment:{id}
 guild:{guildId}:auction-tournament:{id}
@@ -747,6 +767,9 @@ Event:
 - ping/pong/idle timeout.
 - reconnect backoff + HTTP refetch.
 - duplicate/out-of-order 허용.
+- recruitment topic의 revision은 `recruitments.revision`이고, entry-draft topic의 revision은
+  `recruitment_entry_drafts.revision`이다. 같은 recruitment ID를 공유해도 event revision을 교차 비교하지
+  않는다.
 
 Frontend state:
 
@@ -1236,6 +1259,8 @@ Task:
 - BE-506 v3 MMR port.
 - BE-507 last game revert.
 - BE-508 series ledger.
+- BE-509 모든 일반 내전 상태의 명시 edit/revert/delete cascade. child game/MMR을 역순 void/reversal하고
+  series를 `CANCELLED`로 보존한 뒤 source recruitment를 복구한다.
 - BE-510 일반 모집/series notification outbox와 internal claim/ack/nack.
 - FE-500 EntryDraft controlled adapter와 reset/reopen/createSeries control. 신규 series는 BO3.
 - FE-501 PickBan controlled adapter와 cell/submit/deleteLast/revert control.

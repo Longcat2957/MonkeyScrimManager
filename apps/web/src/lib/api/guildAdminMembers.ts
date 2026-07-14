@@ -19,7 +19,8 @@ export class GuildAdminMembersApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'GuildAdminMembersApiError';
@@ -75,7 +76,8 @@ async function requestSnapshot(
 			throw new GuildAdminMembersApiError(
 				parsedError.data.error.message,
 				response.status,
-				parsedError.data.error.code
+				parsedError.data.error.code,
+				parsedError.data.error.requestId
 			);
 		}
 		throw new GuildAdminMembersApiError(

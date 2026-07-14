@@ -86,6 +86,7 @@ pub struct Config {
     auth: Option<AuthConfig>,
     bot_service: Option<BotServiceConfig>,
     riot_service: Option<RiotServiceConfig>,
+    valkey: Option<ValkeyConfig>,
 }
 
 #[derive(Clone)]
@@ -107,6 +108,11 @@ pub struct BotServiceConfig {
 pub struct RiotServiceConfig {
     base_url: Url,
     token: SecretString,
+}
+
+#[derive(Clone)]
+pub struct ValkeyConfig {
+    url: SecretString,
 }
 
 #[derive(Clone)]
@@ -198,6 +204,7 @@ impl Config {
         let auth = AuthConfig::from_lookup(&mut lookup, environment)?;
         let bot_service = BotServiceConfig::from_lookup(&mut lookup)?;
         let riot_service = RiotServiceConfig::from_lookup(&mut lookup)?;
+        let valkey = ValkeyConfig::from_lookup(&mut lookup)?;
 
         Ok(Self {
             environment,
@@ -212,6 +219,7 @@ impl Config {
             auth,
             bot_service,
             riot_service,
+            valkey,
         })
     }
 
@@ -277,6 +285,10 @@ impl Config {
 
     pub const fn riot_service(&self) -> Option<&RiotServiceConfig> {
         self.riot_service.as_ref()
+    }
+
+    pub const fn valkey(&self) -> Option<&ValkeyConfig> {
+        self.valkey.as_ref()
     }
 }
 
@@ -357,12 +369,52 @@ impl RiotServiceConfig {
     }
 }
 
+impl ValkeyConfig {
+    fn from_lookup(
+        lookup: &mut impl FnMut(&str) -> Option<String>,
+    ) -> Result<Option<Self>, ConfigError> {
+        let Some(raw_url) = lookup("MONKEYBOT_VALKEY_URL").filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let url = Url::parse(&raw_url)
+            .map_err(|_| ConfigError::invalid("MONKEYBOT_VALKEY_URL", "invalid URL"))?;
+        if url.scheme() != "redis"
+            || url.host().is_none()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(ConfigError::invalid(
+                "MONKEYBOT_VALKEY_URL",
+                "must be a redis URL without query or fragment",
+            ));
+        }
+
+        Ok(Some(Self {
+            url: SecretString::from(raw_url),
+        }))
+    }
+
+    pub fn url(&self) -> &SecretString {
+        &self.url
+    }
+}
+
 impl fmt::Debug for RiotServiceConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RiotServiceConfig")
             .field("base_url", &self.base_url)
             .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl fmt::Debug for ValkeyConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ValkeyConfig")
+            .field("url", &"[REDACTED]")
             .finish()
     }
 }
@@ -702,6 +754,7 @@ impl fmt::Debug for Config {
             .field("auth", &self.auth)
             .field("bot_service", &self.bot_service)
             .field("riot_service", &self.riot_service)
+            .field("valkey", &self.valkey)
             .finish_non_exhaustive()
     }
 }
@@ -878,6 +931,7 @@ mod tests {
         assert!(config.database().is_none());
         assert!(config.bot_service().is_none());
         assert!(config.riot_service().is_none());
+        assert!(config.valkey().is_none());
     }
 
     #[test]
@@ -982,6 +1036,36 @@ mod tests {
             Config::from_map(&values),
             Err(ConfigError::Missing {
                 key: "MONKEYBOT_RIOT_SERVICE_TOKEN"
+            })
+        ));
+    }
+
+    #[test]
+    fn valkey_url_is_optional_validated_and_redacted() {
+        let mut values = valid_values();
+        let url = "redis://:valkey-password@valkey:6379/";
+        values.insert("MONKEYBOT_VALKEY_URL".to_owned(), url.to_owned());
+
+        let config = Config::from_map(&values).expect("Valkey config should parse");
+        assert_eq!(
+            config
+                .valkey()
+                .expect("Valkey config")
+                .url()
+                .expose_secret(),
+            url
+        );
+        assert!(!format!("{config:?}").contains("valkey-password"));
+
+        values.insert(
+            "MONKEYBOT_VALKEY_URL".to_owned(),
+            "https://valkey:6379/".to_owned(),
+        );
+        assert!(matches!(
+            Config::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: "MONKEYBOT_VALKEY_URL",
+                ..
             })
         ));
     }

@@ -12,6 +12,7 @@ use crate::{
     auth::{AuthService, OAuthStartRateLimiter},
     config::Config,
     integrations::{discord::DiscordClient, riot::RiotClient},
+    realtime::RealtimeRuntime,
     repository::auth::AuthRepository,
 };
 
@@ -62,6 +63,7 @@ pub struct AppState {
     postgres: Option<PgPool>,
     auth: Option<AuthRuntime>,
     riot: Option<Arc<dyn RiotClient>>,
+    realtime: Option<RealtimeRuntime>,
 }
 
 impl AppState {
@@ -77,6 +79,7 @@ impl AppState {
             postgres: None,
             auth: None,
             riot: None,
+            realtime: None,
         }
     }
 
@@ -100,6 +103,7 @@ impl AppState {
             postgres: Some(postgres),
             auth: None,
             riot: None,
+            realtime: None,
         }
     }
 
@@ -110,6 +114,11 @@ impl AppState {
 
     pub fn with_riot(mut self, riot: Arc<dyn RiotClient>) -> Self {
         self.riot = Some(riot);
+        self
+    }
+
+    pub fn with_realtime(mut self, realtime: RealtimeRuntime) -> Self {
+        self.realtime = Some(realtime);
         self
     }
 
@@ -135,6 +144,10 @@ impl AppState {
 
     pub const fn riot(&self) -> Option<&Arc<dyn RiotClient>> {
         self.riot.as_ref()
+    }
+
+    pub const fn realtime(&self) -> Option<&RealtimeRuntime> {
+        self.realtime.as_ref()
     }
 }
 

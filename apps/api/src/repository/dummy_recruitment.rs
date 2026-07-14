@@ -18,10 +18,16 @@ use super::{
 use crate::{
     auth::AuthService,
     domain::{
-        GuildId, GuildMemberStatus, IdempotencyRecordId, Lane, OutboxEventId, RecruitmentId,
-        RecruitmentStatus, UserId,
+        DiscordChannelId, DiscordMessageId, GuildId, GuildMemberStatus, IdempotencyRecordId, Lane,
+        NotificationId, OutboxEventId, RecruitmentId, RecruitmentStatus, UserId,
     },
-    repository::dummy_users::DummyUserState,
+    infrastructure::postgres::DatabaseTransaction,
+    repository::{
+        dummy_users::DummyUserState,
+        notification_outbox::{
+            self, EnqueueNotification, NotificationOutboxError, RECRUITMENT_MESSAGE_UPDATE_TYPE,
+        },
+    },
 };
 
 const MAX_BATCH_SIZE: usize = 10;
@@ -316,6 +322,17 @@ pub async fn apply(
     .execute(&mut *transaction)
     .await?;
 
+    enqueue_bound_recruitment_message_update(
+        &mut transaction,
+        guild_id,
+        recruitment_id,
+        locked.channel_id.as_ref(),
+        locked.message_id.as_ref(),
+        after.recruitment.revision,
+        now,
+    )
+    .await?;
+
     let completed = idempotency::complete(
         &mut transaction,
         CompleteIdempotency {
@@ -588,7 +605,9 @@ async fn lock_recruitment(
     recruitment_id: RecruitmentId,
 ) -> Result<LockedRecruitmentRow, DummyRecruitmentError> {
     sqlx::query_as::<_, LockedRecruitmentRow>(
-        "SELECT recruitment.status,
+        "SELECT recruitment.channel_id,
+                recruitment.message_id,
+                recruitment.status,
                 recruitment.target_count,
                 recruitment.revision,
                 (SELECT count(*)
@@ -805,6 +824,51 @@ async fn bump_recruitment_and_draft(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn enqueue_bound_recruitment_message_update(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    recruitment_id: RecruitmentId,
+    channel_id: Option<&DiscordChannelId>,
+    message_id: Option<&DiscordMessageId>,
+    revision: i64,
+    now: OffsetDateTime,
+) -> Result<(), DummyRecruitmentError> {
+    let (Some(channel_id), Some(_message_id)) = (channel_id, message_id) else {
+        return Ok(());
+    };
+    let payload =
+        notification_outbox::recruitment_message_payload(transaction, guild_id, recruitment_id)
+            .await
+            .map_err(map_notification_outbox_error)?;
+    let deduplication_key = format!("recruitment:{recruitment_id}:message:update:{revision}");
+    notification_outbox::enqueue(
+        transaction,
+        &EnqueueNotification {
+            id: NotificationId::new(),
+            guild_id,
+            deduplication_key: &deduplication_key,
+            channel_id,
+            notification_type: RECRUITMENT_MESSAGE_UPDATE_TYPE,
+            payload: &payload,
+            created_at: now,
+        },
+    )
+    .await
+    .map_err(map_notification_outbox_error)?;
+    Ok(())
+}
+
+fn map_notification_outbox_error(source: NotificationOutboxError) -> DummyRecruitmentError {
+    match source {
+        NotificationOutboxError::Sql(source) => DummyRecruitmentError::Database(source),
+        source => {
+            tracing::error!(%source, "dummy recruitment message update enqueue invariant failed");
+            DummyRecruitmentError::StoredInvariantViolation
+        }
+    }
+}
+
 fn validate_user_ids(user_ids: &[UserId]) -> Result<(), DummyRecruitmentError> {
     if user_ids.is_empty() || user_ids.len() > MAX_BATCH_SIZE {
         return Err(DummyRecruitmentError::InvalidSelection);
@@ -837,6 +901,8 @@ struct RecruitmentOverviewRow {
 
 #[derive(Debug, FromRow)]
 struct LockedRecruitmentRow {
+    channel_id: Option<DiscordChannelId>,
+    message_id: Option<DiscordMessageId>,
     status: RecruitmentStatus,
     target_count: i16,
     revision: i64,

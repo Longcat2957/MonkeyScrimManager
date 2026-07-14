@@ -43,6 +43,32 @@ impl FromRequestParts<AppState> for BotServicePrincipal {
     }
 }
 
+pub enum RecruitmentCreatePrincipal {
+    Bot(BotServicePrincipal),
+    Session(AuthenticatedSession),
+}
+
+impl FromRequestParts<AppState> for RecruitmentCreatePrincipal {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        // An Authorization header always selects the bot path. This prevents a malformed bearer
+        // token from silently falling back to an unrelated browser session.
+        if parts.headers.contains_key(header::AUTHORIZATION) {
+            BotServicePrincipal::from_request_parts(parts, state)
+                .await
+                .map(Self::Bot)
+        } else {
+            AuthenticatedSession::from_request_parts(parts, state)
+                .await
+                .map(Self::Session)
+        }
+    }
+}
+
 pub struct AuthenticatedSession {
     pub session: ResolvedSession,
     pub token_hash: Vec<u8>,

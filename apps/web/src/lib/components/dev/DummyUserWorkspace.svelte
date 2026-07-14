@@ -174,8 +174,6 @@
 
 	const groupById = $derived(new Map(groups.map((group) => [group.id, group])));
 	const selectedUser = $derived(users.find((user) => user.userId === selectedUserId) ?? null);
-	const activeCount = $derived(users.filter((user) => user.state === 'ACTIVE').length);
-	const archivedCount = $derived(users.filter((user) => user.state === 'ARCHIVED').length);
 	const filteredUsers = $derived(
 		users.filter((user) => {
 			const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -877,16 +875,7 @@
 </script>
 
 <div class="space-y-5">
-	<WorkspaceHeader
-		kicker="개발 도구"
-		title="더미 사용자"
-		metrics={[
-			{ label: '활성', value: activeCount, tone: 'success' },
-			{ label: '보관', value: archivedCount },
-			{ label: '그룹', value: groups.length, tone: 'info' },
-			{ label: '길드', value: guilds.length }
-		]}
-	>
+	<WorkspaceHeader kicker="개발 도구" title="더미 사용자">
 		{#snippet actions()}
 			<button
 				type="button"

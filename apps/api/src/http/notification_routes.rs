@@ -1,0 +1,443 @@
+use std::time::Duration;
+
+use axum::{
+    Extension, Json, Router, extract::State, http::StatusCode, response::Response, routing::post,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+use crate::{
+    domain::{DiscordMessageId, NotificationId},
+    error::{self, ApiError},
+    http::extractors::BotServicePrincipal,
+    infrastructure::postgres::begin,
+    repository::notification_outbox::{
+        self, AckNotification, ClaimNotifications, NackNotification, NackNotificationOutcome,
+        NotificationFailure, NotificationFailureKind, NotificationOutboxError,
+    },
+    state::{AppState, RequestId},
+};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClaimNotificationsRequest {
+    instance_id: String,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AckNotificationRequest {
+    instance_id: String,
+    notification_id: NotificationId,
+    lease_token: Uuid,
+    discord_message_id: DiscordMessageId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NackNotificationRequest {
+    instance_id: String,
+    notification_id: NotificationId,
+    lease_token: Uuid,
+    failure: NotificationFailureRequest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationFailureRequest {
+    kind: NotificationFailureKindRequest,
+    status: Option<u16>,
+    retry_after_ms: Option<u64>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+enum NotificationFailureKindRequest {
+    #[serde(rename = "HTTP")]
+    Http,
+    #[serde(rename = "TRANSPORT")]
+    Transport,
+    #[serde(rename = "DELIVERY_UNKNOWN")]
+    DeliveryUnknown,
+}
+
+impl From<NotificationFailureKindRequest> for NotificationFailureKind {
+    fn from(value: NotificationFailureKindRequest) -> Self {
+        match value {
+            NotificationFailureKindRequest::Http => Self::Http,
+            NotificationFailureKindRequest::Transport => Self::Transport,
+            NotificationFailureKindRequest::DeliveryUnknown => Self::DeliveryUnknown,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaimNotificationsData {
+    notifications: Vec<ClaimedNotificationData>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaimedNotificationData {
+    id: NotificationId,
+    guild_id: crate::domain::GuildId,
+    lease_token: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
+    lease_until: OffsetDateTime,
+    channel_id: crate::domain::DiscordChannelId,
+    #[serde(rename = "type")]
+    notification_type: String,
+    payload: Value,
+    discord_nonce: String,
+    attempts: i32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AckNotificationData {
+    acknowledged: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    delivered_at: OffsetDateTime,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecruitmentMessageAckData {
+    acknowledged: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    delivered_at: OffsetDateTime,
+    recruitment: RecruitmentBindingData,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecruitmentBindingData {
+    id: crate::domain::RecruitmentId,
+    revision: i64,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+enum NackNotificationData {
+    #[serde(rename = "RETRY_SCHEDULED")]
+    RetryScheduled {
+        #[serde(rename = "availableAt", with = "time::serde::rfc3339")]
+        available_at: OffsetDateTime,
+        attempts: i32,
+    },
+    #[serde(rename = "FAILED")]
+    Failed {
+        #[serde(rename = "failureCode")]
+        failure_code: &'static str,
+        attempts: i32,
+    },
+}
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/internal/notifications/claim", post(claim))
+        .route("/internal/notifications/ack", post(ack))
+        .route(
+            "/internal/notifications/recruitment-message/ack",
+            post(ack_recruitment_message),
+        )
+        .route("/internal/notifications/nack", post(nack))
+}
+
+pub async fn claim(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    _principal: BotServicePrincipal,
+    Json(request): Json<ClaimNotificationsRequest>,
+) -> Result<Response, ApiError> {
+    let mut transaction = begin(database(&state, &request_id)?)
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+    let notifications = notification_outbox::claim(
+        &mut transaction,
+        &ClaimNotifications {
+            lease_owner: &request.instance_id,
+            lease_duration: notification_outbox::DEFAULT_LEASE_DURATION,
+            limit: request
+                .limit
+                .unwrap_or(notification_outbox::DEFAULT_CLAIM_LIMIT),
+        },
+    )
+    .await
+    .map_err(|source| repository_error(source, &request_id))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+
+    let notifications = notifications
+        .into_iter()
+        .map(|notification| ClaimedNotificationData {
+            id: notification.id,
+            guild_id: notification.guild_id,
+            lease_token: notification.lease.token,
+            lease_until: notification.lease.until,
+            channel_id: notification.channel_id,
+            notification_type: notification.notification_type,
+            payload: notification.payload,
+            discord_nonce: notification.discord_nonce,
+            attempts: notification.attempts,
+        })
+        .collect();
+    Ok(error::success(
+        StatusCode::OK,
+        &request_id,
+        ClaimNotificationsData { notifications },
+    ))
+}
+
+pub async fn ack(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    _principal: BotServicePrincipal,
+    Json(request): Json<AckNotificationRequest>,
+) -> Result<Response, ApiError> {
+    let mut transaction = begin(database(&state, &request_id)?)
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+    let notification = notification_outbox::ack(
+        &mut transaction,
+        &AckNotification {
+            notification_id: request.notification_id,
+            lease_owner: &request.instance_id,
+            lease_token: request.lease_token,
+            discord_message_id: &request.discord_message_id,
+        },
+    )
+    .await
+    .map_err(|source| repository_error(source, &request_id))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+
+    Ok(error::success(
+        StatusCode::OK,
+        &request_id,
+        AckNotificationData {
+            acknowledged: true,
+            delivered_at: notification.delivered_at,
+        },
+    ))
+}
+
+pub async fn ack_recruitment_message(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    _principal: BotServicePrincipal,
+    Json(request): Json<AckNotificationRequest>,
+) -> Result<Response, ApiError> {
+    let mut transaction = begin(database(&state, &request_id)?)
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+    let acknowledgement = notification_outbox::ack_recruitment_message(
+        &mut transaction,
+        &AckNotification {
+            notification_id: request.notification_id,
+            lease_owner: &request.instance_id,
+            lease_token: request.lease_token,
+            discord_message_id: &request.discord_message_id,
+        },
+    )
+    .await
+    .map_err(|source| repository_error(source, &request_id))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+
+    Ok(error::success(
+        StatusCode::OK,
+        &request_id,
+        RecruitmentMessageAckData {
+            acknowledged: true,
+            delivered_at: acknowledgement.notification.delivered_at,
+            recruitment: RecruitmentBindingData {
+                id: acknowledgement.recruitment_id,
+                revision: acknowledgement.recruitment_revision,
+            },
+        },
+    ))
+}
+
+pub async fn nack(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    _principal: BotServicePrincipal,
+    Json(request): Json<NackNotificationRequest>,
+) -> Result<Response, ApiError> {
+    let failure = NotificationFailure {
+        kind: request.failure.kind.into(),
+        status: request.failure.status,
+        retry_after: request.failure.retry_after_ms.map(Duration::from_millis),
+        message: &request.failure.message,
+    };
+    let mut transaction = begin(database(&state, &request_id)?)
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+    let outcome = notification_outbox::nack(
+        &mut transaction,
+        &NackNotification {
+            notification_id: request.notification_id,
+            lease_owner: &request.instance_id,
+            lease_token: request.lease_token,
+            failure,
+        },
+    )
+    .await
+    .map_err(|source| repository_error(source, &request_id))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| error::database_failure(&source, &request_id))?;
+
+    let data = match outcome {
+        NackNotificationOutcome::RetryScheduled {
+            available_at,
+            attempts,
+        } => NackNotificationData::RetryScheduled {
+            available_at,
+            attempts,
+        },
+        NackNotificationOutcome::Failed {
+            failure_code,
+            attempts,
+        } => NackNotificationData::Failed {
+            failure_code,
+            attempts,
+        },
+    };
+    Ok(error::success(StatusCode::OK, &request_id, data))
+}
+
+fn database<'a>(state: &'a AppState, request_id: &RequestId) -> Result<&'a sqlx::PgPool, ApiError> {
+    state.postgres().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "database_unavailable",
+            "데이터베이스를 일시적으로 사용할 수 없습니다.",
+            None,
+        )
+    })
+}
+
+fn repository_error(source: NotificationOutboxError, request_id: &RequestId) -> ApiError {
+    match source {
+        NotificationOutboxError::InvalidLeaseOwner
+        | NotificationOutboxError::InvalidClaimLimit
+        | NotificationOutboxError::InvalidLeaseDuration
+        | NotificationOutboxError::InvalidRetryDelay
+        | NotificationOutboxError::InvalidFailure => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            request_id,
+            "invalid_notification_request",
+            "Bot 알림 전송 요청 값이 올바르지 않습니다.",
+            None,
+        ),
+        NotificationOutboxError::LeaseConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "notification_lease_conflict",
+            "알림 전송 lease가 만료되었거나 다른 Bot 인스턴스로 이전되었습니다.",
+            None,
+        ),
+        NotificationOutboxError::UnexpectedNotificationType => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "notification_type_mismatch",
+            "이 알림은 모집 메시지 확인으로 처리할 수 없습니다.",
+            None,
+        ),
+        NotificationOutboxError::RecruitmentMessageCreateRequiresTypedAck => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            request_id,
+            "recruitment_message_create_requires_typed_ack",
+            "모집 메시지 생성 알림은 전용 확인 경로로 처리해야 합니다.",
+            None,
+        ),
+        NotificationOutboxError::RecruitmentMessageBindConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "recruitment_message_bind_conflict",
+            "모집 메시지를 현재 모집 상태에 연결할 수 없습니다.",
+            None,
+        ),
+        NotificationOutboxError::InvalidRecruitmentMessagePayload
+        | NotificationOutboxError::DeduplicationRowDisappeared
+        | NotificationOutboxError::ClaimedRowDisappeared
+        | NotificationOutboxError::DeduplicationConflict => {
+            tracing::error!(%source, "notification outbox invariant failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "notification_outbox_invariant_failed",
+                "저장된 알림 전송 상태를 처리할 수 없습니다.",
+                None,
+            )
+        }
+        NotificationOutboxError::InvalidDeduplicationKey
+        | NotificationOutboxError::InvalidNotificationType => {
+            tracing::error!(%source, "notification enqueue validation leaked into delivery route");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                request_id,
+                "notification_outbox_invariant_failed",
+                "저장된 알림 전송 상태를 처리할 수 없습니다.",
+                None,
+            )
+        }
+        NotificationOutboxError::Sql(database_error) => {
+            tracing::error!(%database_error, "notification outbox database operation failed");
+            error::database_failure(&database_error, request_id)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_failure_wire_values_are_explicit() {
+        let http: NotificationFailureRequest = serde_json::from_value(serde_json::json!({
+            "kind": "HTTP",
+            "status": 429,
+            "retryAfterMs": 1000,
+            "message": "rate limited"
+        }))
+        .expect("HTTP failure payload");
+        assert!(matches!(http.kind, NotificationFailureKindRequest::Http));
+
+        let unknown: NotificationFailureRequest = serde_json::from_value(serde_json::json!({
+            "kind": "DELIVERY_UNKNOWN",
+            "message": "response missing"
+        }))
+        .expect("unknown-delivery failure payload");
+        assert!(matches!(
+            unknown.kind,
+            NotificationFailureKindRequest::DeliveryUnknown
+        ));
+    }
+
+    #[test]
+    fn nack_response_uses_stable_state_and_camel_case_fields() {
+        let response = serde_json::to_value(NackNotificationData::Failed {
+            failure_code: "MAX_ATTEMPTS",
+            attempts: 8,
+        })
+        .expect("serializable response");
+        assert_eq!(response["state"], "FAILED");
+        assert_eq!(response["failureCode"], "MAX_ATTEMPTS");
+        assert_eq!(response["attempts"], 8);
+    }
+}

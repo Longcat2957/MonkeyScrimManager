@@ -1,5 +1,16 @@
 <script lang="ts">
-	import { ArrowRight, CheckCircle2, Swords, Trophy, UsersRound } from 'lucide-svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import {
+		ArrowRight,
+		CheckCircle2,
+		LoaderCircle,
+		Plus,
+		Swords,
+		Trophy,
+		UsersRound
+	} from 'lucide-svelte';
+	import { createRecruitment, recruitmentCreateErrorText } from '$lib/api/recruitmentCreate';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import type { PageProps } from './$types';
@@ -8,6 +19,30 @@
 
 	const activeWork = $derived(data.view.activeWork);
 	const completedSeries = $derived(data.view.completedSeries);
+	let creatingRecruitment = $state(false);
+	let createError = $state('');
+	let createIdempotencyKey = $state<string | null>(null);
+
+	async function createNewRecruitment() {
+		if (creatingRecruitment) return;
+		const idempotencyKey = (createIdempotencyKey ??= globalThis.crypto.randomUUID());
+		creatingRecruitment = true;
+		createError = '';
+		try {
+			const created = await createRecruitment(data.guildId, idempotencyKey);
+			createIdempotencyKey = null;
+			await goto(
+				resolve('/g/[guildId]/recruitments/[id]', {
+					guildId: data.guildId,
+					id: created.recruitment.id
+				})
+			);
+		} catch (cause) {
+			createError = recruitmentCreateErrorText(cause);
+		} finally {
+			creatingRecruitment = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -15,7 +50,32 @@
 </svelte:head>
 
 <div class="space-y-5">
-	<WorkspaceHeader kicker="일반 내전" title="내전 운영" description="모집 마감부터 완료 내전까지" />
+	<WorkspaceHeader kicker="일반 내전" title="내전 운영" description="모집 마감부터 완료 내전까지">
+		{#snippet actions()}
+			<button
+				type="button"
+				disabled={creatingRecruitment}
+				onclick={createNewRecruitment}
+				class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-cyan-400/40 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/15 disabled:opacity-35"
+			>
+				{#if creatingRecruitment}
+					<LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
+				{:else}
+					<Plus size={14} aria-hidden="true" />
+				{/if}
+				{creatingRecruitment ? '생성 중' : '내전 모집'}
+			</button>
+		{/snippet}
+	</WorkspaceHeader>
+
+	{#if createError}
+		<p
+			class="border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs leading-5 text-rose-300"
+			role="alert"
+		>
+			{createError}
+		</p>
+	{/if}
 
 	<section
 		class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"

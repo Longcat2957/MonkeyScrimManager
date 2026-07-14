@@ -475,6 +475,165 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /internal/notifications/claim:
+    post:
+      operationId: claimBotNotifications
+      summary: Claim pending Bot notification deliveries
+      description: >-
+        Bot worker-only lease claim. It returns available rows or expired leases and increments
+        attempts atomically. The lease lasts 30 seconds; a row is terminal after eight attempts.
+      security:
+        - BotBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimBotNotificationsRequest'
+      responses:
+        '200':
+          description: Claimed notifications, possibly empty.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimBotNotificationsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/notifications/ack:
+    post:
+      operationId: acknowledgeBotNotification
+      summary: Acknowledge a generic Bot notification delivery
+      description: >-
+        Marks a notification delivered only when instanceId and leaseToken still own the current
+        lease. This route is for delivery types without a domain-specific acknowledgement side
+        effect. RECRUITMENT_MESSAGE_UPDATE and RECRUITMENT_MESSAGE_DELETE use it after Discord
+        edit or delete succeeds; browser-created initial recruitment messages use
+        recruitment-message/ack instead.
+      security:
+        - BotBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcknowledgeBotNotificationRequest'
+      responses:
+        '200':
+          description: Delivery acknowledged.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcknowledgeBotNotificationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          description: >-
+            RECRUITMENT_MESSAGE_CREATE must use the typed recruitment-message acknowledgement
+            endpoint so the sent Discord message is bound atomically.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/notifications/recruitment-message/ack:
+    post:
+      operationId: acknowledgeRecruitmentMessageDelivery
+      summary: Acknowledge and bind a queued recruitment message
+      description: >-
+        Only accepts RECRUITMENT_MESSAGE_CREATE. In one transaction it marks the leased delivery
+        as delivered and binds the supplied Discord message ID to its recruitment. Workers must
+        call this after channel.send succeeds instead of calling generic ack and the public bind
+        route separately. If an add or cancel committed before the bind, the same transaction
+        enqueues the required follow-up UPDATE or DELETE delivery from the latest recruitment
+        snapshot.
+      security:
+        - BotBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcknowledgeBotNotificationRequest'
+      responses:
+        '200':
+          description: Delivery acknowledged and recruitment message reference bound.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcknowledgeRecruitmentMessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/notifications/nack:
+    post:
+      operationId: rejectBotNotificationDelivery
+      summary: Record a Bot notification delivery failure
+      description: >-
+        Applies the backend retry policy to a currently leased notification. HTTP 429/5xx and
+        transport failures are retried with bounded backoff; ordinary HTTP 4xx and
+        DELIVERY_UNKNOWN become terminal failures.
+      security:
+        - BotBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NackBotNotificationRequest'
+      responses:
+        '200':
+          description: Retry scheduled or delivery failure made terminal.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NackBotNotificationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}:
     get:
       operationId: getGuildContext
@@ -887,8 +1046,9 @@ paths:
       operationId: listGuildRecruitments
       summary: List actionable general recruitments
       description: >-
-        Lists closed, unconverted general recruitments ordered by updatedAt and opaque id
-        descending. A non-null nextCursor continues after the last returned row.
+        Lists open or closed, unconverted general recruitments ordered by updatedAt and opaque id
+        descending. OPEN rows represent the entry recruitment stage; CLOSED rows are ready for
+        entry composition. A non-null nextCursor continues after the last returned row.
       security:
         - SessionCookie: []
       parameters:
@@ -920,19 +1080,29 @@ paths:
       operationId: createGuildRecruitment
       summary: Create a 10-person general recruitment
       description: >-
-        Bot interaction command. The actor must hold the guild's configured operator role. The
-        active guild season is selected by the backend and targetCount is always 10.
+        Creates an OPEN recruitment and its empty entry draft. Either a Bot interaction or an
+        authenticated active guild member can create one. Bot requests include the Discord actor
+        snapshot; browser requests use an empty object and derive the actor from the session. The
+        active guild season and title/display counter are selected by the backend; targetCount is
+        always 10. Browser creation additionally requires the guild recruitment channel to be
+        configured. Its transaction enqueues a RECRUITMENT_MESSAGE_CREATE delivery for that
+        channel; 201 means the database state and delivery work were accepted, not that Discord
+        has already posted the message.
       security:
         - BotBearer: []
+        - SessionCookie: []
+          CsrfHeader: []
       parameters:
         - $ref: '#/components/parameters/GuildId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RecruitmentCreateIdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateRecruitmentRequest'
+              oneOf:
+                - $ref: '#/components/schemas/CreateRecruitmentRequest'
+                - $ref: '#/components/schemas/WebCreateRecruitmentRequest'
       responses:
         '201':
           description: Recruitment created or an identical interaction replayed.
@@ -952,9 +1122,91 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: >-
+            Idempotency or domain conflict. recruitment_channel_not_configured means a browser
+            recruitment cannot be created until the guild recruitment channel is configured.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}:
+    get:
+      operationId: getGuildRecruitment
+      summary: Get a general recruitment snapshot
+      description: >-
+        Returns the authoritative recruitment roster for the entry recruitment stage. OPEN
+        recruitments remain in Discord participant collection; CLOSED recruitments expose the
+        entry composition link in the returned snapshot.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+      responses:
+        '200':
+          description: General recruitment snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: cancelGuildRecruitment
+      summary: Soft-cancel an open or closed general recruitment
+      description: >-
+        Browser-only, bodyless command. The creator or a current active operator can transition an
+        OPEN or CLOSED recruitment to CANCELLED. Participants, entry assignments, and entry-draft
+        history are retained, while the cancelled recruitment is removed from normal detail,
+        actionable-list, and entry-draft reads. The EntryDraftSnapshot canCancel capability is true
+        for an eligible creator or current active operator in either source state. An identical
+        browser idempotency key replays the resulting CANCELLED snapshot. A bound Discord
+        recruitment message queues RECRUITMENT_MESSAGE_DELETE in the same transaction.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      responses:
+        '200':
+          description: Recruitment cancelled or an identical browser command replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -965,7 +1217,7 @@ paths:
       summary: Bind the Discord recruitment message
       description: >-
         Stores the Discord channel and message snowflakes after the initial slash-command reply.
-        The actor must hold the configured operator role.
+        The actor must be the recruitment creator or hold the configured operator role.
       security:
         - BotBearer: []
       parameters:
@@ -1009,20 +1261,28 @@ paths:
       operationId: joinGuildRecruitment
       summary: Join a member to an open recruitment
       description: >-
-        Upserts the Discord actor/member identity and joins the member while capacity remains. The
-        backend serializes capacity checks and treats PostgreSQL as the source of truth.
+        Bot requests upsert the Discord actor/member identity and join while capacity remains.
+        Browser requests are limited to a current active operator and use memberId to select an
+        existing ACTIVE guild member. The target is an opaque stored user identifier and can be a
+        Discord or development-dummy user. The backend serializes capacity and duplicate checks
+        and treats PostgreSQL as the source of truth. A changed bound recruitment message queues
+        RECRUITMENT_MESSAGE_UPDATE in the same transaction.
       security:
         - BotBearer: []
+        - SessionCookie: []
+          CsrfHeader: []
       parameters:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/RecruitmentId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RecruitmentMemberIdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/JoinRecruitmentRequest'
+              oneOf:
+                - $ref: '#/components/schemas/JoinRecruitmentRequest'
+                - $ref: '#/components/schemas/WebAddRecruitmentMemberRequest'
       responses:
         '200':
           description: Member joined or an identical interaction replayed.
@@ -1052,24 +1312,29 @@ paths:
   /api/guilds/{guildId}/recruitments/{recruitmentId}/members/{userId}:
     delete:
       operationId: leaveGuildRecruitment
-      summary: Leave a member from an open recruitment
+      summary: Remove a participant from an open recruitment
       description: >-
-        Withdraws the joined member and removes any entry assignment. A member can leave as
-        themselves; operator behavior is validated by the backend when a different user is
-        targeted.
+        Withdraws the joined member and removes any entry assignment. Bot requests allow a member
+        to leave themselves or an operator to remove another member. Browser requests use an empty
+        object, derive the actor from the session, and require a current active operator. A bound
+        Discord recruitment message queues RECRUITMENT_MESSAGE_UPDATE in the same transaction.
       security:
         - BotBearer: []
+        - SessionCookie: []
+          CsrfHeader: []
       parameters:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/RecruitmentId'
         - $ref: '#/components/parameters/UserId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RecruitmentMemberIdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ActorRequest'
+              oneOf:
+                - $ref: '#/components/schemas/ActorRequest'
+                - $ref: '#/components/schemas/WebRemoveRecruitmentMemberRequest'
       responses:
         '200':
           description: Member removed or an identical interaction replayed.
@@ -1147,21 +1412,27 @@ paths:
       operationId: closeGuildRecruitmentForEntry
       summary: Close a full recruitment and start entry editing
       description: >-
-        The actor must hold the configured operator role. The recruitment must be OPEN with
-        exactly 10 joined participants; success returns the CLOSED snapshot and canonical entry
-        link.
+        Bot requests use an operator actor snapshot. Browser requests use an empty object and
+        derive the actor from the authenticated session; both require a current active operator.
+        The recruitment must be OPEN with exactly 10 joined participants; success returns the
+        CLOSED snapshot and canonical entry link. A browser close queues an UPDATE for a bound
+        Discord recruitment message in the same transaction.
       security:
         - BotBearer: []
+        - SessionCookie: []
+          CsrfHeader: []
       parameters:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/RecruitmentId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RecruitmentMemberIdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ActorRequest'
+              oneOf:
+                - $ref: '#/components/schemas/ActorRequest'
+                - $ref: '#/components/schemas/WebCloseRecruitmentRequest'
       responses:
         '200':
           description: Recruitment closed or an identical interaction replayed.
@@ -1182,6 +1453,215 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/entry-draft:
+    get:
+      operationId: getGuildRecruitmentEntryDraft
+      summary: Get an authoritative general-recruitment entry draft
+      description: >-
+        Returns the entry-draft snapshot for an active guild member. The snapshot includes the
+        current recruitment and draft revisions, participant data, assignments, and viewer-specific
+        capability hints. It is the source of truth for the Web entry-composition route. Only OPEN
+        and CLOSED recruitments are visible; a CANCELLED recruitment returns 404.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+      responses:
+        '200':
+          description: Authoritative entry-draft snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDraftSnapshotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateGuildRecruitmentEntryDraft
+      summary: Move one participant in a closed general-recruitment entry draft
+      description: >-
+        Browser-session command for a current active operator only. The recruitment must be CLOSED
+        and expectedRevision must equal the current draft revision. MOVE_PARTICIPANT uses server-side
+        slot swap rules: moving into an occupied slot exchanges the two assigned players; moving a
+        candidate into an occupied slot returns that occupant to the candidate pool. A null slot
+        moves the participant to the candidate pool. The response is the authoritative snapshot.
+        Its realtime invalidate uses the recruitment-entry-draft topic and the draft revision, not
+        the recruitment topic or recruitment revision.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntryDraftMutationRequest'
+      responses:
+        '200':
+          description: Entry draft updated or an identical browser command replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDraftSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes entry_draft_revision_conflict when expectedRevision is stale,
+            entry_draft_not_editable when the recruitment is not CLOSED, or an idempotency conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/entry-draft/reset:
+    post:
+      operationId: resetGuildRecruitmentEntryDraft
+      summary: Clear assignments in a closed general-recruitment entry draft
+      description: >-
+        Browser-session command for a current active operator only. The recruitment must be CLOSED
+        and expectedRevision must equal the current draft revision. It removes every assignment,
+        retains the joined recruitment participants, and returns the authoritative snapshot. Its
+        realtime invalidate uses the recruitment-entry-draft topic and the draft revision.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntryDraftRevisionRequest'
+      responses:
+        '200':
+          description: Entry draft reset or an identical browser command replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDraftSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes entry_draft_revision_conflict when expectedRevision is stale,
+            entry_draft_not_editable when the recruitment is not CLOSED, or an idempotency conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/reopen:
+    post:
+      operationId: reopenGuildRecruitmentForEntry
+      summary: Reopen a closed general recruitment from entry editing
+      description: >-
+        Browser-session command for a current active operator only. The recruitment must be CLOSED
+        and expectedRevision must equal the current recruitment revision. It changes the recruitment
+        to OPEN without clearing entry assignments, returns the authoritative entry-draft snapshot,
+        and queues RECRUITMENT_MESSAGE_UPDATE for a bound Discord recruitment message. This endpoint
+        does not reopen CANCELLED recruitments and does not create a series. Realtime delivery keeps
+        recruitment and entry-draft revisions on their respective topics.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntryDraftRevisionRequest'
+      responses:
+        '200':
+          description: Recruitment reopened or an identical browser command replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDraftSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes entry_draft_revision_conflict when expectedRevision is stale,
+            entry_draft_not_editable when the recruitment is not CLOSED, or an idempotency conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
@@ -1219,6 +1699,250 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createGuildSeriesFromEntryDraft
+      summary: Start a BO3 general series from a completed entry draft
+      description: >-
+        Browser-session command for a current active operator only. The source recruitment must be
+        CLOSED, expectedRevision must equal its current recruitment revision, and exactly ten
+        JOINED participants must occupy the ten distinct TEAM_1/TEAM_2 lane slots. The transaction
+        creates an IN_PROGRESS best-of-three series, captures each participant's source-season lane
+        MMR (initializing an absent row at 1500), changes the source recruitment to CONVERTED, and
+        records audit, idempotency, and realtime outbox work atomically.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSeriesFromEntryDraftRequest'
+      responses:
+        '201':
+          description: Series started or an identical browser command replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeriesCreationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes recruitment_revision_conflict when expectedRevision is stale,
+            series_source_not_ready when the source is not CLOSED, or an idempotency conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: >-
+            Includes invalid_series_create_request for an invalid body and entry_draft_incomplete
+            when the full ten-person team-and-lane assignment is not present.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/series/{seriesId}:
+    get:
+      operationId: getGuildSeriesPickBan
+      summary: Get the authoritative general-series pick-ban snapshot
+      description: >-
+        Returns the IN_PROGRESS general-series roster frozen from its entry draft, the current
+        pick-ban set, and viewer-specific lifecycle capabilities for an active guild member. This
+        first vertical slice returns games as an empty array and exposes a synthetic DEFAULT
+        current game when no persisted draft exists; pick/ban and game-result mutations are not
+        part of this endpoint.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/SeriesId'
+      responses:
+        '200':
+          description: Authoritative IN_PROGRESS pick-ban series snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeriesPickBanSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The series is missing, not accessible to the active member, or is no longer IN_PROGRESS.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteGuildSeries
+      summary: Cancel an unplayed general series and cancel its source recruitment
+      description: >-
+        Browser-session command for a current active operator only. The expectedRevision is the
+        series revision. It is accepted only while the series is IN_PROGRESS and has no confirmed
+        games. The series is retained as CANCELLED for history while its source recruitment is
+        transitioned to CANCELLED rather than reopened. The transaction writes audit and realtime
+        outbox records atomically; an identical browser idempotency key replays the result.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/SeriesId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeriesLifecycleRequest'
+      responses:
+        '200':
+          description: Series and its source recruitment were cancelled, or an identical command was replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeriesLifecycleResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes series_revision_conflict for a stale expectedRevision,
+            series_not_in_progress when the series has already transitioned,
+            series_source_not_converted when its source is no longer CONVERTED,
+            series_has_confirmed_games when history must be rolled back first, or an
+            idempotency_conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Includes invalid_series_lifecycle_request for an invalid body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/series/{seriesId}/revert:
+    post:
+      operationId: revertGuildSeriesToEntryDraft
+      summary: Revert an unplayed general series to its entry draft
+      description: >-
+        Browser-session command for a current active operator only. The expectedRevision is the
+        series revision. It is accepted only while the series is IN_PROGRESS and has no confirmed
+        games. The series is retained as CANCELLED for history, and its source recruitment is
+        restored to CLOSED with convertedAt cleared so the existing entry draft can be edited and
+        converted into a new series. The transaction writes audit and realtime outbox records
+        atomically; an identical browser idempotency key replays the result.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/SeriesId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeriesLifecycleRequest'
+      responses:
+        '200':
+          description: Series was cancelled and its source entry draft was restored, or an identical command was replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeriesLifecycleResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes series_revision_conflict for a stale expectedRevision,
+            series_not_in_progress when the series has already transitioned,
+            series_source_not_converted when its source is no longer CONVERTED,
+            series_has_confirmed_games when history must be rolled back first, or an
+            idempotency_conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Includes invalid_series_lifecycle_request for an invalid body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -2932,6 +3656,14 @@ components:
       schema:
         type: string
         format: uuid
+    SeriesId:
+      name: seriesId
+      in: path
+      required: true
+      description: General-series root UUID. It is not the guild-local display number.
+      schema:
+        type: string
+        format: uuid
     UserId:
       name: userId
       in: path
@@ -2992,6 +3724,32 @@ components:
         maxLength: 128
         pattern: '^[!-~]+$'
       example: 2c26bd12-cfdd-4d13-b5b2-17c6db65c7f1
+    RecruitmentCreateIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Bot requests use the Discord interaction ID. Browser requests use a visible ASCII key up
+        to 128 bytes. Reuse with the identical authenticated principal and request replays the
+        stored response; a changed request returns idempotency_conflict.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[!-~]+$'
+    RecruitmentMemberIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Bot requests use the Discord interaction ID. Browser operator requests use a visible
+        ASCII key up to 128 bytes. Reuse with the identical authenticated principal and request
+        replays the stored response; a changed request returns idempotency_conflict.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[!-~]+$'
     ActionableState:
       name: state
       in: query
@@ -3525,6 +4283,13 @@ components:
       properties:
         actor:
           $ref: '#/components/schemas/DiscordActor'
+    WebCreateRecruitmentRequest:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+      description: >-
+        Empty browser request body. The authenticated session supplies the actor; callers cannot
+        choose another user.
     ActorRequest:
       type: object
       additionalProperties: false
@@ -3552,6 +4317,27 @@ components:
           $ref: '#/components/schemas/DiscordActor'
         member:
           $ref: '#/components/schemas/DiscordActor'
+    WebAddRecruitmentMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [memberId]
+      properties:
+        memberId:
+          $ref: '#/components/schemas/UserIdentifier'
+    WebRemoveRecruitmentMemberRequest:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+      description: >-
+        Empty browser request body. The authenticated session supplies the actor and only a
+        current active operator can remove the path participant.
+    WebCloseRecruitmentRequest:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+      description: >-
+        Empty browser request body. The authenticated session supplies the actor and only a
+        current active operator can start entry editing for a full recruitment.
     SetPreferredLanesRequest:
       type: object
       additionalProperties: false
@@ -3591,6 +4377,7 @@ components:
         - status
         - targetCount
         - revision
+        - createdById
         - channelId
         - messageId
         - updatedAt
@@ -3615,6 +4402,8 @@ components:
           type: integer
           format: int64
           minimum: 0
+        createdById:
+          $ref: '#/components/schemas/UserIdentifier'
         channelId:
           oneOf:
             - $ref: '#/components/schemas/DiscordSnowflake'
@@ -3655,6 +4444,747 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/RecruitmentSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    EntryDraftSlot:
+      type: string
+      enum:
+        - TEAM_1_TOP
+        - TEAM_1_JUNGLE
+        - TEAM_1_MID
+        - TEAM_1_BOTTOM
+        - TEAM_1_SUPPORT
+        - TEAM_2_TOP
+        - TEAM_2_JUNGLE
+        - TEAM_2_MID
+        - TEAM_2_BOTTOM
+        - TEAM_2_SUPPORT
+    EntryDraftRecruitment:
+      type: object
+      additionalProperties: false
+      description: >-
+        Recruitment lifecycle projection within the composite entry snapshot. Its revision belongs
+        to the recruitment aggregate and its realtime topic, not to the entry-draft aggregate.
+      required: [id, displayNumber, title, status, targetCount, revision, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          type: string
+          enum: [OPEN, CLOSED]
+        targetCount:
+          type: integer
+          const: 10
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Recruitment aggregate concurrency revision. Reopen uses this value as expectedRevision;
+            recruitment-topic invalidates use this value as their revision.
+        updatedAt:
+          type: string
+          format: date-time
+    EntryDraftEditor:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+    EntryDraftParticipant:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayName
+        - preferredLanes
+        - mainLane
+        - mmr
+        - games
+        - wins
+        - riotTier
+        - profileIconId
+        - championIds
+      properties:
+        id:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        preferredLanes:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Lane'
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        mmr:
+          type: number
+          format: double
+        games:
+          type: integer
+          format: int32
+          minimum: 0
+        wins:
+          type: integer
+          format: int32
+          minimum: 0
+        riotTier:
+          description: >-
+            Compact current solo-queue tier from the participant's cached primary Riot account,
+            for example P3 or E2. Null when no canonical cached solo rank is available.
+          oneOf:
+            - type: string
+              pattern: '^(?:I|B|S|G|P|E|D|M|GM|C)[1-4]?$'
+            - type: 'null'
+        profileIconId:
+          oneOf:
+            - type: integer
+              format: int32
+              minimum: 0
+            - type: 'null'
+        championIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+    EntryDraftAssignment:
+      type: object
+      additionalProperties: false
+      required: [participantId, team, lane]
+      properties:
+        participantId:
+          $ref: '#/components/schemas/UserIdentifier'
+        team:
+          type: string
+          enum: [TEAM_1, TEAM_2]
+        lane:
+          $ref: '#/components/schemas/Lane'
+    EntryDraftState:
+      type: object
+      additionalProperties: false
+      description: >-
+        Entry-composition aggregate within the composite snapshot. Its revision is independent from
+        recruitment.revision and owns entry-draft mutation concurrency.
+      required: [revision, updatedAt, updatedBy, participants, assignments]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Entry-draft aggregate concurrency revision. PATCH and reset use this as expectedRevision;
+            recruitment-entry-draft-topic invalidates use this value as their revision.
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          oneOf:
+            - $ref: '#/components/schemas/EntryDraftEditor'
+            - type: 'null'
+        participants:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/EntryDraftParticipant'
+        assignments:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/EntryDraftAssignment'
+    EntryDraftCapabilities:
+      type: object
+      additionalProperties: false
+      required: [canEdit, canReset, canCreateSeries, canReopen, canCancel]
+      properties:
+        canEdit:
+          type: boolean
+        canReset:
+          type: boolean
+        canCreateSeries:
+          type: boolean
+          description: >-
+            True only when the viewer is a current active operator, the recruitment is CLOSED, and
+            all ten JOINED participants occupy one distinct TEAM_1/TEAM_2 lane slot. The create
+            command still revalidates this state transactionally.
+        canReopen:
+          type: boolean
+        canCancel:
+          type: boolean
+          description: >-
+            True only when the viewer is the recruitment creator or a current active operator and
+            the recruitment is OPEN or CLOSED. DELETE then transitions it to CANCELLED.
+    EntryDraftSnapshot:
+      type: object
+      additionalProperties: false
+      required: [recruitment, draft, capabilities]
+      properties:
+        recruitment:
+          $ref: '#/components/schemas/EntryDraftRecruitment'
+        draft:
+          $ref: '#/components/schemas/EntryDraftState'
+        capabilities:
+          $ref: '#/components/schemas/EntryDraftCapabilities'
+    EntryDraftSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/EntryDraftSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    EntryDraftMoveParticipantOperation:
+      type: object
+      additionalProperties: false
+      required: [type, participantId, slot]
+      properties:
+        type:
+          type: string
+          const: MOVE_PARTICIPANT
+        participantId:
+          $ref: '#/components/schemas/UserIdentifier'
+        slot:
+          oneOf:
+            - $ref: '#/components/schemas/EntryDraftSlot'
+            - type: 'null'
+    EntryDraftMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, operation]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        operation:
+          $ref: '#/components/schemas/EntryDraftMoveParticipantOperation'
+    EntryDraftRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    CreateSeriesFromEntryDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceRecruitmentId, expectedRevision]
+      properties:
+        sourceRecruitmentId:
+          type: string
+          format: uuid
+          description: CLOSED general recruitment to convert. This is not a display number.
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Current source recruitment revision, not the entry-draft revision.
+    SeriesLifecycleRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Current series revision, not the source recruitment or entry-draft revision.
+    SeriesPickBanChampionId:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[A-Za-z0-9]+$'
+      description: Canonical Data Dragon champion identifier such as Aatrox or LeeSin.
+    SeriesPickBanPlayer:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, lane, mmr, riotTier, preferredChampionIds]
+      properties:
+        id:
+          $ref: '#/components/schemas/UserIdentifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        lane:
+          $ref: '#/components/schemas/Lane'
+        mmr:
+          type: number
+          format: double
+        riotTier:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 32
+            - type: 'null'
+        preferredChampionIds:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/SeriesPickBanChampionId'
+    SeriesPickBanTeam:
+      type: object
+      additionalProperties: false
+      required: [team, name, players]
+      description: Each team contains exactly one player for every canonical lane.
+      properties:
+        team:
+          type: string
+          enum: [TEAM_1, TEAM_2]
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        players:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/SeriesPickBanPlayer'
+    SeriesPickBanBans:
+      type: object
+      additionalProperties: false
+      required: [BLUE, RED]
+      properties:
+        BLUE:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/SeriesPickBanChampionId'
+              - type: 'null'
+        RED:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/SeriesPickBanChampionId'
+              - type: 'null'
+    SeriesPickBanCurrentGame:
+      type: object
+      additionalProperties: false
+      required: [setNumber, sidePreset, winner, picks, bans, patchVersion]
+      properties:
+        setNumber:
+          type: integer
+          minimum: 1
+          maximum: 5
+        sidePreset:
+          type: string
+          enum: [DEFAULT, SWAPPED]
+        winner:
+          oneOf:
+            - type: string
+              enum: [BLUE, RED]
+            - type: 'null'
+        picks:
+          type: object
+          minProperties: 10
+          maxProperties: 10
+          description: One pick slot for every frozen roster user ID; each value is null until selected.
+          additionalProperties:
+            oneOf:
+              - $ref: '#/components/schemas/SeriesPickBanChampionId'
+              - type: 'null'
+        bans:
+          $ref: '#/components/schemas/SeriesPickBanBans'
+        patchVersion:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 32
+            - type: 'null'
+    SeriesPickBanSeries:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayNumber
+        - title
+        - bestOf
+        - status
+        - revision
+        - sourceRecruitmentId
+        - updatedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/SeriesId'
+        displayNumber:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+        bestOf:
+          type: integer
+          minimum: 1
+          maximum: 5
+        status:
+          type: string
+          const: IN_PROGRESS
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        sourceRecruitmentId:
+          type: string
+          format: uuid
+        updatedAt:
+          type: string
+          format: date-time
+    SeriesPickBanCapabilities:
+      type: object
+      additionalProperties: false
+      required: [canRevert, canDelete]
+      properties:
+        canRevert:
+          type: boolean
+        canDelete:
+          type: boolean
+    SeriesPickBanSnapshot:
+      type: object
+      additionalProperties: false
+      required: [series, teams, currentGame, games, capabilities]
+      description: >-
+        The frozen roster contains exactly two teams of five unique users. currentGame.picks has
+        exactly one key for each roster user. Persisted game history is intentionally unavailable
+        in this first pick-ban vertical slice, so games is always an empty array.
+      properties:
+        series:
+          $ref: '#/components/schemas/SeriesPickBanSeries'
+        teams:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/SeriesPickBanTeam'
+        currentGame:
+          $ref: '#/components/schemas/SeriesPickBanCurrentGame'
+        games:
+          type: array
+          maxItems: 0
+          description: Always empty until persisted game-history delivery is added in a later vertical slice.
+          items: {}
+        capabilities:
+          $ref: '#/components/schemas/SeriesPickBanCapabilities'
+    SeriesPickBanSnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/SeriesPickBanSnapshot'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    SeriesLifecycleData:
+      type: object
+      additionalProperties: false
+      required: [nextHref]
+      properties:
+        nextHref:
+          type: string
+          format: uri-reference
+          pattern: '^/g/'
+          description: Canonical workspace URL after the lifecycle command commits.
+    SeriesLifecycleResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/SeriesLifecycleData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    BotInstanceId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+      description: Stable process instance identity used to own a notification lease.
+    BotNotificationType:
+      type: string
+      minLength: 1
+      maxLength: 100
+      description: >-
+        Notification type interpreted by the Bot worker. CREATE sends a new recruitment message,
+        UPDATE edits its bound message, and DELETE removes its bound message; all three use the
+        same versioned recruitment snapshot payload.
+      enum:
+        - RECRUITMENT_MESSAGE_CREATE
+        - RECRUITMENT_MESSAGE_UPDATE
+        - RECRUITMENT_MESSAGE_DELETE
+    RecruitmentMessageNotificationPayload:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, recruitmentId, snapshot]
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+        recruitmentId:
+          type: string
+          format: uuid
+        snapshot:
+          $ref: '#/components/schemas/RecruitmentSnapshot'
+    ClaimedBotNotification:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - guildId
+        - leaseToken
+        - leaseUntil
+        - channelId
+        - type
+        - payload
+        - discordNonce
+        - attempts
+      properties:
+        id:
+          type: string
+          format: uuid
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        leaseToken:
+          type: string
+          format: uuid
+        leaseUntil:
+          type: string
+          format: date-time
+        channelId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        type:
+          $ref: '#/components/schemas/BotNotificationType'
+        payload:
+          $ref: '#/components/schemas/RecruitmentMessageNotificationPayload'
+        discordNonce:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{22}$'
+          minLength: 22
+          maxLength: 22
+        attempts:
+          type: integer
+          minimum: 1
+          maximum: 8
+    ClaimBotNotificationsRequest:
+      type: object
+      additionalProperties: false
+      required: [instanceId]
+      properties:
+        instanceId:
+          $ref: '#/components/schemas/BotInstanceId'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 20
+    ClaimBotNotificationsData:
+      type: object
+      additionalProperties: false
+      required: [notifications]
+      properties:
+        notifications:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/ClaimedBotNotification'
+    ClaimBotNotificationsResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ClaimBotNotificationsData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AcknowledgeBotNotificationRequest:
+      type: object
+      additionalProperties: false
+      required: [instanceId, notificationId, leaseToken, discordMessageId]
+      properties:
+        instanceId:
+          $ref: '#/components/schemas/BotInstanceId'
+        notificationId:
+          type: string
+          format: uuid
+        leaseToken:
+          type: string
+          format: uuid
+        discordMessageId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+    AcknowledgeBotNotificationData:
+      type: object
+      additionalProperties: false
+      required: [acknowledged, deliveredAt]
+      properties:
+        acknowledged:
+          type: boolean
+          const: true
+        deliveredAt:
+          type: string
+          format: date-time
+    AcknowledgeBotNotificationResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AcknowledgeBotNotificationData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    AcknowledgeRecruitmentMessageData:
+      type: object
+      additionalProperties: false
+      required: [acknowledged, deliveredAt, recruitment]
+      properties:
+        acknowledged:
+          type: boolean
+          const: true
+        deliveredAt:
+          type: string
+          format: date-time
+        recruitment:
+          type: object
+          additionalProperties: false
+          required: [id, revision]
+          properties:
+            id:
+              type: string
+              format: uuid
+            revision:
+              type: integer
+              format: int64
+              minimum: 0
+    AcknowledgeRecruitmentMessageResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AcknowledgeRecruitmentMessageData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    BotNotificationFailure:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, status, message]
+          properties:
+            kind:
+              type: string
+              const: HTTP
+            status:
+              type: integer
+              minimum: 400
+              maximum: 599
+            retryAfterMs:
+              type: integer
+              minimum: 1
+              maximum: 3600000
+            message:
+              type: string
+              minLength: 1
+              maxLength: 1024
+        - type: object
+          additionalProperties: false
+          required: [kind, message]
+          properties:
+            kind:
+              type: string
+              const: TRANSPORT
+            message:
+              type: string
+              minLength: 1
+              maxLength: 1024
+        - type: object
+          additionalProperties: false
+          required: [kind, message]
+          properties:
+            kind:
+              type: string
+              const: DELIVERY_UNKNOWN
+            message:
+              type: string
+              minLength: 1
+              maxLength: 1024
+    NackBotNotificationRequest:
+      type: object
+      additionalProperties: false
+      required: [instanceId, notificationId, leaseToken, failure]
+      properties:
+        instanceId:
+          $ref: '#/components/schemas/BotInstanceId'
+        notificationId:
+          type: string
+          format: uuid
+        leaseToken:
+          type: string
+          format: uuid
+        failure:
+          $ref: '#/components/schemas/BotNotificationFailure'
+    NackBotNotificationData:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [state, availableAt, attempts]
+          properties:
+            state:
+              type: string
+              const: RETRY_SCHEDULED
+            availableAt:
+              type: string
+              format: date-time
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 8
+        - type: object
+          additionalProperties: false
+          required: [state, failureCode, attempts]
+          properties:
+            state:
+              type: string
+              const: FAILED
+            failureCode:
+              type: string
+              minLength: 1
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 8
+    NackBotNotificationResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/NackBotNotificationData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     ResponseMeta:
@@ -5835,7 +7365,7 @@ components:
           type: string
         status:
           type: string
-          const: CLOSED
+          enum: [OPEN, CLOSED]
         targetCount:
           type: integer
           const: 10
@@ -5858,6 +7388,9 @@ components:
         href:
           type: string
           format: uri-reference
+          description: >-
+            OPEN rows link to the recruitment roster; CLOSED rows link to the entry-composition
+            workspace.
     RecruitmentListData:
       type: object
       additionalProperties: false
@@ -5978,6 +7511,35 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/SeriesListData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    CreatedSeries:
+      type: object
+      additionalProperties: false
+      required: [id, href]
+      properties:
+        id:
+          type: string
+          format: uuid
+        href:
+          type: string
+          format: uri-reference
+          pattern: '^/g/'
+          description: Next canonical workspace URL for the new series.
+    SeriesCreationData:
+      type: object
+      additionalProperties: false
+      required: [series]
+      properties:
+        series:
+          $ref: '#/components/schemas/CreatedSeries'
+    SeriesCreationResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/SeriesCreationData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     AuctionFormat:

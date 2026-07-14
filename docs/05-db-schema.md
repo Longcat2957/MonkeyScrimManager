@@ -717,8 +717,12 @@ FK (guild_id, recruitment_id) -> recruitments (guild_id, id) RESTRICT
 FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 ```
 
-Entry workspace의 aggregate revision owner다. 참가/취소로 workspace snapshot이 바뀌면 해당
-command는 recruitment와 이 draft revision을 같은 transaction에서 갱신한다.
+Entry workspace의 aggregate revision owner다. `recruitments.revision`은 모집 상태/roster lifecycle의
+owner이고, 이 revision은 배치와 entry workspace의 owner다. 제한적 realtime에서 draft invalidate는
+`guild:{guildId}:recruitment-entry-draft:{recruitmentId}` topic과 이 draft revision을 사용하며,
+recruitment topic에는 recruitment revision만 넣는다. 참가/취소로 두 snapshot이 함께 바뀌면 해당 command는
+두 revision을 같은 transaction에서 독립적으로 갱신한다. outbox는 composite entry route를 다시 읽혀야 하는
+aggregate의 topic 하나 또는 둘을 적재할 수 있지만, topic마다 그 owner revision만 사용한다.
 배정된 참가자가 withdraw되거나 강제 제거되면 assignment를 같은 transaction에서 삭제한다.
 Series 생성 시에도 10개 assignment가 모두 현재 JOINED participant인지 다시 검증한다.
 
@@ -788,9 +792,10 @@ CHECK ((status='IN_PROGRESS' AND winning_team IS NULL AND terminal_reason IS NUL
 다른 UUID를 갖는다. 같은 모집에는 non-cancelled series가 최대 하나이며 생성 되돌리기로 기존
 series가 CANCELLED되면 재시도는 새 series ID를 발급한다.
 
-Series 생성 되돌리기는 confirmed game이 없을 때만 허용한다. 기존 series를 CANCELLED로,
-source recruitment를 CLOSED로 되돌리고 새 전환 command가 기존 entry draft에서 새 series ID를
-만들게 한다.
+Series 생성 되돌리기는 confirmed game이 없으면 기존 series를 곧바로 `CANCELLED`로,
+source recruitment를 `CLOSED`로 되돌린다. confirmed game이 있으면 마지막 game부터 ledger tail을
+검증해 `VOIDED`/MMR reversal을 역순으로 완료한 뒤 같은 lifecycle revert를 수행한다. 새 전환
+command는 기존 entry draft에서 새 series ID를 만들며, 기존 row를 재사용하거나 물리 삭제하지 않는다.
 신규 series는 created_by가 필수이며 nullable은 v3의 actor 미기록 row만 허용한다.
 Bot 조기 종료의 동률 결과는 `COMPLETED + EARLY_DRAW + winning_team=NULL`로 보존한다. 일반 score
 달성 완료와 운영자 지정 조기 승리를 같은 nullable winner로 추측하지 않고 terminal_reason으로

@@ -64,13 +64,13 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 
 ## 일반 내전 Entrypoints
 
-| 컴포넌트                           | 운영 route                                         | 필수 입력                                                                                                 | 데이터 상태  |
-| ---------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------ |
-| `EntryDraftBoard`                  | `/g/[guildId]/recruitments/[id]/entry` 편성 탭     | `participants`, `initialAssignments`; 선택 `synergies`, `headToHead`, `targetCount`, `profileIconVersion` | Mock data    |
-| `SeriesCompletedEntryRosterBoard`  | `/g/[guildId]/recruitments/[id]/entry` 미리보기 탭 | `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                    | Mock data    |
-| `ScrimPickBanResultInputBoard`     | `/g/[guildId]/series/[id]/pick-ban` 입력 탭        | `teams`, `initialGame`, `champions`, `patchVersion`, `onSubmit`                                           | Mock adapter |
-| `ScrimPickBanResultSetSummaryCard` | `/g/[guildId]/series/[id]/pick-ban` 요약 탭        | `label`, 양 팀, `winner`, `bans`, `picks`, `champions`, `version`                                         | Mock data    |
-| `SeriesResultLedgerBoard`          | `/g/[guildId]/series/[id]/result`                  | `catalog: ChampionCatalog`; 선택 `seriesId`                                                               | Mock data    |
+| 컴포넌트                           | 운영 route                                         | 필수 입력                                                                                                                                                                     | 데이터 상태          |
+| ---------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `EntryDraftBoard`                  | `/g/[guildId]/recruitments/[id]/entry` 편성 탭     | controlled `participants`, `assignments`, `onMoveParticipant`, `onReset`; 선택 `readOnly`, `busy`, `canReset`, `synergies`, `headToHead`, `targetCount`, `profileIconVersion` | `EntryDraftSnapshot` |
+| `SeriesCompletedEntryRosterBoard`  | `/g/[guildId]/recruitments/[id]/entry` 미리보기 탭 | `EntryDraftSnapshot`에서 변환한 `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                                                        | API snapshot         |
+| `ScrimPickBanResultInputBoard`     | `/g/[guildId]/series/[id]/pick-ban` 입력 탭        | `teams`, `initialGame`, `champions`, `patchVersion`, `onSubmit`                                                                                                               | Mock adapter         |
+| `ScrimPickBanResultSetSummaryCard` | `/g/[guildId]/series/[id]/pick-ban` 요약 탭        | `label`, 양 팀, `winner`, `bans`, `picks`, `champions`, `version`                                                                                                             | Mock data            |
+| `SeriesResultLedgerBoard`          | `/g/[guildId]/series/[id]/result`                  | `catalog: ChampionCatalog`; 선택 `seriesId`                                                                                                                                   | Mock data            |
 
 `/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 보여주고 하단에 완료 시리즈를 보여준다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
 
@@ -110,14 +110,12 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 
 ## Development Entrypoints
 
-| 컴포넌트                           | 운영 위치                                 | 주요 계약과 상태                                                                                    |
-| ---------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `DummyUserWorkspace`               | `/dev/users`                              | `initialUsers`, `initialGroups`, `initialTotal`, `guilds`, `championCatalog`; 선택 `initialGuildId` |
-| `DummyMemberPicker`                | 더미 group 편집과 기능별 더미 참가자 선택 | `users`, `selectedIds`, `onSelectionChange`; 선택 `requiredGuildId`, `maxSelected`, `disabled`      |
-| `RecruitmentDummyParticipantPanel` | `/g/[guildId]/recruitments/[id]/entry`    | `guildId`, `recruitmentId`; API overview/preview/apply를 내부에서 연결                              |
+| 컴포넌트             | 운영 위치                           | 주요 계약과 상태                                                                                    |
+| -------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `DummyUserWorkspace` | `/dev/users`                        | `initialUsers`, `initialGroups`, `initialTotal`, `guilds`, `championCatalog`; 선택 `initialGuildId` |
+| `DummyMemberPicker`  | 더미 group 편집과 개발 도구 내 선택 | `users`, `selectedIds`, `onSelectionChange`; 선택 `requiredGuildId`, `maxSelected`, `disabled`      |
 
-세 컴포넌트는 `MONKEYBOT_DUMMY_USERS_ENABLED=true`인 non-production 환경의 service admin 도구다.
-`RecruitmentDummyParticipantPanel`은 service admin이면서 현재 길드 operator일 때만 route에서 렌더링한다.
+두 컴포넌트는 `MONKEYBOT_DUMMY_USERS_ENABLED=true`인 non-production 환경의 service admin 도구다.
 `DummyMemberPicker.requiredGuildId`가 있으면 해당 길드의 ACTIVE membership만 선택하며, 최종 자격·정원·중복
 검증은 apply API가 다시 수행한다.
 

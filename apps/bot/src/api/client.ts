@@ -3,13 +3,20 @@ import { type ZodType } from 'zod';
 
 import {
 	actorRequestSchema,
+	acknowledgeNotificationDataSchema,
+	acknowledgeNotificationRequestSchema,
+	acknowledgeRecruitmentMessageDataSchema,
 	apiReadinessDataSchema,
 	apiErrorEnvelopeSchema,
 	bindRecruitmentMessageRequestSchema,
+	claimNotificationsDataSchema,
+	claimNotificationsRequestSchema,
 	createRecruitmentRequestSchema,
 	discordCatalogSyncDataSchema,
 	discordCatalogSyncRequestSchema,
 	joinRecruitmentRequestSchema,
+	nackNotificationDataSchema,
+	nackNotificationRequestSchema,
 	registerGuildMemberDataSchema,
 	registerGuildMemberRequestSchema,
 	recruitmentSnapshotSchema,
@@ -18,12 +25,19 @@ import {
 	setupGuildRequestSchema,
 	successEnvelopeSchema,
 	type ActorRequest,
+	type AcknowledgeNotificationData,
+	type AcknowledgeNotificationRequest,
+	type AcknowledgeRecruitmentMessageData,
 	type ApiReadinessData,
 	type BindRecruitmentMessageRequest,
+	type ClaimNotificationsData,
+	type ClaimNotificationsRequest,
 	type CreateRecruitmentRequest,
 	type DiscordCatalogSyncData,
 	type DiscordCatalogSyncRequest,
 	type JoinRecruitmentRequest,
+	type NackNotificationData,
+	type NackNotificationRequest,
 	type RegisterGuildMemberData,
 	type RegisterGuildMemberRequest,
 	type RecruitmentSnapshot,
@@ -333,6 +347,70 @@ export class MonkeyBotApiClient {
 			actorRequestSchema,
 			context
 		);
+	}
+
+	claimNotifications(
+		input: ClaimNotificationsRequest,
+		context: ApiRequestContext = {}
+	): Promise<ClaimNotificationsData> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['internal', 'notifications', 'claim'],
+			body: input,
+			requestSchema: claimNotificationsRequestSchema,
+			responseSchema: claimNotificationsDataSchema,
+			context,
+			idempotencyKey: null,
+			logRequest: false
+		});
+	}
+
+	acknowledgeNotification(
+		input: AcknowledgeNotificationRequest,
+		context: ApiRequestContext = {}
+	): Promise<AcknowledgeNotificationData> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['internal', 'notifications', 'ack'],
+			body: input,
+			requestSchema: acknowledgeNotificationRequestSchema,
+			responseSchema: acknowledgeNotificationDataSchema,
+			context,
+			idempotencyKey: null,
+			logRequest: false
+		});
+	}
+
+	acknowledgeRecruitmentMessage(
+		input: AcknowledgeNotificationRequest,
+		context: ApiRequestContext = {}
+	): Promise<AcknowledgeRecruitmentMessageData> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['internal', 'notifications', 'recruitment-message', 'ack'],
+			body: input,
+			requestSchema: acknowledgeNotificationRequestSchema,
+			responseSchema: acknowledgeRecruitmentMessageDataSchema,
+			context,
+			idempotencyKey: null,
+			logRequest: false
+		});
+	}
+
+	nackNotification(
+		input: NackNotificationRequest,
+		context: ApiRequestContext = {}
+	): Promise<NackNotificationData> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['internal', 'notifications', 'nack'],
+			body: input,
+			requestSchema: nackNotificationRequestSchema,
+			responseSchema: nackNotificationDataSchema,
+			context,
+			idempotencyKey: null,
+			logRequest: false
+		});
 	}
 
 	#recruitmentMutation<TRequest>(

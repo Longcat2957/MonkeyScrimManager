@@ -17,6 +17,13 @@ pub struct ClaimOutbox<'a> {
     pub limit: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct ClaimAnyOutbox<'a> {
+    pub lease_owner: &'a str,
+    pub lease_duration: std::time::Duration,
+    pub limit: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutboxLease {
     pub owner: String,
@@ -130,6 +137,79 @@ pub async fn claim(
     Ok(claimed)
 }
 
+/// Claims deliverable events across every guild. This is used by process-wide relays; tenant
+/// scoped consumers should continue to use [`claim`].
+pub async fn claim_any(
+    transaction: &mut DatabaseTransaction,
+    request: &ClaimAnyOutbox<'_>,
+) -> Result<Vec<ClaimedOutboxEvent>, OutboxRepositoryError> {
+    let lease_interval =
+        validate_claim_values(request.lease_owner, request.lease_duration, request.limit)?;
+
+    let rows = sqlx::query_as::<_, AnyOutboxRow>(
+        "WITH claim_clock AS MATERIALIZED (
+             SELECT clock_timestamp() AS current_time
+         )
+         SELECT id, guild_id, topic, aggregate_type, aggregate_id, aggregate_revision, event_type,
+                payload, occurred_at, available_at, attempts
+         FROM outbox_events
+         CROSS JOIN claim_clock
+         WHERE published_at IS NULL
+           AND available_at <= claim_clock.current_time
+           AND (lease_until IS NULL OR lease_until < claim_clock.current_time)
+         ORDER BY available_at, id
+         LIMIT $1
+         FOR UPDATE OF outbox_events SKIP LOCKED",
+    )
+    .bind(i64::from(request.limit))
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    let mut claimed = Vec::with_capacity(rows.len());
+    for row in rows {
+        let guild_id =
+            GuildId::parse(row.guild_id).map_err(OutboxRepositoryError::InvalidGuildId)?;
+        let lease_token = Uuid::now_v7();
+        let lease_until = sqlx::query_scalar::<_, OffsetDateTime>(
+            "UPDATE outbox_events
+             SET lease_owner = $1,
+                 lease_token = $2,
+                 lease_until = clock_timestamp() + $3
+             WHERE guild_id = $4 AND id = $5 AND published_at IS NULL
+             RETURNING lease_until",
+        )
+        .bind(request.lease_owner)
+        .bind(lease_token)
+        .bind(lease_interval)
+        .bind(&guild_id)
+        .bind(row.id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+
+        let lease_until = lease_until.ok_or(OutboxRepositoryError::ClaimedRowDisappeared)?;
+        claimed.push(ClaimedOutboxEvent {
+            id: OutboxEventId::from_uuid(row.id),
+            guild_id,
+            topic: row.topic,
+            aggregate_type: row.aggregate_type,
+            aggregate_id: row.aggregate_id,
+            aggregate_revision: row.aggregate_revision,
+            event_type: row.event_type,
+            payload: row.payload,
+            occurred_at: row.occurred_at,
+            available_at: row.available_at,
+            attempts: row.attempts,
+            lease: OutboxLease {
+                owner: request.lease_owner.to_owned(),
+                token: lease_token,
+                until: lease_until,
+            },
+        });
+    }
+
+    Ok(claimed)
+}
+
 pub async fn ack(
     transaction: &mut DatabaseTransaction,
     request: &AckOutbox<'_>,
@@ -188,13 +268,21 @@ pub async fn nack(
 fn validate_claim(
     request: &ClaimOutbox<'_>,
 ) -> Result<sqlx::postgres::types::PgInterval, OutboxRepositoryError> {
-    if request.lease_owner.trim().is_empty() {
+    validate_claim_values(request.lease_owner, request.lease_duration, request.limit)
+}
+
+fn validate_claim_values(
+    lease_owner: &str,
+    lease_duration: std::time::Duration,
+    limit: u32,
+) -> Result<sqlx::postgres::types::PgInterval, OutboxRepositoryError> {
+    if lease_owner.trim().is_empty() {
         return Err(OutboxRepositoryError::EmptyLeaseOwner);
     }
-    if request.limit == 0 {
+    if limit == 0 {
         return Err(OutboxRepositoryError::EmptyClaimBatch);
     }
-    postgres_interval(request.lease_duration).ok_or(OutboxRepositoryError::InvalidLeaseDuration)
+    postgres_interval(lease_duration).ok_or(OutboxRepositoryError::InvalidLeaseDuration)
 }
 
 fn postgres_interval(duration: std::time::Duration) -> Option<sqlx::postgres::types::PgInterval> {
@@ -226,6 +314,21 @@ struct OutboxRow {
     attempts: i32,
 }
 
+#[derive(Debug, FromRow)]
+struct AnyOutboxRow {
+    id: Uuid,
+    guild_id: String,
+    topic: String,
+    aggregate_type: String,
+    aggregate_id: String,
+    aggregate_revision: i64,
+    event_type: String,
+    payload: Value,
+    occurred_at: OffsetDateTime,
+    available_at: OffsetDateTime,
+    attempts: i32,
+}
+
 #[derive(Debug, Error)]
 pub enum OutboxRepositoryError {
     #[error("outbox lease owner must not be empty")]
@@ -238,6 +341,8 @@ pub enum OutboxRepositoryError {
     InvalidRetryDelay,
     #[error("outbox row disappeared after it was locked for claim")]
     ClaimedRowDisappeared,
+    #[error("outbox contains an invalid guild ID")]
+    InvalidGuildId(#[source] crate::domain::SnowflakeError),
     #[error("PostgreSQL outbox operation failed")]
     Sql(#[from] sqlx::Error),
 }

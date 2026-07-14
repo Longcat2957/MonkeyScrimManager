@@ -134,6 +134,7 @@ export const recruitmentSchema = z
 		revision: z.number().int().nonnegative(),
 		channelId: discordSnowflakeSchema.nullable(),
 		messageId: discordSnowflakeSchema.nullable(),
+		createdById: recruitmentParticipantIdSchema,
 		updatedAt: timestampSchema
 	})
 	.strict();
@@ -187,6 +188,114 @@ export const setPreferredLanesRequestSchema = z
 			.refine((lanes) => new Set(lanes).size === lanes.length, 'lanes must be unique')
 	})
 	.strict();
+
+const botInstanceIdSchema = z
+	.string()
+	.min(1)
+	.max(128)
+	.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+
+export const recruitmentMessageNotificationPayloadSchema = z
+	.object({
+		schemaVersion: z.literal(1),
+		recruitmentId: uuidSchema,
+		snapshot: recruitmentSnapshotSchema
+	})
+	.strict();
+
+export const botNotificationSchema = z
+	.object({
+		id: uuidSchema,
+		guildId: discordSnowflakeSchema,
+		leaseToken: uuidSchema,
+		leaseUntil: timestampSchema,
+		channelId: discordSnowflakeSchema,
+		type: z.string().min(1).max(100),
+		payload: z.unknown(),
+		discordNonce: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
+		attempts: z.number().int().min(1).max(8)
+	})
+	.strict();
+
+export const claimNotificationsRequestSchema = z
+	.object({
+		instanceId: botInstanceIdSchema,
+		limit: z.number().int().min(1).max(50).optional()
+	})
+	.strict();
+
+export const claimNotificationsDataSchema = z
+	.object({ notifications: z.array(botNotificationSchema).max(50) })
+	.strict();
+
+export const acknowledgeNotificationRequestSchema = z
+	.object({
+		instanceId: botInstanceIdSchema,
+		notificationId: uuidSchema,
+		leaseToken: uuidSchema,
+		discordMessageId: discordSnowflakeSchema
+	})
+	.strict();
+
+export const acknowledgeNotificationDataSchema = z
+	.object({
+		acknowledged: z.literal(true),
+		deliveredAt: timestampSchema
+	})
+	.strict();
+
+export const acknowledgeRecruitmentMessageDataSchema = acknowledgeNotificationDataSchema
+	.extend({
+		recruitment: z.object({ id: uuidSchema, revision: z.number().int().nonnegative() }).strict()
+	})
+	.strict();
+
+export const nackNotificationRequestSchema = z
+	.object({
+		instanceId: botInstanceIdSchema,
+		notificationId: uuidSchema,
+		leaseToken: uuidSchema,
+		failure: z.discriminatedUnion('kind', [
+			z
+				.object({
+					kind: z.literal('HTTP'),
+					status: z.number().int().min(400).max(599),
+					retryAfterMs: z.number().int().positive().max(3_600_000).optional(),
+					message: z.string().min(1).max(1024)
+				})
+				.strict(),
+			z
+				.object({
+					kind: z.literal('TRANSPORT'),
+					message: z.string().min(1).max(1024)
+				})
+				.strict(),
+			z
+				.object({
+					kind: z.literal('DELIVERY_UNKNOWN'),
+					message: z.string().min(1).max(1024)
+				})
+				.strict()
+		])
+	})
+	.strict();
+
+export const nackNotificationDataSchema = z.discriminatedUnion('state', [
+	z
+		.object({
+			state: z.literal('RETRY_SCHEDULED'),
+			availableAt: timestampSchema,
+			attempts: z.number().int().min(1).max(8)
+		})
+		.strict(),
+	z
+		.object({
+			state: z.literal('FAILED'),
+			failureCode: z.string().min(1),
+			attempts: z.number().int().min(1).max(8)
+		})
+		.strict()
+]);
 
 export const responseMetaSchema = z
 	.object({
@@ -248,5 +357,18 @@ export type BindRecruitmentMessageRequest = z.infer<typeof bindRecruitmentMessag
 export type JoinRecruitmentRequest = z.infer<typeof joinRecruitmentRequestSchema>;
 export type ActorRequest = z.infer<typeof actorRequestSchema>;
 export type SetPreferredLanesRequest = z.infer<typeof setPreferredLanesRequestSchema>;
+export type RecruitmentMessageNotificationPayload = z.infer<
+	typeof recruitmentMessageNotificationPayloadSchema
+>;
+export type BotNotification = z.infer<typeof botNotificationSchema>;
+export type ClaimNotificationsRequest = z.infer<typeof claimNotificationsRequestSchema>;
+export type ClaimNotificationsData = z.infer<typeof claimNotificationsDataSchema>;
+export type AcknowledgeNotificationRequest = z.infer<typeof acknowledgeNotificationRequestSchema>;
+export type AcknowledgeNotificationData = z.infer<typeof acknowledgeNotificationDataSchema>;
+export type AcknowledgeRecruitmentMessageData = z.infer<
+	typeof acknowledgeRecruitmentMessageDataSchema
+>;
+export type NackNotificationRequest = z.infer<typeof nackNotificationRequestSchema>;
+export type NackNotificationData = z.infer<typeof nackNotificationDataSchema>;
 export type ApiErrorEnvelope = z.infer<typeof apiErrorEnvelopeSchema>;
 export type ApiReadinessData = z.infer<typeof apiReadinessDataSchema>;
