@@ -27,6 +27,7 @@
 		catalog: ChampionCatalog;
 		snapshot: GuildLeaderboardSnapshot | null;
 		loadError?: string | null;
+		onOpenPlayer?: (playerId: string) => void | Promise<void>;
 	}
 
 	const roleOrder: LeaderboardRole[] = ['COMPOSITE', 'TOP', 'JUNGLE', 'MID', 'BOTTOM', 'SUPPORT'];
@@ -39,7 +40,7 @@
 		SUPPORT: '서폿'
 	};
 
-	let { catalog, snapshot, loadError = null }: Props = $props();
+	let { catalog, snapshot, loadError = null, onOpenPlayer }: Props = $props();
 	let selectedRole = $state<LeaderboardRole>('COMPOSITE');
 	let query = $state('');
 	let limit = $state(25);
@@ -132,6 +133,11 @@
 		if (rank === 3) return 'text-orange-300';
 		return 'text-slate-500';
 	}
+
+	function openPlayerRecords(playerId: string) {
+		if (!onOpenPlayer) return;
+		void onOpenPlayer(playerId);
+	}
 </script>
 
 <section
@@ -220,9 +226,10 @@
 					class={`grid min-h-[62px] w-full grid-cols-[72px_minmax(240px,1fr)_110px_120px_100px_200px_100px] items-center border-b border-[var(--color-app-border-muted)] px-3 text-left hover:bg-[var(--color-app-hover)] ${
 						row.player.isMe ? 'bg-cyan-400/[0.055] shadow-[inset_3px_0_0_#22d3ee]' : ''
 					} ${selectedPlayerId === row.player.id ? 'outline outline-1 -outline-offset-1 outline-cyan-300/40' : ''}`}
-					aria-label={`${row.player.name} 선택`}
+					aria-label={`${row.player.name} 선택. 두 번 클릭하면 내전 전적 열기`}
 					aria-pressed={selectedPlayerId === row.player.id}
 					onclick={() => (selectedPlayerId = row.player.id)}
+					ondblclick={() => openPlayerRecords(row.player.id)}
 				>
 					<strong class={`text-sm tabular-nums ${rankClass(row.rank)}`}>#{row.rank}</strong>
 					<span class="flex min-w-0 items-center gap-3">

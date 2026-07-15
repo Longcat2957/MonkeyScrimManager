@@ -60,4 +60,11 @@ describe('LeaderboardBoard', () => {
 		expect(empty.body).toContain('현재 진행 중인 시즌이 없습니다.');
 		expect(failed.body).toContain('리더보드 조회 실패');
 	});
+
+	it('delegates a player-row double click to the guild records route owner using the exact Discord user ID', () => {
+		expect(source).toContain('onOpenPlayer?: (playerId: string) => void | Promise<void>');
+		expect(source).toContain('function openPlayerRecords(playerId: string)');
+		expect(source).toContain('ondblclick={() => openPlayerRecords(row.player.id)}');
+		expect(source).toContain('두 번 클릭하면 내전 전적 열기');
+	});
 });
