@@ -20,5 +20,7 @@ target
 deploy/api/runtime.env
 deploy/api/migration.env
 deploy/riot-api/runtime.env
+deploy/bot/runtime.env
+deploy/dev.env
 deploy/postgres/pg_service.conf
 deploy/postgres/pgpass

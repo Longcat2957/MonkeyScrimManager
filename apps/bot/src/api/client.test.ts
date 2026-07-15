@@ -304,7 +304,11 @@ describe('MonkeyBotApiClient', () => {
 	});
 
 	it('creates an auction recruitment with the bot actor and interaction idempotency key', async () => {
-		const fetchMock = vi.fn(async () => envelope(auctionSnapshot));
+		const fetchMock = vi.fn<typeof globalThis.fetch>(async (_input, _init) => {
+			void _input;
+			void _init;
+			return envelope(auctionSnapshot);
+		});
 		const client = createClient(fetchMock);
 
 		await expect(
@@ -336,7 +340,11 @@ describe('MonkeyBotApiClient', () => {
 	});
 
 	it('joins and leaves an auction recruitment with the canonical member routes', async () => {
-		const fetchMock = vi.fn(async () => envelope(auctionSnapshot));
+		const fetchMock = vi.fn<typeof globalThis.fetch>(async (_input, _init) => {
+			void _input;
+			void _init;
+			return envelope(auctionSnapshot);
+		});
 		const client = createClient(fetchMock);
 		const context = { idempotencyKey: '400000000000000008' };
 

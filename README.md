@@ -66,6 +66,7 @@ docs/09-backend-development-plan.md Axum/PostgreSQL 상세 실행계획
 docs/11-dummy-users.md          개발용 더미 사용자 신원, 관리, 기능 연결 계약
 docs/12-current-operating-contract.md 현재 구현 기준의 운영 계약
 docs/13-code-review-plan.md     현재 구현 기준의 코드 리뷰 계획
+deploy/README.md                VPS dev 배포 runbook
 docs/routing/frontend.md        Frontend route
 docs/routing/backend.md         Backend API route
 docs/routing/bot.md             Bot command/component route
@@ -99,7 +100,7 @@ Arch Linux에서 VS Code `rust-analyzer`를 사용하려면 먼저 `sudo pacman 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml config
+docker compose --env-file deploy/dev.env.example -f deploy/docker-compose.dev.yml config
 ```
 
 실제 PostgreSQL 통합 테스트는 Docker로 PostgreSQL 18.4를 자동 실행한다. 복구 smoke는 권한을 제한한

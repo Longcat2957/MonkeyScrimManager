@@ -12,6 +12,9 @@ target
 .env.*
 !.env.example
 
+# Deployment runtime files can contain production credentials and are never image build inputs.
+deploy/
+
 GeneratedImageForLogo
 external_assets
 new_icon.png

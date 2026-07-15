@@ -3,6 +3,7 @@ FROM rust:1.96.1-bookworm AS builder
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY apps/api ./apps/api
+COPY apps/riot-api ./apps/riot-api
 RUN cargo build --locked --release --package monkeybot-api \
     --bin monkeybot-api \
     --bin monkeybot-migrate
