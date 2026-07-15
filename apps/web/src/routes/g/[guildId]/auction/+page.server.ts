@@ -3,7 +3,6 @@ import {
 	auctionTournamentListDataSchema
 } from '$lib/contracts/workflow';
 import { apiGet, apiRoute } from '$lib/server/api';
-import { buildAuctionView } from '$lib/workflow/presentation';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
@@ -41,10 +40,10 @@ export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
 
 	return {
 		guildId: params.guildId,
-		view: buildAuctionView({
-			recruitments: recruitmentData.recruitments,
-			activeTournaments: activeTournamentData.tournaments,
-			completedTournaments: completedTournamentData.tournaments
-		})
+		auctionPages: {
+			actionableRecruitments: recruitmentData,
+			activeTournaments: activeTournamentData,
+			completedTournaments: completedTournamentData
+		}
 	};
 };

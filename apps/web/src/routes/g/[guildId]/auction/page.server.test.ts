@@ -7,6 +7,9 @@ const recruitmentId = '01900000-0000-7000-8000-000000000501';
 const activeTournamentId = '01900000-0000-7000-8000-000000000601';
 const completedTournamentId = '01900000-0000-7000-8000-000000000602';
 const championTeamId = '01900000-0000-7000-8000-000000000701';
+const recruitmentCursor = '2026-07-12T10:00:00Z|01900000-0000-7000-8000-000000000501';
+const activeTournamentCursor = '2026-07-12T11:00:00Z|01900000-0000-7000-8000-000000000601';
+const completedTournamentCursor = '2026-07-11T18:00:00Z|01900000-0000-7000-8000-000000000602';
 
 function envelope(data: unknown) {
 	return Response.json({ data, meta: { requestId } });
@@ -47,7 +50,7 @@ describe('auction page server load', () => {
 							href: `/g/${guildId}/auction/recruitments/${recruitmentId}/draft`
 						}
 					],
-					nextCursor: null
+					nextCursor: recruitmentCursor
 				});
 			}
 
@@ -73,7 +76,7 @@ describe('auction page server load', () => {
 							href: `/g/${guildId}/auction/tournaments/${activeTournamentId}/draft`
 						}
 					],
-					nextCursor: null
+					nextCursor: activeTournamentCursor
 				});
 			}
 
@@ -99,7 +102,7 @@ describe('auction page server load', () => {
 							href: `/g/${guildId}/auction/tournaments/${completedTournamentId}/result`
 						}
 					],
-					nextCursor: null
+					nextCursor: completedTournamentCursor
 				});
 			}
 
@@ -121,15 +124,18 @@ describe('auction page server load', () => {
 			`/api/guilds/${guildId}/auction-tournaments?state=completed&limit=100`
 		]);
 		expect(result.guildId).toBe(guildId);
-		expect(result.view.activeWork[0]?.iconKind).toBe('bidding');
-		expect(result.view.activeWork[1]?.iconKind).toBe('recruitment');
-		expect(result.view.activeWork[0]).toMatchObject({
+		expect(result.auctionPages).toMatchObject({
+			actionableRecruitments: { nextCursor: recruitmentCursor },
+			activeTournaments: { nextCursor: activeTournamentCursor },
+			completedTournaments: { nextCursor: completedTournamentCursor }
+		});
+		expect(result.auctionPages.activeTournaments.tournaments[0]).toMatchObject({
 			displayNumber: 118,
 			href: `/g/${guildId}/auction/tournaments/${activeTournamentId}/draft`
 		});
-		expect(result.view.completedWork[0]).toMatchObject({
+		expect(result.auctionPages.completedTournaments.tournaments[0]).toMatchObject({
 			displayNumber: 117,
-			kind: '완료',
+			status: 'COMPLETED',
 			href: `/g/${guildId}/auction/tournaments/${completedTournamentId}/result`
 		});
 	});

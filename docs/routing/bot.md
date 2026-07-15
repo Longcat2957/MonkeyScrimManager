@@ -356,9 +356,10 @@ Backend:
 
 ## 경매 내전 운영 Commands
 
-현재 구현 범위는 `/경매모집`과 해당 Discord 모집 카드의 self-service 참가/취소/라인 선택, 그리고
-`/경매조기종료`다. 이외 토너먼트 운영 command 항목은 설계 예약이며, route와 command registration이
-생기기 전에는 실행 가능하다고 노출하지 않는다.
+현재 구현 범위는 `/경매모집`과 해당 Discord 모집 카드의 self-service 참가/취소/라인 선택,
+`/경매인원추가`, `/경매인원삭제`, `/경매목록`, `/경매강제취소`, `/경매조기종료`다. 입찰과 대진을
+직접 조작하는 별도 Discord command는 설계 예약이며, route와 command registration이 생기기 전에는 실행
+가능하다고 노출하지 않는다.
 
 ### `/경매모집 정원 [결승] [4강] [하드피어리스]`
 
@@ -396,11 +397,20 @@ Web link:
 
 목적:
 
-- 경매 모집 강제 참가.
+- Discord 길드 멤버를 OPEN 경매 모집에 강제 참가시킨다.
 
 Backend:
 
-- `POST /api/guilds/{guildId}/auction-recruitments/:id/members`.
+- BotBearer `POST /api/guilds/{guildId}/auction-recruitments/{id}/members`.
+- Bot은 Discord interaction ID를 `Idempotency-Key`로 보내고
+  `{ actor, member, declaredLane? }`를 보낸다. `actor`는 실행자, `member`는 추가 대상의 Discord
+  snapshot이다. transport level에서 `member`를 생략한 경우는 모집 카드 self-service 참가와 호환되는
+  actor 본인 참가이며, 이 slash command는 항상 대상 멤버를 보낸다.
+- backend는 실행자와 대상의 ACTIVE 길드 소속, 모집 OPEN 상태, 정원 및 중복을 한 transaction에서 다시
+  검증한다. actor와 member가 다르면 actor는 configured operator여야 한다. 라인을 생략하면 대상의 저장된
+  guild main lane을 사용하고, 둘 다 없으면 `auction_declared_lane_required`를 반환한다.
+- 성공 시 대상의 선택 lane MMR snapshot, 모집/setup draft revision, audit, realtime invalidation, bound
+  Discord 모집 메시지 갱신을 함께 기록한다.
 
 권한:
 
@@ -410,11 +420,16 @@ Backend:
 
 목적:
 
-- 경매 모집 강제 제거.
+- OPEN 경매 모집에서 지정한 참가자를 강제 제거한다.
 
 Backend:
 
-- `DELETE /api/guilds/{guildId}/auction-recruitments/:id/members/:uid`.
+- BotBearer `DELETE /api/guilds/{guildId}/auction-recruitments/{id}/members/{userId}`.
+- Bot은 실행자 actor body와 Discord interaction ID `Idempotency-Key`를 보낸다. path의 `userId`는 제거할
+  Discord 사용자 식별자다. backend가 configured operator 여부, 모집 상태와 실제 참가 row를 다시
+  검증한다.
+- 성공 시 participant row는 삭제하지 않고 `WITHDRAWN`으로 전환한다. setup captain 참조, revision,
+  audit, realtime invalidation과 bound Discord 모집 메시지 갱신도 같은 transaction에 반영한다.
 
 권한:
 
@@ -424,11 +439,16 @@ Backend:
 
 목적:
 
-- 경매 토너먼트 목록 조회.
+- 진행 중 또는 완료된 경매 토너먼트를 빠르게 조회하고 Web 상세 페이지로 이동한다.
 
 Backend:
 
-- auction tournament list API.
+- BotBearer `GET /api/guilds/{guildId}/auction-tournaments?state=active|completed&seasonId?&limit?`.
+- `상태`를 생략하면 `active`를 사용한다. `시즌`은 선택적인 canonical season UUID이며 해당 시즌의
+  tournament만 필터링한다. Bot command의 `limit`은 Discord 응답 길이를 보장하기 위해 1-10으로 제한하지만,
+  backend page limit은 1-100이다.
+- `active`는 `BIDDING`, `BRACKET_SETUP`, `IN_GAME`, `completed`는 `COMPLETED`, `CANCELLED`를 반환한다.
+  목록 row의 canonical href와 `/g/{guildId}/auction` 전체 보기 link를 함께 제시한다.
 
 Web link:
 
@@ -438,15 +458,25 @@ Web link:
 
 목적:
 
-- 경매 모집과 토너먼트를 CANCELLED 처리한다. lot/action/point/game 원장은 삭제하지 않는다.
+- 운영 복구 목적으로 경매 모집을 안전하게 CANCELLED 처리한다. 변환된 모집이면 연결된 토너먼트도 함께
+  취소한다. lot/action/point/game 원장은 삭제하지 않는다.
 
 Backend:
 
-- auction cancel application service.
+- BotBearer `POST /api/guilds/{guildId}/auction-recruitments/{id}/force-cancel`.
+- Bot은 `{ actor }`와 Discord interaction ID `Idempotency-Key`를 보낸다. backend는 configured operator,
+  ACTIVE 길드 소속과 현재 lifecycle을 transaction에서 다시 검증한다.
+- `OPEN` 또는 `CLOSED` 모집은 participant/setup history를 보존한 채 모집만 `CANCELLED`로 전환한다.
+  `CONVERTED` 모집은 연결된 tournament가 `BIDDING`, `BRACKET_SETUP`, `IN_GAME`일 때만 취소한다.
+- 변환된 모집의 confirmed game은 최신 순으로 되돌린다. 각 game의 MMR ledger가 전역 MMR history tail이
+  아니면 일부만 취소하지 않고 전체 transaction을
+  `auction_tournament_cancel_mmr_history_advanced`로 거절한다. 안전한 경우 active match, tournament,
+  source recruitment을 함께 `CANCELLED`로 전환한다.
+- audit, realtime invalidation과 bound Discord 모집 메시지 삭제 outbox를 같은 transaction에 기록한다.
 
 권한:
 
-- operator/admin.
+- operator.
 
 Audit:
 
@@ -641,9 +671,10 @@ Handlers:
 - 참석/취소.
 - main lane이 없는 사용자의 lane 선택과 참가 확정.
 
-경매 모집 마감과 취소는 Web 모집 화면의 권한 기반 lifecycle action으로만 제공한다. Discord
-message component는 roster 참여 상태만 변경하며, 정원이 찬 뒤 운영자가 Web에서 마감하면
-`/g/{guildId}/auction/recruitments/{id}/draft`의 실제 마감 명단으로 이동한다.
+경매 모집의 일반 마감과 Browser soft-cancel은 Web 모집 화면의 권한 기반 lifecycle action으로 제공한다.
+Discord message component는 roster 참여 상태만 변경한다. Bot의 `/경매강제취소`은 configured operator만
+실행할 수 있는 별도 복구 command이며 message component에는 노출하지 않는다. 정원이 찬 뒤 운영자가
+Web에서 마감하면 `/g/{guildId}/auction/recruitments/{id}/draft`의 실제 마감 명단으로 이동한다.
 
 ## API -> Bot Internal Routing
 
@@ -739,8 +770,9 @@ payload = {
 
 결승이 확정되어 tournament가 `COMPLETED`가 될 때만 configured `result_channel_id`에 적재한다. 10인에서는
 `semifinalBestOf`를 반드시 `null`로, 20인에서는 두 준결승과 결승의 완료 score를 모두 포함한다. 이 payload는
-web 결과 aggregate를 재사용하지 않는 Bot 전용 v1 contract이며, 결과 channel이 없으면 completion은 그대로
-성공하고 outbox만 생략한다.
+web 결과 aggregate를 재사용하지 않는 Bot 전용 v1 contract이며, Bot은 `guildId`와 `tournamentId` 및 configured
+web origin으로 canonical `/g/{guildId}/auction/tournaments/{tournamentId}/result` URL을 만들고 `결과 보기` link
+button을 함께 게시한다. 결과 channel이 없으면 completion은 그대로 성공하고 outbox만 생략한다.
 
 처리 순서:
 

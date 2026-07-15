@@ -74,6 +74,29 @@ describe('server API client', () => {
 		}
 	});
 
+	it('exposes a typed API error to route-specific lifecycle handling', async () => {
+		const fetcher = vi.fn(async () => errorResponse(409, '선행 단계가 완료되지 않았습니다.'));
+		let observed: { status: number; code: string | null; message: string | null } | null = null;
+
+		await expect(
+			apiGet(fetcher, '/api/me', meDataSchema, {
+				url: pageUrl,
+				onApiError: (apiError) => {
+					observed = apiError;
+				}
+			})
+		).rejects.toMatchObject({
+			status: 409,
+			body: { message: '선행 단계가 완료되지 않았습니다.' }
+		});
+
+		expect(observed).toEqual({
+			status: 409,
+			code: 'test_error',
+			message: '선행 단계가 완료되지 않았습니다.'
+		});
+	});
+
 	it('normalizes network failures and malformed successful payloads', async () => {
 		const networkFailure = vi.fn(async () => {
 			throw new Error('connect ECONNREFUSED with secret');

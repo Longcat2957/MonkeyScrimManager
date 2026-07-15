@@ -10,6 +10,7 @@ const revisionSchema = z.number().int().nonnegative();
 const pointsSchema = z.number().int().nonnegative();
 const hrefSchema = z.string().startsWith('/g/');
 const snapshotOriginSchema = z.enum(['CAPTURED', 'INFERRED', 'UNAVAILABLE']);
+const timestampSchema = z.iso.datetime({ offset: true });
 
 export const auctionTournamentTeamMemberSchema = z
 	.object({
@@ -49,6 +50,86 @@ export const auctionTournamentDraftCandidateSchema = z
 	})
 	.strict();
 
+const auctionTournamentCandidateRecordSummarySchema = z
+	.object({
+		games: z.number().int().nonnegative(),
+		wins: z.number().int().nonnegative(),
+		losses: z.number().int().nonnegative()
+	})
+	.strict()
+	.superRefine((summary, context) => {
+		if (summary.games !== summary.wins + summary.losses) {
+			context.addIssue({
+				code: 'custom',
+				path: ['games'],
+				message: 'Candidate record games must equal wins plus losses'
+			});
+		}
+	});
+
+const auctionTournamentCandidateLaneMmrSchema = z
+	.object({
+		lane: championPreferenceLaneSchema,
+		mmr: z.number().finite(),
+		games: z.number().int().nonnegative(),
+		wins: z.number().int().nonnegative()
+	})
+	.strict()
+	.refine((entry) => entry.wins <= entry.games, 'Candidate lane wins cannot exceed games');
+
+const auctionTournamentCandidateChampionRecordSchema = z
+	.object({
+		championId: z.string().min(1).max(64),
+		games: z.number().int().nonnegative(),
+		wins: z.number().int().nonnegative(),
+		losses: z.number().int().nonnegative()
+	})
+	.strict()
+	.superRefine((record, context) => {
+		if (record.games !== record.wins + record.losses) {
+			context.addIssue({
+				code: 'custom',
+				path: ['games'],
+				message: 'Candidate champion games must equal wins plus losses'
+			});
+		}
+	});
+
+const auctionTournamentCandidateRecentGameSchema = z
+	.object({
+		id: z.uuid(),
+		playedAt: timestampSchema,
+		result: z.enum(['WIN', 'LOSS']),
+		lane: championPreferenceLaneSchema,
+		championId: z.string().min(1).max(64).nullable()
+	})
+	.strict();
+
+const auctionTournamentCurrentTargetRiotSchema = z
+	.object({
+		games: z.number().int().nonnegative(),
+		wins: z.number().int().nonnegative(),
+		championIds: z.array(z.string().min(1).max(64)).max(3),
+		refreshedAt: timestampSchema
+	})
+	.strict()
+	.refine((summary) => summary.wins <= summary.games, 'Riot wins cannot exceed games');
+
+export const auctionTournamentCurrentTargetProfileSchema = z
+	.object({
+		avatarUrl: z.url().nullable(),
+		profileIconId: z.number().int().nonnegative().nullable(),
+		riotTier: z.string().min(1).max(16).nullable(),
+		mainLane: championPreferenceLaneSchema.nullable(),
+		summary: auctionTournamentCandidateRecordSummarySchema,
+		laneMmr: z.array(auctionTournamentCandidateLaneMmrSchema).length(5),
+		championIds: z.array(z.string().min(1).max(64)).max(10),
+		championRecords: z.array(auctionTournamentCandidateChampionRecordSchema).max(3),
+		recentGames: z.array(auctionTournamentCandidateRecentGameSchema).max(8),
+		riot: auctionTournamentCurrentTargetRiotSchema.nullable()
+	})
+	.strict();
+
 export const auctionTournamentDraftCommandKindSchema = z.enum([
 	'DRAW_NEXT',
 	'MARK_UNSOLD',
@@ -85,6 +166,7 @@ export const auctionTournamentDraftSnapshotSchema = z
 		draft: z
 			.object({
 				currentTarget: auctionTournamentDraftCandidateSchema.nullable(),
+				currentTargetProfile: auctionTournamentCurrentTargetProfileSchema.nullable(),
 				unsold: z.array(auctionTournamentDraftCandidateSchema).max(20),
 				recentAction: auctionTournamentRecentActionSchema.nullable()
 			})
@@ -97,7 +179,8 @@ export const auctionTournamentDraftSnapshotSchema = z
 			.passthrough()
 	})
 	.strict()
-	.superRefine(({ tournament }, context) => {
+	.superRefine((snapshot, context) => {
+		const { tournament } = snapshot;
 		const hasSemifinalRule = tournament.rules.semifinalBestOf !== null;
 		if (tournament.format === 'TEN_PERSON' && hasSemifinalRule) {
 			context.addIssue({
@@ -111,6 +194,16 @@ export const auctionTournamentDraftSnapshotSchema = z
 				code: 'custom',
 				path: ['tournament', 'rules', 'semifinalBestOf'],
 				message: 'TWENTY_PERSON tournament must define semifinalBestOf'
+			});
+		}
+		if (
+			(snapshot.draft.currentTarget === null) !==
+			(snapshot.draft.currentTargetProfile === null)
+		) {
+			context.addIssue({
+				code: 'custom',
+				path: ['draft', 'currentTargetProfile'],
+				message: 'Current target and current target profile must be present together'
 			});
 		}
 	});
@@ -161,6 +254,9 @@ export const auctionTournamentDraftCommandSchema = z.discriminatedUnion('kind', 
 
 export type AuctionTournamentDraftSnapshot = z.infer<typeof auctionTournamentDraftSnapshotSchema>;
 export type AuctionTournamentDraftCandidate = z.infer<typeof auctionTournamentDraftCandidateSchema>;
+export type AuctionTournamentCurrentTargetProfile = z.infer<
+	typeof auctionTournamentCurrentTargetProfileSchema
+>;
 export type AuctionTournamentTeam = z.infer<typeof auctionTournamentTeamSchema>;
 export type AuctionTournamentTeamMember = z.infer<typeof auctionTournamentTeamMemberSchema>;
 export type AuctionTournamentDraftCommand = z.infer<typeof auctionTournamentDraftCommandSchema>;

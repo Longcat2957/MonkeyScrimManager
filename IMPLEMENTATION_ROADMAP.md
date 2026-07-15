@@ -49,7 +49,7 @@ Design         Tailwind CSS + Bits UI + lucide-svelte
 2. Axum/PostgreSQL foundation, 인증, 조회 경계
 3. 최소 Bot으로 길드 설정과 일반 모집 운영 데이터 생성
 4. 현재 UI의 fixture를 API adapter로 교체
-5. 일반/경매 vertical slice와 제한적 WebSocket 연결
+5. 일반 내전과 경매 모집 roster에 제한적 WebSocket 연결
 6. 나머지 Bot 명령과 알림 연결
 7. legacy migration rehearsal
 8. hardening과 dev 배포
@@ -171,7 +171,8 @@ Discord 길드에서 데이터를 만들 수 있도록 최소 Bot 운영 경로�
 
 - 10인/20인 captain/point, draw, bid, unsold, manual assign을 구현한다.
 - 2팀/4팀 bracket, lineup lock, result/MMR/revert를 구현한다.
-- auction recruitment/tournament/match WS를 연결한다.
+- OPEN/CLOSED 경매 모집의 operator roster invalidate만 WebSocket으로 연결한다. 준비, 입찰, 브래킷,
+  match 작업대는 HTTP snapshot, revision, `409` refetch를 사용한다.
 
 완료 기준:
 
@@ -220,13 +221,11 @@ MVP WS route:
 ```text
 /g/{guildId}/recruitments/{id}/entry
 /g/{guildId}/series/{id}/pick-ban
-/g/{guildId}/auction/recruitments/{id}/draft
-/g/{guildId}/auction/tournaments/{id}/draft
-/g/{guildId}/auction/tournaments/{id}/bracket
+/g/{guildId}/auction/recruitments/{id}
 ```
 
-dashboard, 목록, records, leaderboard, profile, admin, 읽기 전용 result에는
-MVP WS를 붙이지 않는다.
+경매 준비, 입찰, 브래킷, match, dashboard, 목록, records, leaderboard, profile, admin, 읽기 전용
+result에는 MVP WS를 붙이지 않는다.
 
 ## 배포 port
 

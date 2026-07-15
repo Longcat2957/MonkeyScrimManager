@@ -9,7 +9,11 @@ import {
 	acknowledgeRecruitmentMessageDataSchema,
 	apiReadinessDataSchema,
 	auctionRecruitmentMemberRequestSchema,
+	auctionRecruitmentForceCancelRequestSchema,
+	auctionRecruitmentForceCancelResultSchema,
 	auctionRecruitmentSnapshotSchema,
+	auctionTournamentListDataSchema,
+	auctionTournamentListRequestSchema,
 	auctionTournamentCancelPreviewDataSchema,
 	auctionTournamentCancelRequestSchema,
 	auctionTournamentCancelResultSchema,
@@ -21,6 +25,8 @@ import {
 	createRecruitmentRequestSchema,
 	discordCatalogSyncDataSchema,
 	discordCatalogSyncRequestSchema,
+	heartbeatDataSchema,
+	heartbeatRequestSchema,
 	joinRecruitmentRequestSchema,
 	nackNotificationDataSchema,
 	nackNotificationRequestSchema,
@@ -28,6 +34,7 @@ import {
 	registerGuildMemberRequestSchema,
 	recruitmentSnapshotSchema,
 	setPreferredLanesRequestSchema,
+	forceAuctionRecruitmentMemberRequestSchema,
 	setupGuildDataSchema,
 	setupGuildRequestSchema,
 	successEnvelopeSchema,
@@ -38,7 +45,11 @@ import {
 	type AcknowledgeRecruitmentMessageData,
 	type ApiReadinessData,
 	type AuctionRecruitmentMemberRequest,
+	type AuctionRecruitmentForceCancelRequest,
+	type AuctionRecruitmentForceCancelResult,
 	type AuctionRecruitmentSnapshot,
+	type AuctionTournamentListData,
+	type AuctionTournamentListRequest,
 	type AuctionTournamentCancelPreviewData,
 	type AuctionTournamentCancelRequest,
 	type AuctionTournamentCancelResult,
@@ -46,9 +57,12 @@ import {
 	type ClaimNotificationsData,
 	type ClaimNotificationsRequest,
 	type CreateAuctionRecruitmentRequest,
+	type ForceAuctionRecruitmentMemberRequest,
 	type CreateRecruitmentRequest,
 	type DiscordCatalogSyncData,
 	type DiscordCatalogSyncRequest,
+	type HeartbeatData,
+	type HeartbeatRequest,
 	type JoinRecruitmentRequest,
 	type NackNotificationData,
 	type NackNotificationRequest,
@@ -90,6 +104,7 @@ interface MutationRequest<TRequest, TResponse> {
 
 interface ReadRequest<TResponse> {
 	segments: string[];
+	query?: Record<string, string | number | boolean | null | undefined>;
 	responseSchema: ZodType<TResponse>;
 	context: ApiRequestContext;
 	logRequest: boolean;
@@ -316,6 +331,21 @@ export class MonkeyBotApiClient {
 		);
 	}
 
+	forceAddAuctionRecruitmentMember(
+		guildId: string,
+		recruitmentId: string,
+		input: ForceAuctionRecruitmentMemberRequest,
+		context: ApiMutationContext
+	): Promise<AuctionRecruitmentSnapshot> {
+		return this.#auctionRecruitmentMutation(
+			'POST',
+			['api', 'guilds', guildId, 'auction-recruitments', recruitmentId, 'members'],
+			input,
+			forceAuctionRecruitmentMemberRequestSchema,
+			context
+		);
+	}
+
 	leaveAuctionRecruitment(
 		guildId: string,
 		recruitmentId: string,
@@ -330,6 +360,44 @@ export class MonkeyBotApiClient {
 			actorRequestSchema,
 			context
 		);
+	}
+
+	listAuctionTournaments(
+		guildId: string,
+		input: AuctionTournamentListRequest,
+		context: ApiRequestContext = {}
+	): Promise<AuctionTournamentListData> {
+		const parsed = auctionTournamentListRequestSchema.safeParse(input);
+		if (!parsed.success) {
+			throw new MonkeyBotApiContractError(
+				'auction tournament list request does not match the API contract'
+			);
+		}
+		return this.#read({
+			segments: ['api', 'guilds', guildId, 'auction-tournaments'],
+			query: parsed.data,
+			responseSchema: auctionTournamentListDataSchema,
+			context,
+			logRequest: true
+		});
+	}
+
+	forceCancelAuctionRecruitment(
+		guildId: string,
+		recruitmentId: string,
+		input: AuctionRecruitmentForceCancelRequest,
+		context: ApiMutationContext
+	): Promise<AuctionRecruitmentForceCancelResult> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['api', 'guilds', guildId, 'auction-recruitments', recruitmentId, 'force-cancel'],
+			body: input,
+			requestSchema: auctionRecruitmentForceCancelRequestSchema,
+			responseSchema: auctionRecruitmentForceCancelResultSchema,
+			context,
+			idempotencyKey: context.idempotencyKey,
+			logRequest: true
+		});
 	}
 
 	getAuctionTournamentCancelPreview(
@@ -447,6 +515,19 @@ export class MonkeyBotApiClient {
 			actorRequestSchema,
 			context
 		);
+	}
+
+	heartbeat(input: HeartbeatRequest, context: ApiRequestContext = {}): Promise<HeartbeatData> {
+		return this.#mutate({
+			method: 'POST',
+			segments: ['internal', 'heartbeat'],
+			body: input,
+			requestSchema: heartbeatRequestSchema,
+			responseSchema: heartbeatDataSchema,
+			context,
+			idempotencyKey: null,
+			logRequest: false
+		});
 	}
 
 	claimNotifications(
@@ -569,6 +650,9 @@ export class MonkeyBotApiClient {
 
 	async #read<TResponse>(request: ReadRequest<TResponse>): Promise<TResponse> {
 		const url = this.#url(request.segments);
+		for (const [name, value] of Object.entries(request.query ?? {})) {
+			if (value !== undefined && value !== null) url.searchParams.set(name, String(value));
+		}
 		const controller = new AbortController();
 		const timeout = setTimeout(
 			() => controller.abort(new Error('API request timed out')),

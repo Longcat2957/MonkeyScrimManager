@@ -12,7 +12,10 @@ use crate::{
     domain::{DiscordUserId, GuildId},
     error::{self, ApiError},
     http::extractors::{AuthenticatedSession, require_csrf},
-    repository::context::{self, CurrentSeasonRecord, GuildContextRecord, GuildSummaryRecord},
+    repository::{
+        context::{self, CurrentSeasonRecord, GuildContextRecord, GuildSummaryRecord},
+        user_profiles::{self, PublicUserProfile, UserProfileRepositoryError},
+    },
     state::{AppState, RequestId},
 };
 
@@ -73,6 +76,15 @@ struct SetDefaultGuildData {
     default_guild_id: GuildId,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicUserProfileData {
+    discord_id: DiscordUserId,
+    display_name: String,
+    active_guild_count: u64,
+    season_count: u64,
+}
+
 pub async fn me(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -97,6 +109,25 @@ pub async fn me(
             default_guild_id: session.default_guild_id,
             service_admin,
         },
+    ))
+}
+
+pub async fn user_profile(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(discord_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let discord_id =
+        DiscordUserId::parse(discord_id).map_err(|_| invalid_discord_user_id(&request_id))?;
+    let profile = user_profiles::find_public(database(&state, &request_id)?, &discord_id)
+        .await
+        .map_err(|source| user_profile_repository_error(source, &request_id))?
+        .ok_or_else(|| hidden_user_profile(&request_id))?;
+
+    Ok(error::success(
+        StatusCode::OK,
+        &request_id,
+        PublicUserProfileData::from(profile),
     ))
 }
 
@@ -177,6 +208,17 @@ fn map_guild_summary(record: GuildSummaryRecord) -> GuildSummaryData {
     }
 }
 
+impl From<PublicUserProfile> for PublicUserProfileData {
+    fn from(profile: PublicUserProfile) -> Self {
+        Self {
+            discord_id: profile.discord_id,
+            display_name: profile.display_name,
+            active_guild_count: profile.active_guild_count,
+            season_count: profile.season_count,
+        }
+    }
+}
+
 fn map_guild_context(
     record: GuildContextRecord,
     request_id: &RequestId,
@@ -244,6 +286,41 @@ fn repository_error(error: context::ContextRepositoryError, request_id: &Request
         }
         context::ContextRepositoryError::IncompleteCurrentSeason => internal(request_id),
     }
+}
+
+fn user_profile_repository_error(
+    error: UserProfileRepositoryError,
+    request_id: &RequestId,
+) -> ApiError {
+    match error {
+        UserProfileRepositoryError::Database(source) => {
+            error::database_failure(&source, request_id)
+        }
+        UserProfileRepositoryError::StoredInvariantViolation => {
+            tracing::error!("public user profile repository invariant failed");
+            internal(request_id)
+        }
+    }
+}
+
+fn invalid_discord_user_id(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::BAD_REQUEST,
+        request_id,
+        "invalid_discord_id",
+        "Discord 사용자 ID 형식이 올바르지 않습니다.",
+        None,
+    )
+}
+
+fn hidden_user_profile(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_FOUND,
+        request_id,
+        "not_found",
+        "요청한 사용자 프로필을 찾을 수 없습니다.",
+        None,
+    )
 }
 
 fn hidden_not_found(request_id: &RequestId) -> ApiError {

@@ -62,7 +62,7 @@ function snapshot() {
 				drawCount: 0
 			}
 		],
-		draft: { currentTarget: null, unsold: [], recentAction: null },
+		draft: { currentTarget: null, currentTargetProfile: null, unsold: [], recentAction: null },
 		permissions: { canManageDraft: true, canManageBracket: false }
 	};
 }

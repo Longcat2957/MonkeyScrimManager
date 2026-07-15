@@ -156,6 +156,8 @@
 		if (!canUnlockLineup || !onUnlock) return;
 		try {
 			await onUnlock({ expectedRevision: snapshot.match.revision });
+		} catch {
+			// The parent owns the user-visible API error and keeps the snapshot authoritative.
 		} finally {
 			unlockDialogOpen = false;
 		}

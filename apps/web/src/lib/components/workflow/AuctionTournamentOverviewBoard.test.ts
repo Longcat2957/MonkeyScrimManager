@@ -106,7 +106,7 @@ function snapshot(
 				mmrDelta: null
 			}
 		],
-		permissions: { canRevertResults: true },
+		permissions: { canRevertResults: true, canRecoverBracket: false },
 		...overrides
 	};
 }
@@ -276,6 +276,12 @@ describe('AuctionTournamentOverviewBoard', () => {
 			auctionTournamentResultSnapshotSchema.safeParse({
 				...completed,
 				matches: [{ ...completed.matches[0]!, lineups: [] }]
+			}).success
+		).toBe(false);
+		expect(
+			auctionTournamentResultSnapshotSchema.safeParse({
+				...completed,
+				permissions: { canRevertResults: true }
 			}).success
 		).toBe(false);
 	});

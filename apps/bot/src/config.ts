@@ -12,6 +12,11 @@ const positiveIntegerFromEnv = (fallback: number, minimum: number, maximum: numb
 		(value) => (value === undefined || value === '' ? fallback : value),
 		z.coerce.number().int().min(minimum).max(maximum)
 	);
+const optionalTrimmedString = (schema: z.ZodType<string>) =>
+	z.preprocess(
+		(value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+		schema.optional()
+	);
 const httpUrlSchema = z.url().transform((value, context) => {
 	const url = new URL(value);
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -34,6 +39,21 @@ const environmentSchema = z
 			.min(1)
 			.max(128)
 			.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+		MONKEYBOT_BOT_VERSION: z.preprocess(
+			(value) => (value === undefined || value === '' ? '0.0.0' : value),
+			z
+				.string()
+				.min(1)
+				.max(100)
+				.regex(/^[\x21-\x7e]+$/)
+		),
+		MONKEYBOT_BOT_COMMIT_SHA: optionalTrimmedString(
+			z
+				.string()
+				.min(1)
+				.max(128)
+				.regex(/^[A-Za-z0-9._-]+$/)
+		),
 		MONKEYBOT_WEB_ORIGIN: httpUrlSchema,
 		MONKEYBOT_BOT_HEALTH_ADDR: z.string().default('127.0.0.1:30030'),
 		MONKEYBOT_BOT_API_TIMEOUT_MS: positiveIntegerFromEnv(10_000, 100, 120_000),
@@ -56,6 +76,8 @@ export interface BotConfig {
 	apiBaseUrl: URL;
 	serviceToken: string;
 	instanceId: string;
+	version: string;
+	commitSha: string | null;
 	webOrigin: URL;
 	healthHost: string;
 	healthPort: number;
@@ -97,6 +119,8 @@ export function loadBotConfig(environment: NodeJS.ProcessEnv = process.env): Bot
 		apiBaseUrl,
 		serviceToken: parsed.data.MONKEYBOT_BOT_SERVICE_TOKEN,
 		instanceId: parsed.data.MONKEYBOT_BOT_INSTANCE_ID,
+		version: parsed.data.MONKEYBOT_BOT_VERSION,
+		commitSha: parsed.data.MONKEYBOT_BOT_COMMIT_SHA ?? null,
 		webOrigin,
 		healthHost: health.host,
 		healthPort: health.port,

@@ -82,18 +82,22 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 dialog에서 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 성공 response의 `recruitment.href`로
 OPEN 모집 상세 route에 이동한다. 팀장 설정/입찰/브래킷 board를 목록 route에 직접 쌓지 않는다.
 
-| 컴포넌트                                  | 운영 route                                            | 필수 입력과 parent 책임                                                                                         |
-| ----------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `AuctionTournamentCaptainPointSetupBoard` | `/g/[guildId]/auction/recruitments/[id]/draft`       | `AuctionSetupDraft`, 확정 참가자, `canEdit`, `canCreateTournament`, save/create callback, busy 상태             |
-| `AuctionTournamentBidDraftWorkbench`      | `/g/[guildId]/auction/tournaments/[id]/draft`        | `AuctionTournamentDraftSnapshot`, command callback, submitting 상태                                            |
-| `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket`      | `AuctionTournamentBracketSnapshot`, bracket command callback, canonical match 열기 callback, busy 상태         |
-| `AuctionMatchStartingLineupInputBoard`    | `/g/[guildId]/auction/matches/[matchId]`             | canonical auction match snapshot, lineup assign/lock/unlock callback, busy 상태                                |
-| `AuctionMatchGameResultInputBoard`        | `/g/[guildId]/auction/matches/[matchId]`             | 같은 match snapshot, Data Dragon champion catalog, game submit/last-game revert callback, busy 상태            |
-| `AuctionTournamentOverviewBoard`          | `/g/[guildId]/auction/tournaments/[id]/result`       | `AuctionTournamentResultSnapshot`                                                                              |
+| 컴포넌트                                  | 운영 route                                                                                      | 필수 입력과 parent 책임                                                                                                        |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `AuctionTournamentCaptainPointSetupBoard` | `/g/[guildId]/auction/recruitments/[id]/draft`                                                  | `AuctionSetupDraft`, 확정 참가자, `canEdit`, `canCreateTournament`, save/create callback, busy 상태                            |
+| `AuctionTournamentBidDraftWorkbench`      | `/g/[guildId]/auction/tournaments/[id]/draft`                                                   | `AuctionTournamentDraftSnapshot`, command callback, submitting 상태                                                            |
+| `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket`                                                   | `AuctionTournamentBracketSnapshot`, bracket command callback, canonical match 열기 callback                                    |
+| `AuctionTournamentBracketResultBoard`     | `/g/[guildId]/auction/tournaments/[id]/result`                                                    | `AuctionTournamentResultSnapshot`, read-only 대진과 canonical match 열기 callback                                               |
+| `AuctionMatchStartingLineupInputBoard`    | `/g/[guildId]/auction/matches/[matchId]`                                                        | canonical auction match snapshot, lineup assign/lock/unlock callback, busy 상태                                                |
+| `AuctionMatchGameResultInputBoard`        | `/g/[guildId]/auction/matches/[matchId]`                                                        | 같은 match snapshot, Data Dragon champion catalog, game submit/last-game revert callback, busy 상태                            |
 
 `AuctionMatchStartingLineupInputBoard`는 `permissions.canUnlockLineup`가 true일 때만 recovery control을
 노출한다. parent는 `expectedRevision`을 포함해 `/lineup/unlock`을 호출하며, games와 game_inputs가 전혀 없어야
 한다는 eligibility를 client가 추정하거나 override하지 않는다.
+
+`AuctionTournamentBracketResultBoard`의 `상세보기`는 동일한 authoritative result snapshot을 더 자세히
+표시하는 읽기 전용 toggle이다. 대진 확정 해제는 board 내부가 아니라 각 route header가
+`permissions.canRecoverBracket`와 `UNLOCK_BRACKET` command를 책임진다.
 
 `/g/[guildId]/auction/recruitments/[id]`는 Discord와 Web이 공유하는 canonical 참가자 roster를 표시한다.
 backend `canManageMembers`가 true인 현재 active operator에게만 ACTIVE guild member picker와 각 member의

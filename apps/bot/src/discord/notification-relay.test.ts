@@ -292,7 +292,7 @@ describe('Bot notification relay', () => {
 		const sentOptions = send.mock.calls[0]?.[0];
 		expect(sentOptions).toMatchObject({ nonce: discordNonce, enforceNonce: true });
 		expect(messagePayload(sentOptions)).toEqual(
-			messagePayload(renderAuctionTournamentResultMessage(payload))
+			messagePayload(renderAuctionTournamentResultMessage(payload, webOrigin))
 		);
 		const resultOptions = sentOptions as {
 			embeds?: unknown;
@@ -301,7 +301,7 @@ describe('Bot notification relay', () => {
 		};
 		expect(resultOptions.embeds).toHaveLength(1);
 		expect(resultOptions.files).toBeUndefined();
-		expect(resultOptions.components).toBeUndefined();
+		expect(resultOptions.components).toHaveLength(1);
 		expect(current.acknowledgeNotification).toHaveBeenCalledWith(
 			{
 				instanceId,

@@ -8,6 +8,7 @@ export const userIdSchema = z.union([snowflakeSchema, dummyUserIdSchema]);
 const uuidSchema = z.uuid();
 const timestampSchema = z.iso.datetime({ offset: true });
 const hrefSchema = z.string().startsWith('/g/');
+const publicProfileHrefSchema = z.string().regex(/^\/users\/[1-9][0-9]{0,19}$/);
 const nonnegativeInteger = z.number().int().nonnegative();
 
 export const responseMetaSchema = z
@@ -64,7 +65,8 @@ const guildRecordsProfileMemberSchema = z
 	.object({
 		displayName: z.string().min(1),
 		avatarUrl: z.url().nullable(),
-		mainLane: championPreferenceLaneSchema.nullable()
+		mainLane: championPreferenceLaneSchema.nullable(),
+		profileHref: publicProfileHrefSchema.nullable()
 	})
 	.strict();
 
@@ -469,6 +471,15 @@ export const meDataSchema = z
 	})
 	.strict();
 
+export const publicUserProfileDataSchema = z
+	.object({
+		discordId: snowflakeSchema,
+		displayName: z.string().min(1),
+		activeGuildCount: nonnegativeInteger,
+		seasonCount: nonnegativeInteger
+	})
+	.strict();
+
 export const guildRoleSchema = z.enum(['MEMBER', 'OPERATOR']);
 
 export const guildAccessSummarySchema = z
@@ -821,6 +832,7 @@ export const auctionTournamentListDataSchema = z
 	.strict();
 
 export type MeData = z.infer<typeof meDataSchema>;
+export type PublicUserProfile = z.infer<typeof publicUserProfileDataSchema>;
 export type GuildAccessSummary = z.infer<typeof guildAccessSummarySchema>;
 export type GuildContextData = z.infer<typeof guildContextDataSchema>;
 export type OperationDto = z.infer<typeof operationSchema>;

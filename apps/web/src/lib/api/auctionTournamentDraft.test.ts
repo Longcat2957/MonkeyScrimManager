@@ -29,6 +29,42 @@ const activeCandidate = {
 	drawCount: 1
 };
 
+const activeCandidateProfile = {
+	avatarUrl: null,
+	profileIconId: 588,
+	riotTier: 'P3',
+	mainLane: 'MID' as const,
+	summary: { games: 12, wins: 7, losses: 5 },
+	laneMmr: [
+		{ lane: 'TOP' as const, mmr: 1500, games: 0, wins: 0 },
+		{ lane: 'JUNGLE' as const, mmr: 1500, games: 0, wins: 0 },
+		{ lane: 'MID' as const, mmr: 1623, games: 12, wins: 7 },
+		{ lane: 'BOTTOM' as const, mmr: 1500, games: 0, wins: 0 },
+		{ lane: 'SUPPORT' as const, mmr: 1500, games: 0, wins: 0 }
+	],
+	championIds: ['Ahri', 'Orianna', 'Syndra'],
+	championRecords: [
+		{ championId: 'Ahri', games: 6, wins: 4, losses: 2 },
+		{ championId: 'Orianna', games: 4, wins: 2, losses: 2 },
+		{ championId: 'Syndra', games: 2, wins: 1, losses: 1 }
+	],
+	recentGames: [
+		{
+			id: '01900000-0000-7000-8000-000000000701',
+			playedAt: '2026-07-15T10:00:00Z',
+			result: 'WIN' as const,
+			lane: 'MID' as const,
+			championId: 'Ahri'
+		}
+	],
+	riot: {
+		games: 10,
+		wins: 6,
+		championIds: ['Ahri', 'Orianna', 'Syndra'],
+		refreshedAt: '2026-07-15T10:00:00Z'
+	}
+};
+
 const snapshot: AuctionTournamentDraftSnapshot = {
 	tournament: {
 		id: tournamentId,
@@ -85,7 +121,12 @@ const snapshot: AuctionTournamentDraftSnapshot = {
 			drawCount: 0
 		}
 	],
-	draft: { currentTarget: activeCandidate, unsold: [], recentAction: null },
+	draft: {
+		currentTarget: activeCandidate,
+		currentTargetProfile: activeCandidateProfile,
+		unsold: [],
+		recentAction: null
+	},
 	permissions: { canManageDraft: true, canManageBracket: false }
 };
 
@@ -147,7 +188,12 @@ describe('auction tournament draft API client', () => {
 			candidates: snapshot.candidates.map((candidate) =>
 				candidate.userId === activeUserId ? { ...candidate, state: 'ASSIGNED' as const } : candidate
 			),
-			draft: { currentTarget: null, unsold: [], recentAction: { kind: 'AWARD_BID' } }
+			draft: {
+				currentTarget: null,
+				currentTargetProfile: null,
+				unsold: [],
+				recentAction: { kind: 'AWARD_BID' }
+			}
 		};
 		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
 			void args;

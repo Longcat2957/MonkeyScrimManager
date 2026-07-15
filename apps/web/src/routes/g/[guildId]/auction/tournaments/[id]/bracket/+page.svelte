@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { LoaderCircle } from 'lucide-svelte';
+	import { Dialog } from 'bits-ui';
+	import { LoaderCircle, RotateCcw, X } from 'lucide-svelte';
 	import {
 		auctionTournamentBracketErrorText,
 		executeAuctionTournamentBracketCommand,
@@ -25,6 +26,8 @@
 	let snapshotOverrideSourceKey = $state<string | null>(null);
 	let submitting = $state(false);
 	let mutationError = $state('');
+	let recoveryDialogOpen = $state(false);
+	let recoveryError = $state('');
 	let idempotencyKeys = createOperationIdempotencyKeys();
 
 	const incomingSnapshotKey = $derived(
@@ -38,19 +41,24 @@
 	const tournament = $derived(snapshot.tournament);
 	const formatLabel = $derived(tournament.format === 'TEN_PERSON' ? '10인 경매' : '20인 경매');
 	const rulesLabel = $derived(formatAuctionRules(tournament.format, tournament.rules));
+	const canRecoverBracket = $derived(snapshot.permissions.canRecoverBracket && !submitting);
 
 	function applySnapshot(nextSnapshot: AuctionTournamentBracketSnapshot) {
 		snapshotOverrideSourceKey = incomingSnapshotKey;
 		snapshotOverride = nextSnapshot;
 	}
 
-	async function recoverAuthoritativeSnapshot(conflictMessage: string) {
+	async function recoverAuthoritativeSnapshot(conflictMessage: string, surfaceError = true) {
 		try {
 			const nextSnapshot = await fetchAuctionTournamentBracket(data.guildId, tournament.id);
 			applySnapshot(nextSnapshot);
-			mutationError = `${conflictMessage} 서버 최신 상태를 불러왔습니다. 변경 내용을 확인한 뒤 다시 시도해 주세요.`;
+			if (surfaceError) {
+				mutationError = `${conflictMessage} 서버 최신 상태를 불러왔습니다. 변경 내용을 확인한 뒤 다시 시도해 주세요.`;
+			}
 		} catch (refreshCause) {
-			mutationError = `${conflictMessage} 최신 상태를 불러오지 못했습니다. ${auctionTournamentBracketErrorText(refreshCause)}`;
+			if (surfaceError) {
+				mutationError = `${conflictMessage} 최신 상태를 불러오지 못했습니다. ${auctionTournamentBracketErrorText(refreshCause)}`;
+			}
 		}
 	}
 
@@ -72,7 +80,38 @@
 			);
 	}
 
-	async function openMatch(matchId: string) {
+	function opensTournamentLineup(
+		match: AuctionTournamentBracketMatch | undefined,
+		bracketSnapshot: AuctionTournamentBracketSnapshot
+	): boolean {
+		const semifinalMatches = bracketSnapshot.bracket.matches.filter(
+			(candidate) =>
+				candidate.matchKey === 'SEMIFINAL_A' || candidate.matchKey === 'SEMIFINAL_B'
+		);
+		return (
+			bracketSnapshot.tournament.format === 'TWENTY_PERSON' &&
+			match !== undefined &&
+			(match.matchKey === 'SEMIFINAL_A' || match.matchKey === 'SEMIFINAL_B') &&
+			semifinalMatches.length === 2 &&
+			!semifinalMatches.every((candidate) => candidate.lineupsLocked)
+		);
+	}
+
+	async function openMatch(
+		matchId: string,
+		bracketSnapshot: AuctionTournamentBracketSnapshot = snapshot
+	) {
+		const match = bracketSnapshot.bracket.matches.find((candidate) => candidate.id === matchId);
+		if (opensTournamentLineup(match, bracketSnapshot)) {
+			await goto(
+				resolve('/g/[guildId]/auction/tournaments/[id]/lineup', {
+					guildId: data.guildId,
+					id: bracketSnapshot.tournament.id
+				})
+			);
+			return;
+		}
+
 		await goto(
 			resolve('/g/[guildId]/auction/matches/[matchId]', {
 				guildId: data.guildId,
@@ -81,10 +120,17 @@
 		);
 	}
 
-	async function handleBracketCommand(command: AuctionTournamentBracketCommand): Promise<void> {
-		if (submitting || !snapshot.permissions.canManageBracket) return;
+	async function handleBracketCommand(
+		command: AuctionTournamentBracketCommand,
+		surfaceError = true
+	): Promise<void> {
+		const allowed =
+			command.kind === 'UNLOCK_BRACKET'
+				? snapshot.permissions.canRecoverBracket
+				: snapshot.permissions.canManageBracket;
+		if (submitting || !allowed) return;
 		if (command.expectedRevision !== snapshot.tournament.revision) {
-			await recoverAuthoritativeSnapshot('브래킷 버전이 변경되었습니다.');
+			await recoverAuthoritativeSnapshot('브래킷 버전이 변경되었습니다.', surfaceError);
 			throw new Error('stale_auction_tournament_bracket_command');
 		}
 
@@ -104,18 +150,38 @@
 
 			if (command.kind === 'LOCK_BRACKET') {
 				const nextMatch = firstPlayableMatch(nextSnapshot);
-				if (nextMatch) await openMatch(nextMatch.id);
+				if (nextMatch) await openMatch(nextMatch.id, nextSnapshot);
 			}
 		} catch (cause) {
 			if (isAuctionTournamentBracketRevisionConflict(cause)) {
 				idempotencyKeys.invalidate('auction-tournament-bracket-command');
-				await recoverAuthoritativeSnapshot(auctionTournamentBracketErrorText(cause));
-			} else {
+				await recoverAuthoritativeSnapshot(auctionTournamentBracketErrorText(cause), surfaceError);
+			} else if (surfaceError) {
 				mutationError = auctionTournamentBracketErrorText(cause);
 			}
 			throw cause;
 		} finally {
 			submitting = false;
+		}
+	}
+
+	function openRecoveryDialog() {
+		if (!canRecoverBracket) return;
+		recoveryError = '';
+		recoveryDialogOpen = true;
+	}
+
+	async function confirmBracketRecovery(): Promise<void> {
+		if (!canRecoverBracket) return;
+		recoveryError = '';
+		try {
+			await handleBracketCommand(
+				{ kind: 'UNLOCK_BRACKET', expectedRevision: tournament.revision },
+				false
+			);
+			recoveryDialogOpen = false;
+		} catch (cause) {
+			recoveryError = auctionTournamentBracketErrorText(cause);
 		}
 	}
 </script>
@@ -131,16 +197,14 @@
 		description={`${tournament.title} · 토너먼트 #${tournament.displayNumber} · ${formatLabel} · ${rulesLabel}`}
 	>
 		{#snippet actions()}
-			{#if tournament.status === 'COMPLETED'}
-				<a
-					href={resolve('/g/[guildId]/auction/tournaments/[id]/result', {
-						guildId: data.guildId,
-						id: tournament.id
-					})}
-					class="inline-flex h-9 shrink-0 items-center justify-center border border-emerald-300/30 px-3 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/10"
+			{#if canRecoverBracket}
+				<button
+					type="button"
+					onclick={openRecoveryDialog}
+					class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-amber-300/30 px-3 text-xs font-semibold text-amber-100 hover:bg-amber-400/10"
 				>
-					토너먼트 결과
-				</a>
+					<RotateCcw size={14} aria-hidden="true" /> 대진 확정 해제
+				</button>
 			{/if}
 			<a
 				href={resolve('/g/[guildId]/auction/tournaments/[id]/draft', {
@@ -176,3 +240,55 @@
 		busy={submitting}
 	/>
 </div>
+
+<Dialog.Root bind:open={recoveryDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+		<Dialog.Content
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-4 shadow-2xl shadow-black/50 outline-none"
+		>
+			<div class="flex items-center justify-between gap-3">
+				<Dialog.Title class="text-sm font-semibold text-slate-50">대진 확정 해제</Dialog.Title>
+				<Dialog.Close
+					disabled={submitting}
+					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
+					aria-label="대진 확정 해제 창 닫기"
+				>
+					<X size={16} aria-hidden="true" />
+				</Dialog.Close>
+			</div>
+			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
+				현재 대진과 생성된 경기는 취소 이력으로 보존하고, 팀 배치 단계로 되돌립니다. 픽밴
+				입력이나 결과가 하나라도 있으면 이 작업은 진행되지 않습니다.
+			</Dialog.Description>
+			{#if recoveryError}
+				<p
+					role="alert"
+					class="mt-3 border border-rose-300/30 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-100"
+				>
+					{recoveryError}
+				</p>
+			{/if}
+			<div class="mt-4 flex justify-end gap-2">
+				<Dialog.Close
+					disabled={submitting}
+					class="h-8 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
+				>
+					취소
+				</Dialog.Close>
+				<button
+					type="button"
+					disabled={!canRecoverBracket}
+					onclick={() => void confirmBracketRecovery()}
+					class="inline-flex h-8 items-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 enabled:hover:bg-amber-400/16 disabled:cursor-not-allowed disabled:opacity-35"
+				>
+					{#if submitting}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 되돌리는 중
+					{:else}
+						<RotateCcw size={14} aria-hidden="true" /> 확정 해제
+					{/if}
+				</button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>

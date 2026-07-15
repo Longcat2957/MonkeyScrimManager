@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { CircleSlash, Dice5, Gavel, PackageOpen, Undo2 } from 'lucide-svelte';
+	import { CircleSlash, Dice5, Gavel, PackageOpen, Swords, Trophy, Undo2 } from 'lucide-svelte';
+	import type { ChampionCatalog } from '$lib/datadragon';
+	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
 	import type {
 		AuctionTournamentDraftCandidate,
 		AuctionTournamentDraftCommand,
@@ -7,14 +9,17 @@
 		AuctionTournamentTeam,
 		AuctionTournamentTeamMember
 	} from '$lib/contracts/auctionTournamentDraft';
+	import PlayerAvatar from './PlayerAvatar.svelte';
+	import PositionIcon from './PositionIcon.svelte';
 
 	interface Props {
 		snapshot: AuctionTournamentDraftSnapshot;
 		onCommand: (command: AuctionTournamentDraftCommand) => void | Promise<void>;
 		submitting?: boolean;
+		championCatalog?: ChampionCatalog | null;
 	}
 
-	let { snapshot, onCommand, submitting = false }: Props = $props();
+	let { snapshot, onCommand, submitting = false, championCatalog = null }: Props = $props();
 
 	const laneLabels = {
 		TOP: '탑',
@@ -26,13 +31,13 @@
 	const teamMemberSlots = [1, 2, 3, 4, 5] as const;
 
 	let bidInputs = $state<Record<string, string>>({});
-	let selectedTeamByUnsoldMember = $state<Record<string, string>>({});
 	let draggedTargetId = $state<string | null>(null);
 	let overTeamId = $state<string | null>(null);
 	let showTargetDetails = $state(false);
 
 	const teams = $derived(snapshot.teams);
 	const currentTarget = $derived(snapshot.draft.currentTarget);
+	const currentTargetProfile = $derived(snapshot.draft.currentTargetProfile);
 	const unsold = $derived(snapshot.draft.unsold);
 	const queuedCandidates = $derived(
 		snapshot.candidates.filter((candidate) => candidate.state === 'QUEUED')
@@ -67,6 +72,41 @@
 
 	function mmrLabel(mmr: number | null): string {
 		return mmr === null ? '미집계' : Math.round(mmr).toLocaleString('ko-KR');
+	}
+
+	function currentTargetRole(): keyof typeof laneLabels {
+		return currentTarget?.declaredLane ?? currentTargetProfile?.mainLane ?? 'MID';
+	}
+
+	function winRate(games: number, wins: number): string {
+		if (games === 0) return '-';
+		return `${Math.round((wins / games) * 100)}%`;
+	}
+
+	function recordWinRate(): string {
+		if (!currentTargetProfile) return '-';
+		return winRate(currentTargetProfile.summary.games, currentTargetProfile.summary.wins);
+	}
+
+	function recentRecordSummary(): string {
+		const recentGames = currentTargetProfile?.recentGames ?? [];
+		const wins = recentGames.filter((game) => game.result === 'WIN').length;
+		return `${wins}승 ${recentGames.length - wins}패`;
+	}
+
+	function playedAtLabel(value: string): string {
+		const playedAt = new Date(value);
+		if (Number.isNaN(playedAt.getTime())) return '';
+		return new Intl.DateTimeFormat('ko-KR', {
+			month: 'numeric',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit'
+		}).format(playedAt);
+	}
+
+	function championFor(championId: string) {
+		return championCatalog?.byId[championId] ?? null;
 	}
 
 	async function submit(command: AuctionTournamentDraftCommand): Promise<void> {
@@ -176,7 +216,6 @@
 
 	function resetTransientState() {
 		bidInputs = {};
-		selectedTeamByUnsoldMember = {};
 		showTargetDetails = false;
 		clearDragState();
 	}
@@ -333,65 +372,409 @@
 					</div>
 				</div>
 
-				<div class="grid min-h-0 place-items-center overflow-y-auto p-3">
+				<div class="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 overflow-hidden p-3">
 					{#if currentTarget}
-						<div class="grid w-full max-w-xl gap-3">
-							<div
-								class={`cursor-grab border p-4 active:cursor-grabbing ${
-									draggedTargetId === currentTarget.userId
-										? 'border-cyan-300/60 bg-cyan-400/15 opacity-70'
-										: 'border-cyan-400/30 bg-cyan-400/5'
-								}`}
-								draggable={canManageDraft}
-								ondragstart={startTargetDrag}
-								ondragend={clearDragState}
-								role="group"
-								aria-label={`현재 경매 매물 ${currentTarget.displayName}`}
-							>
-								<div class="flex items-center gap-3">
-									<span
-										class="grid size-12 shrink-0 place-items-center border border-slate-600 bg-slate-950/70 text-sm font-semibold text-slate-200"
-									>
-										{playerInitial(currentTarget.displayName)}
-									</span>
-									<div class="min-w-0 flex-1">
-										<p class="truncate text-2xl font-semibold text-slate-50">
-											{currentTarget.displayName}
-										</p>
-										<p class="mt-1 text-sm text-slate-400">
-											{playerLaneLabel(currentTarget)} · MMR {mmrLabel(currentTarget.mmrAtStart)}
-										</p>
+						{@const role = currentTargetRole()}
+						{@const profile = currentTargetProfile}
+						<div
+							class={showTargetDetails
+								? 'grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden'
+								: 'grid min-h-0 content-start gap-3 overflow-y-auto pr-1'}
+						>
+							{#if showTargetDetails}
+								<div
+									class={`cursor-grab border px-4 py-4 active:cursor-grabbing ${
+										draggedTargetId === currentTarget.userId
+											? 'border-cyan-300/60 bg-cyan-400/15 opacity-70'
+											: 'border-cyan-400/30 bg-cyan-400/5'
+									}`}
+									draggable={canManageDraft}
+									ondragstart={startTargetDrag}
+									ondragend={clearDragState}
+									role="group"
+									aria-label={`현재 경매 매물 ${currentTarget.displayName}`}
+								>
+									<div class="flex items-start gap-4">
+										<PlayerAvatar
+											name={currentTarget.displayName}
+											{role}
+											avatarUrl={profile?.avatarUrl}
+											profileIconId={profile?.profileIconId}
+											profileIconVersion={championCatalog?.version}
+											size="md"
+										/>
+										<div class="min-w-0 flex-1">
+											<p class="truncate text-2xl font-semibold text-slate-50">
+												{currentTarget.displayName}
+											</p>
+											<div class="mt-2 flex flex-wrap items-center gap-1.5">
+												<span
+													class="inline-flex items-center gap-1 border border-cyan-400/25 bg-cyan-400/10 px-2 py-1 text-sm font-semibold text-cyan-100"
+												>
+													<PositionIcon {role} size="sm" />
+													{playerLaneLabel(currentTarget)}
+												</span>
+												{#if profile?.riotTier}
+													<span
+														class="border border-amber-300/25 bg-amber-300/10 px-2 py-1 text-sm font-semibold text-amber-100"
+													>
+														{profile.riotTier}
+													</span>
+												{/if}
+												<span class="px-2 py-1 text-sm font-semibold text-slate-300">
+													MMR {mmrLabel(currentTarget.mmrAtStart)}
+												</span>
+											</div>
+										</div>
 									</div>
 								</div>
-								{#if showTargetDetails}
+
+								{#if profile}
 									<div
-										class="mt-4 grid grid-cols-2 gap-px border border-[var(--color-app-border-muted)] bg-[var(--color-app-border-muted)]"
+										class="grid min-h-0 content-start gap-4 overflow-y-auto overscroll-contain bg-[var(--color-app-bg-soft)] p-3 pr-[13px]"
 									>
-										<div class="bg-[var(--color-app-surface)] p-3">
-											<p class="text-[11px] text-slate-500">신청 라인</p>
-											<p class="mt-1 text-sm font-semibold text-slate-100">
-												{playerLaneLabel(currentTarget)}
-											</p>
-										</div>
-										<div class="bg-[var(--color-app-surface)] p-3">
-											<p class="text-[11px] text-slate-500">시즌 MMR</p>
-											<p class="mt-1 text-sm font-semibold text-slate-100 tabular-nums">
-												{mmrLabel(currentTarget.mmrAtStart)}
-											</p>
-										</div>
+										<section class="grid gap-3">
+											<div class="flex items-center justify-between gap-3">
+												<div class="flex items-center gap-2">
+													<Trophy size={16} class="text-cyan-100" aria-hidden="true" />
+													<p class="text-sm font-semibold text-slate-100">내전 전적</p>
+												</div>
+												<p class="text-xs font-semibold text-slate-500">
+													{profile.summary.wins}승 {profile.summary.losses}패
+												</p>
+											</div>
+											<div class="grid grid-cols-3 gap-px bg-[var(--color-app-border-muted)]">
+												<div class="bg-[var(--color-app-surface)] p-2">
+													<p class="text-[11px] text-slate-500">내전</p>
+													<p class="mt-1 text-sm font-semibold text-slate-100">
+														{profile.summary.games}게임
+													</p>
+												</div>
+												<div class="bg-[var(--color-app-surface)] p-2">
+													<p class="text-[11px] text-slate-500">승률</p>
+													<p class="mt-1 text-sm font-semibold text-cyan-100">{recordWinRate()}</p>
+												</div>
+												<div class="bg-[var(--color-app-surface)] p-2">
+													<p class="text-[11px] text-slate-500">주력 포지션</p>
+													<p class="mt-1 text-sm font-semibold text-slate-100">
+														{laneLabels[profile.mainLane ?? role]}
+													</p>
+												</div>
+											</div>
+										</section>
+
+										<section class="grid gap-2">
+											<p class="text-xs font-semibold text-slate-400">내전 주력 챔피언</p>
+											{#if profile.championRecords.length > 0}
+												<div class="grid gap-px bg-[var(--color-app-border-muted)]">
+													{#each profile.championRecords as record (record.championId)}
+														{@const champion = championFor(record.championId)}
+														<div
+															class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 bg-[var(--color-app-surface)] p-2"
+														>
+															{#if champion}
+																<ChampionFace
+																	{champion}
+																	version={championCatalog?.version ?? ''}
+																	size="sm"
+																/>
+															{:else}
+																<span
+																	class="grid size-8 place-items-center bg-slate-950/45 text-[10px] font-semibold text-slate-400"
+																>
+																	{record.championId.slice(0, 1).toUpperCase()}
+																</span>
+															{/if}
+															<div class="min-w-0">
+																<p class="truncate text-sm font-semibold text-slate-100">
+																	{champion?.name ?? record.championId}
+																</p>
+																<p class="text-[11px] font-medium text-slate-500">
+																	{record.games}게임 · {record.wins}승 {record.losses}패
+																</p>
+															</div>
+															<p class="text-xs font-semibold text-cyan-100">
+																{winRate(record.games, record.wins)}
+															</p>
+														</div>
+													{/each}
+												</div>
+											{:else}
+												<p class="bg-[var(--color-app-surface)] px-3 py-2 text-sm text-slate-500">
+													확정된 내전 전적 없음
+												</p>
+											{/if}
+										</section>
+
+										<section class="grid gap-2">
+											<p class="text-xs font-semibold text-slate-400">라인별 MMR</p>
+											<div class="grid gap-px bg-[var(--color-app-border-muted)] sm:grid-cols-5">
+												{#each profile.laneMmr as lane (lane.lane)}
+													<div class="bg-[var(--color-app-surface)] p-2">
+														<div class="flex items-center justify-between gap-2">
+															<span class="text-xs font-semibold text-slate-400"
+																>{laneLabels[lane.lane]}</span
+															>
+															<span class="text-[11px] font-semibold text-slate-500"
+																>{lane.games}게임</span
+															>
+														</div>
+														<p class="mt-1 text-sm font-semibold text-slate-100 tabular-nums">
+															{mmrLabel(lane.mmr)}
+														</p>
+													</div>
+												{/each}
+											</div>
+										</section>
+
+										<section class="grid gap-2">
+											<p class="text-xs font-semibold text-slate-400">선호 챔피언</p>
+											{#if profile.championIds.length > 0}
+												<div class="grid gap-px bg-[var(--color-app-border-muted)] sm:grid-cols-3">
+													{#each profile.championIds.slice(0, 3) as championId (championId)}
+														{@const champion = championFor(championId)}
+														<div
+															class="flex min-w-0 items-center gap-2 bg-[var(--color-app-surface)] p-2"
+														>
+															{#if champion}
+																<ChampionFace
+																	{champion}
+																	version={championCatalog?.version ?? ''}
+																	size="sm"
+																/>
+																<span class="min-w-0 truncate text-sm font-semibold text-slate-100"
+																	>{champion.name}</span
+																>
+															{:else}
+																<span class="min-w-0 truncate text-sm font-semibold text-slate-300"
+																	>{championId}</span
+																>
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{:else}
+												<p class="bg-[var(--color-app-surface)] px-3 py-2 text-sm text-slate-500">
+													등록한 선호 챔피언 없음
+												</p>
+											{/if}
+										</section>
+
+										<section class="grid gap-2">
+											<div class="flex items-center justify-between gap-3">
+												<p class="text-xs font-semibold text-slate-400">최근 게임</p>
+												<p class="text-xs font-semibold text-slate-500">{recentRecordSummary()}</p>
+											</div>
+											{#if profile.recentGames.length > 0}
+												<div
+													class="flex gap-0.5"
+													aria-label={`최근 ${profile.recentGames.length}게임 ${recentRecordSummary()}`}
+												>
+													{#each profile.recentGames as game (game.id)}
+														<span
+															class={`h-1.5 min-w-0 flex-1 ${
+																game.result === 'WIN' ? 'bg-cyan-300/80' : 'bg-rose-300/70'
+															}`}
+														></span>
+													{/each}
+												</div>
+												<div class="grid max-h-44 gap-1 overflow-y-auto pr-[5px]">
+													{#each profile.recentGames as game (game.id)}
+														{@const champion = game.championId
+															? championFor(game.championId)
+															: null}
+														<div
+															class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 bg-[var(--color-app-surface)] p-2"
+														>
+															{#if champion}
+																<ChampionFace
+																	{champion}
+																	version={championCatalog?.version ?? ''}
+																	size="sm"
+																/>
+															{:else}
+																<span
+																	class="grid size-8 place-items-center bg-slate-950/45 text-[10px] font-semibold text-slate-400"
+																>
+																	{game.championId?.slice(0, 1).toUpperCase() ??
+																		laneLabels[game.lane].slice(0, 1)}
+																</span>
+															{/if}
+															<div class="min-w-0">
+																<p class="truncate text-xs font-semibold text-slate-100">
+																	{champion?.name ?? game.championId ?? '챔피언 미입력'}
+																</p>
+																<p class="truncate text-[11px] font-medium text-slate-500">
+																	{laneLabels[game.lane]} · {playedAtLabel(game.playedAt)}
+																</p>
+															</div>
+															<span
+																class={`text-xs font-semibold ${game.result === 'WIN' ? 'text-cyan-100' : 'text-rose-200'}`}
+															>
+																{game.result === 'WIN' ? '승' : '패'}
+															</span>
+														</div>
+													{/each}
+												</div>
+											{:else}
+												<p class="bg-[var(--color-app-surface)] px-3 py-2 text-sm text-slate-500">
+													확정된 최근 게임 없음
+												</p>
+											{/if}
+										</section>
+
+										<section class="grid gap-3">
+											<div class="flex items-center justify-between gap-3">
+												<div class="flex items-center gap-2">
+													<Swords size={16} class="text-amber-100" aria-hidden="true" />
+													<p class="text-sm font-semibold text-slate-100">Riot 전적</p>
+												</div>
+												{#if profile.riot}
+													<p class="text-xs font-semibold text-slate-500">
+														{playedAtLabel(profile.riot.refreshedAt)}
+													</p>
+												{/if}
+											</div>
+											{#if profile.riot}
+												<div class="grid grid-cols-3 gap-px bg-[var(--color-app-border-muted)]">
+													<div class="bg-[var(--color-app-surface)] p-2">
+														<p class="text-[11px] text-slate-500">솔로 랭크</p>
+														<p class="mt-1 text-sm font-semibold text-amber-100">
+															{profile.riotTier ?? '-'}
+														</p>
+													</div>
+													<div class="bg-[var(--color-app-surface)] p-2">
+														<p class="text-[11px] text-slate-500">최근</p>
+														<p class="mt-1 text-sm font-semibold text-slate-100">
+															{profile.riot.games}게임
+														</p>
+													</div>
+													<div class="bg-[var(--color-app-surface)] p-2">
+														<p class="text-[11px] text-slate-500">승률</p>
+														<p class="mt-1 text-sm font-semibold text-amber-100">
+															{winRate(profile.riot.games, profile.riot.wins)}
+														</p>
+													</div>
+												</div>
+												{#if profile.riot.championIds.length > 0}
+													<div class="grid gap-px bg-[var(--color-app-border-muted)]">
+														{#each profile.riot.championIds as championId (championId)}
+															{@const champion = championFor(championId)}
+															<div
+																class="flex min-w-0 items-center gap-2 bg-[var(--color-app-surface)] p-2"
+															>
+																{#if champion}
+																	<ChampionFace
+																		{champion}
+																		version={championCatalog?.version ?? ''}
+																		size="sm"
+																	/>
+																{/if}
+																<span class="min-w-0 truncate text-sm font-semibold text-slate-100">
+																	{champion?.name ?? championId}
+																</span>
+															</div>
+														{/each}
+													</div>
+												{/if}
+											{:else}
+												<p class="bg-[var(--color-app-surface)] px-3 py-2 text-sm text-slate-500">
+													캐시된 Riot 전적 없음
+												</p>
+											{/if}
+										</section>
 									</div>
 								{/if}
-							</div>
-							<div class="flex justify-end">
-								<button
-									type="button"
-									class="inline-flex h-10 items-center gap-1.5 rounded-sm px-3.5 text-sm font-semibold text-amber-100 hover:bg-amber-300/10 disabled:cursor-not-allowed disabled:opacity-40"
-									disabled={!canManageDraft}
-									onclick={markUnsold}
+							{:else}
+								<div
+									class={`relative isolate grid min-h-[30rem] cursor-grab overflow-hidden border px-4 py-5 active:cursor-grabbing xl:min-h-[32rem] ${
+										draggedTargetId === currentTarget.userId
+											? 'border-cyan-300/60 bg-cyan-400/15 opacity-70'
+											: 'border-cyan-400/30 bg-slate-950/35'
+									}`}
+									draggable={canManageDraft}
+									ondragstart={startTargetDrag}
+									ondragend={clearDragState}
+									role="group"
+									aria-label={`현재 경매 매물 ${currentTarget.displayName}`}
 								>
-									<CircleSlash size={14} aria-hidden="true" /> 유찰
-								</button>
-							</div>
+									<div class="pointer-events-none absolute right-5 top-5 opacity-20">
+										<PositionIcon {role} size="md" />
+									</div>
+									<div
+										class="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-cyan-400/[0.045]"
+									></div>
+									<div class="z-10 grid h-full content-between gap-5">
+										<div class="flex items-start justify-between gap-3">
+											<span
+												class="inline-flex items-center gap-1 border border-cyan-400/25 bg-cyan-400/10 px-2 py-1 text-sm font-semibold text-cyan-100"
+											>
+												<PositionIcon {role} size="sm" />
+												{playerLaneLabel(currentTarget)}
+											</span>
+											{#if profile?.riotTier}
+												<span
+													class="border border-amber-300/25 bg-amber-300/10 px-2 py-1 text-sm font-semibold text-amber-100"
+												>
+													{profile.riotTier}
+												</span>
+											{/if}
+										</div>
+
+										<div class="grid justify-items-center gap-3 text-center">
+											<PlayerAvatar
+												name={currentTarget.displayName}
+												{role}
+												avatarUrl={profile?.avatarUrl}
+												profileIconId={profile?.profileIconId}
+												profileIconVersion={championCatalog?.version}
+												size="md"
+											/>
+											<div class="min-w-0">
+												<p class="max-w-72 truncate text-3xl font-semibold text-slate-50">
+													{currentTarget.displayName}
+												</p>
+												<p class="mt-1 text-base font-semibold text-slate-300">
+													MMR {mmrLabel(currentTarget.mmrAtStart)}
+												</p>
+											</div>
+										</div>
+
+										{#if profile}
+											<div class="grid grid-cols-3 gap-px bg-[var(--color-app-border-muted)]">
+												<div class="bg-slate-950/70 px-3 py-2 text-center">
+													<p class="text-[11px] text-slate-500">승률</p>
+													<p class="mt-1 text-base font-semibold text-cyan-100">
+														{recordWinRate()}
+													</p>
+												</div>
+												<div class="bg-slate-950/70 px-3 py-2 text-center">
+													<p class="text-[11px] text-slate-500">승패</p>
+													<p class="mt-1 text-base font-semibold text-slate-100">
+														{profile.summary.wins}-{profile.summary.losses}
+													</p>
+												</div>
+												<div class="bg-slate-950/70 px-3 py-2 text-center">
+													<p class="text-[11px] text-slate-500">최근</p>
+													<p class="mt-1 text-base font-semibold text-slate-100">
+														{recentRecordSummary()}
+													</p>
+												</div>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/if}
+						</div>
+						<div class="flex justify-end">
+							<button
+								type="button"
+								class="inline-flex h-10 items-center gap-1.5 rounded-sm px-3.5 text-sm font-semibold text-amber-100 hover:bg-amber-300/10 disabled:cursor-not-allowed disabled:opacity-40"
+								disabled={!canManageDraft}
+								onclick={markUnsold}
+							>
+								<CircleSlash size={14} aria-hidden="true" /> 유찰
+							</button>
 						</div>
 					{:else if allPlaced}
 						<div class="grid min-h-80 place-items-center text-center">
@@ -431,7 +814,7 @@
 							draggable={canManageDraft}
 							ondragstart={(event) => startUnsoldDrag(event, member)}
 							ondragend={clearDragState}
-							class={`grid min-w-0 gap-2 border border-amber-300/10 bg-amber-300/[0.045] p-2 text-left text-sm text-slate-100 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center ${
+							class={`grid min-w-0 gap-2 border border-amber-300/10 bg-amber-300/[0.045] p-2 text-left text-sm text-slate-100 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center ${
 								draggedTargetId === member.userId ? 'opacity-60' : ''
 							}`}
 							aria-label={`${member.displayName} 유찰 후보`}
@@ -449,40 +832,7 @@
 									</span>
 								</span>
 							</div>
-							<select
-								class="h-8 min-w-0 border border-[var(--color-app-border-muted)] bg-slate-950/35 px-2 text-xs text-slate-200 disabled:opacity-40"
-								disabled={!canManageDraft || Boolean(currentTarget)}
-								value={selectedTeamByUnsoldMember[member.userId] ?? ''}
-								onchange={(event) => {
-									selectedTeamByUnsoldMember = {
-										...selectedTeamByUnsoldMember,
-										[member.userId]: event.currentTarget.value
-									};
-								}}
-								aria-label={`${member.displayName} 배치 팀`}
-							>
-								<option value="">팀 선택</option>
-								{#each teams as team (team.id)}
-									<option value={team.id} disabled={team.members.length >= 5}
-										>{team.teamName}</option
-									>
-								{/each}
-							</select>
 							<div class="flex justify-end gap-1">
-								<button
-									type="button"
-									class="h-8 px-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-40"
-									disabled={!canManageDraft ||
-										Boolean(currentTarget) ||
-										!selectedTeamByUnsoldMember[member.userId]}
-									onclick={() => {
-										const teamId = selectedTeamByUnsoldMember[member.userId];
-										const team = teams.find((item) => item.id === teamId);
-										if (team) assignUnsoldMemberToTeam(team, member.userId);
-									}}
-								>
-									배치
-								</button>
 								<button
 									type="button"
 									class="h-8 px-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-40"
@@ -583,17 +933,6 @@
 									<Gavel size={14} aria-hidden="true" /> 낙찰
 								</button>
 							</div>
-
-							{#if currentTarget}
-								<button
-									type="button"
-									class="h-8 border border-cyan-400/20 px-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-40"
-									disabled={!canReceiveDrop(team)}
-									onclick={() => assignCurrentTargetToTeam(team)}
-								>
-									수동 배치
-								</button>
-							{/if}
 						</div>
 
 						<div

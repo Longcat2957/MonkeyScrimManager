@@ -355,6 +355,53 @@ async fn run_series_conversion_flow() -> TestResult {
         .await?;
     assert_eq!(restored.rows_affected(), 1);
 
+    let auction_tournament_id = seed_bidding_auction_tournament(&pool).await?;
+    let auction_tournament_topic = RealtimeTopic::parse(&format!(
+        "guild:{GUILD_ID}:auction-tournament:{auction_tournament_id}"
+    ))?;
+    assert!(matches!(
+        realtime
+            .authorize_topic(&pool, &normal_member, &auction_tournament_topic)
+            .await,
+        Err(TopicAuthorizationError::Forbidden)
+    ));
+    realtime
+        .authorize_topic(&pool, &operator, &auction_tournament_topic)
+        .await
+        .expect("active operator may subscribe to bidding auction invalidations");
+    let left_bidding = sqlx::query(
+        "UPDATE auction_tournaments
+         SET status = 'BRACKET_SETUP'
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(auction_tournament_id)
+    .execute(&pool)
+    .await?;
+    assert_eq!(left_bidding.rows_affected(), 1);
+    assert!(matches!(
+        realtime
+            .authorize_topic(&pool, &operator, &auction_tournament_topic)
+            .await,
+        Err(TopicAuthorizationError::Forbidden)
+    ));
+    let deleted = sqlx::query(
+        "UPDATE auction_tournaments
+         SET status = 'BIDDING', deleted_at = CURRENT_TIMESTAMP
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(auction_tournament_id)
+    .execute(&pool)
+    .await?;
+    assert_eq!(deleted.rows_affected(), 1);
+    assert!(matches!(
+        realtime
+            .authorize_topic(&pool, &operator, &auction_tournament_topic)
+            .await,
+        Err(TopicAuthorizationError::Forbidden)
+    ));
+
     let non_operator_pick_ban = browser_mutation(
         &app,
         Method::PATCH,
@@ -2972,6 +3019,52 @@ async fn seed_closed_entry_recruitment(
     seed_recruitment_participants(pool, &recruitment_id.to_string(), &FULL_ROSTER_MEMBER_IDS)
         .await?;
     Ok(recruitment_id.to_string())
+}
+
+async fn seed_bidding_auction_tournament(pool: &PgPool) -> TestResult<Uuid> {
+    let now = OffsetDateTime::now_utc();
+    let recruitment_id = Uuid::now_v7();
+    let tournament_id = Uuid::now_v7();
+
+    sqlx::query(
+        "INSERT INTO auction_recruitments (
+             guild_id, id, season_id, display_number, title, format, target_count,
+             semifinal_best_of, final_best_of, hard_fearless, status, revision,
+             created_by, created_at, updated_by, updated_at, closed_at, converted_at
+         ) VALUES (
+             $1, $2, $3, 1, '실시간 입찰 모집', 'TEN_PERSON', 10,
+             NULL, 3, false, 'CONVERTED', 1,
+             $4, $5, $4, $5, $5, $5
+         )",
+    )
+    .bind(GUILD_ID)
+    .bind(recruitment_id)
+    .bind(Uuid::parse_str(SEASON_ID)?)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO auction_tournaments (
+             guild_id, id, season_id, source_recruitment_id, display_number, title, format,
+             semifinal_best_of, final_best_of, hard_fearless, status, revision,
+             started_at, created_by, updated_by, updated_at
+         ) VALUES (
+             $1, $2, $3, $4, 1, '실시간 입찰', 'TEN_PERSON',
+             NULL, 3, false, 'BIDDING', 0,
+             $5, $6, $6, $5
+         )",
+    )
+    .bind(GUILD_ID)
+    .bind(tournament_id)
+    .bind(Uuid::parse_str(SEASON_ID)?)
+    .bind(recruitment_id)
+    .bind(now)
+    .bind(MEMBER_ID)
+    .execute(pool)
+    .await?;
+
+    Ok(tournament_id)
 }
 
 async fn seed_complete_entry_assignments(pool: &PgPool, recruitment_id: &str) -> TestResult {

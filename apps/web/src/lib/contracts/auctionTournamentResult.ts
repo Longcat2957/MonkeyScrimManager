@@ -83,7 +83,9 @@ export const auctionTournamentResultSnapshotSchema = z
 		teams: z.array(auctionTournamentResultTeamSchema).min(2).max(4),
 		matches: z.array(auctionTournamentResultMatchSchema).max(3),
 		players: z.array(auctionTournamentResultPlayerSchema).max(20),
-		permissions: z.object({ canRevertResults: z.boolean() }).strict()
+		permissions: z
+			.object({ canRevertResults: z.boolean(), canRecoverBracket: z.boolean() })
+			.strict()
 	})
 	.strict()
 	.superRefine((snapshot, context) => {

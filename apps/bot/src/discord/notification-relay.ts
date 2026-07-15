@@ -266,8 +266,7 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 					await this.#nack(notification, {
 						kind: 'HTTP',
 						status: 422,
-						message:
-							'Auction tournament result deletion payload does not match schema version 1'
+						message: 'Auction tournament result deletion payload does not match schema version 1'
 					});
 					return;
 				}
@@ -343,7 +342,7 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 		try {
 			const channel = await this.#sendableGuildChannel(notification.channelId);
 			const message = await channel.send({
-				...renderAuctionTournamentResultMessage(payload),
+				...renderAuctionTournamentResultMessage(payload, this.#webOrigin),
 				nonce: notification.discordNonce,
 				enforceNonce: true
 			});

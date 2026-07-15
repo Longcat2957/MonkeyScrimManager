@@ -40,6 +40,7 @@ describe('workflow presentation', () => {
 		};
 
 		const view = buildAuctionView({
+			guildId: '200000000000000001',
 			recruitments: [],
 			activeTournaments: [tournament],
 			completedTournaments: []
@@ -47,7 +48,8 @@ describe('workflow presentation', () => {
 		expect(view.activeWork[0]).toMatchObject({
 			status: '결과 입력',
 			detail: '결승 · 2세트 결과 대기',
-			href: '/g/200000000000000001/auction/matches/01900000-0000-7000-8000-000000000801'
+			href:
+				'/g/200000000000000001/auction/tournaments/01900000-0000-7000-8000-000000000601/result'
 		});
 	});
 
@@ -72,6 +74,7 @@ describe('workflow presentation', () => {
 		};
 
 		const view = buildAuctionView({
+			guildId: '200000000000000001',
 			recruitments: [],
 			activeTournaments: [],
 			completedTournaments: [tournament]

@@ -9,7 +9,8 @@ const snapshot: GuildRecordsSearchSnapshot = {
 	member: {
 		displayName: 'Longcat',
 		avatarUrl: 'https://cdn.discordapp.com/avatars/1/avatar.png',
-		mainLane: 'MID'
+		mainLane: 'MID',
+		profileHref: '/users/390526792496054283'
 	},
 	championPreferences: {
 		TOP: ['Ornn'],

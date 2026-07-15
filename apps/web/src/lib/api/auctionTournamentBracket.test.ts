@@ -20,7 +20,7 @@ function snapshot() {
 			displayNumber: 42,
 			format: 'TEN_PERSON',
 			rules: { hardFearless: false, semifinalBestOf: null, finalBestOf: 3 },
-			status: 'BIDDING',
+			status: 'BRACKET_SETUP',
 			revision: 7,
 			href: `/g/${guildId}/auction/tournaments/${tournamentId}`
 		},

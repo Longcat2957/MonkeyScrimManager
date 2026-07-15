@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { Dialog } from 'bits-ui';
-	import { Check, Lock, MousePointer2, RotateCcw, X } from 'lucide-svelte';
+	import { Check, Lock, MousePointer2, X } from 'lucide-svelte';
 	import type {
 		AuctionBracketSlotKey,
 		AuctionTournamentBracketCommand,
@@ -34,9 +33,6 @@
 			snapshot.permissions.canManageBracket &&
 			!snapshot.bracket.locked &&
 			!busy
-	);
-	const canRecoverBracket = $derived(
-		snapshot.bracket.locked && snapshot.permissions.canRecoverBracket && !busy
 	);
 	const slotsByKey = $derived(
 		new Map(snapshot.bracket.slots.map((slot) => [slot.slotKey, slot.teamId]))
@@ -87,7 +83,6 @@
 	let selectedTeamId = $state<string | null>(null);
 	let draggedTeamId = $state<string | null>(null);
 	let overSlotKey = $state<AuctionBracketSlotKey | null>(null);
-	let unlockDialogOpen = $state(false);
 
 	function matchOrder(match: AuctionTournamentBracketMatch): number {
 		if (match.matchKey === 'SEMIFINAL_A') return 0;
@@ -130,12 +125,8 @@
 		overSlotKey = null;
 	}
 
-	function canSubmit(command: AuctionTournamentBracketCommand): boolean {
-		return command.kind === 'UNLOCK_BRACKET' ? canRecoverBracket : canEdit;
-	}
-
 	async function submit(command: AuctionTournamentBracketCommand): Promise<boolean> {
-		if (!canSubmit(command)) return false;
+		if (!canEdit) return false;
 		try {
 			await onCommand(command);
 			resetTransientState();
@@ -172,12 +163,6 @@
 	function lockBracket() {
 		if (!canEdit || !ready) return;
 		void submit({ kind: 'LOCK_BRACKET', expectedRevision: snapshot.tournament.revision });
-	}
-
-	async function unlockBracket(): Promise<void> {
-		if (!canRecoverBracket) return;
-		await submit({ kind: 'UNLOCK_BRACKET', expectedRevision: snapshot.tournament.revision });
-		unlockDialogOpen = false;
 	}
 
 	function selectTeam(teamId: string) {
@@ -262,9 +247,9 @@
 </script>
 
 <div class="grid gap-2 pb-2" aria-busy={busy}>
-	<div class="grid gap-2 xl:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]">
+	<div class="grid gap-2 2xl:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]">
 		<section
-			class="grid grid-rows-[auto_minmax(0,1fr)] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] xl:h-[min(40rem,calc(100dvh-16rem))] xl:min-h-[30rem]"
+			class="grid grid-rows-[auto_minmax(0,1fr)] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] 2xl:h-[min(40rem,calc(100dvh-16rem))] 2xl:min-h-[30rem]"
 		>
 			<div class="border-b border-[var(--color-app-border-muted)] px-3 py-3">
 				<p class="text-base font-semibold text-slate-100">팀 풀</p>
@@ -280,7 +265,7 @@
 			</div>
 
 			<div
-				class="grid min-h-0 content-start gap-2 p-3 pr-[13px] xl:overflow-x-hidden xl:overflow-y-auto xl:overscroll-contain"
+				class="grid min-h-0 content-start gap-2 p-3 pr-[13px] 2xl:overflow-x-hidden 2xl:overflow-y-auto 2xl:overscroll-contain"
 			>
 				{#each availableTeams as team (team.id)}
 					<button
@@ -334,7 +319,7 @@
 		</section>
 
 		<section
-			class="grid grid-rows-[auto_minmax(0,1fr)_auto] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] xl:h-[min(40rem,calc(100dvh-16rem))] xl:min-h-[30rem]"
+			class="grid grid-rows-[auto_minmax(0,1fr)_auto] border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] 2xl:h-[min(40rem,calc(100dvh-16rem))] 2xl:min-h-[30rem]"
 		>
 			<div class="border-b border-[var(--color-app-border-muted)] px-3 py-3">
 				<p class="text-base font-semibold text-slate-100">대진 설정</p>
@@ -346,13 +331,13 @@
 			</div>
 
 			<div
-				class="grid min-h-0 content-start gap-3 p-3 pr-[13px] xl:overflow-x-hidden xl:overflow-y-auto xl:overscroll-contain"
+				class="grid min-h-0 content-start gap-3 p-3 pr-[13px] 2xl:overflow-x-hidden 2xl:overflow-y-auto 2xl:overscroll-contain"
 			>
 				{#each bracketMatches as match (match.matchKey)}
 					<section class="grid min-h-0 content-start gap-3 bg-slate-950/15 p-3">
 						<div class="flex items-center justify-between gap-2">
 							<p class="text-sm font-semibold text-cyan-100">{match.label}</p>
-							<p class="text-xs font-semibold text-slate-500">
+							<p class="shrink-0 text-xs font-semibold text-slate-500">
 								{matchBestOf(match) === null ? '규칙 미설정' : `BO${matchBestOf(match)}`}
 							</p>
 						</div>
@@ -446,7 +431,7 @@
 							<p class="text-sm font-semibold text-slate-100">진행할 경기</p>
 							<span class="text-xs font-semibold text-emerald-200">대진 확정</span>
 						</div>
-						<div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+						<div class="grid gap-2 sm:grid-cols-2">
 							{#each orderedMatches as match (match.id)}
 								{@const leftTeam = teamById(match.leftTeamId)}
 								{@const rightTeam = teamById(match.rightTeamId)}
@@ -499,23 +484,12 @@
 
 			<div class="border-t border-[var(--color-app-border-muted)] p-3">
 				{#if snapshot.bracket.locked}
-					<div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+					<div>
 						<div
 							class="flex min-h-12 items-center justify-center gap-2 border border-emerald-300/25 bg-emerald-400/8 px-4 text-sm font-semibold text-emerald-100"
 						>
 							<Check size={16} aria-hidden="true" /> 대진 확정됨
 						</div>
-						{#if canRecoverBracket}
-							<button
-								type="button"
-								class="inline-flex min-h-12 items-center justify-center gap-2 border border-amber-300/35 bg-amber-400/10 px-4 text-sm font-semibold text-amber-100 hover:bg-amber-400/16"
-								onclick={() => {
-									unlockDialogOpen = true;
-								}}
-							>
-								<RotateCcw size={16} aria-hidden="true" /> 대진 다시 편성
-							</button>
-						{/if}
 					</div>
 				{:else}
 					<button
@@ -535,39 +509,3 @@
 		</section>
 	</div>
 </div>
-
-<Dialog.Root bind:open={unlockDialogOpen}>
-	<Dialog.Portal>
-		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
-		<Dialog.Content
-			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-4 shadow-2xl shadow-black/50 outline-none"
-		>
-			<Dialog.Title class="text-sm font-semibold text-slate-50">대진 다시 편성</Dialog.Title>
-			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
-				대진 확정을 해제하고 브래킷 설정 단계로 돌아갑니다. 라인업, 게임 또는 결과가 기록된
-				경기가 있으면 서버가 이 작업을 거부합니다.
-			</Dialog.Description>
-			<div class="mt-4 flex justify-end gap-2">
-				<Dialog.Close
-					disabled={busy}
-					class="inline-flex h-8 items-center px-3 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
-				>
-					취소
-				</Dialog.Close>
-				<button
-					type="button"
-					disabled={!canRecoverBracket}
-					class="inline-flex h-8 items-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 enabled:hover:bg-amber-400/16 disabled:cursor-not-allowed disabled:opacity-35"
-					onclick={() => void unlockBracket()}
-				>
-					{#if busy}
-						<RotateCcw size={14} class="animate-spin" aria-hidden="true" />
-					{:else}
-						<RotateCcw size={14} aria-hidden="true" />
-					{/if}
-					다시 편성하기
-				</button>
-			</div>
-		</Dialog.Content>
-	</Dialog.Portal>
-</Dialog.Root>

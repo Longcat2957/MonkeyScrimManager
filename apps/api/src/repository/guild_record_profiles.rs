@@ -210,6 +210,7 @@ pub struct GuildRecordProfileMember {
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub main_lane: Option<Lane>,
+    pub public_profile_enabled: bool,
     pub matched_by_riot_id: bool,
 }
 
@@ -269,6 +270,7 @@ where
                     member.display_name,
                     app_user.avatar_hash,
                     member.main_lane,
+                    COALESCE(profile_privacy.public_profile_enabled, TRUE) AS public_profile_enabled,
                     NOT $4
                     AND lower(member.display_name) <> lower($3)
                     AND EXISTS (
@@ -286,6 +288,8 @@ where
              JOIN users AS app_user
                ON app_user.user_id = member.user_id
               AND app_user.deleted_at IS NULL
+             LEFT JOIN user_privacy_settings AS profile_privacy
+               ON profile_privacy.user_id = member.user_id
              WHERE (SELECT has_access FROM viewer)
                AND member.guild_id = $2
                AND member.status = 'ACTIVE'
@@ -317,6 +321,7 @@ where
                 candidate.display_name,
                 candidate.avatar_hash,
                 candidate.main_lane,
+                candidate.public_profile_enabled,
                 candidate.matched_by_riot_id
          FROM viewer
          LEFT JOIN candidates AS candidate ON true",
@@ -1566,6 +1571,7 @@ struct GuildRecordProfileMemberRow {
     display_name: Option<String>,
     avatar_hash: Option<String>,
     main_lane: Option<Lane>,
+    public_profile_enabled: Option<bool>,
     matched_by_riot_id: Option<bool>,
 }
 
@@ -1584,6 +1590,11 @@ impl GuildRecordProfileMemberRow {
                 GuildRecordProfileRepositoryError::StoredInvariantViolation,
             ));
         };
+        let Some(public_profile_enabled) = self.public_profile_enabled else {
+            return Some(Err(
+                GuildRecordProfileRepositoryError::StoredInvariantViolation,
+            ));
+        };
         Some(
             UserId::parse(user_id)
                 .map_err(|_| GuildRecordProfileRepositoryError::StoredInvariantViolation)
@@ -1592,6 +1603,7 @@ impl GuildRecordProfileMemberRow {
                     display_name,
                     avatar_hash: self.avatar_hash,
                     main_lane: self.main_lane,
+                    public_profile_enabled,
                     matched_by_riot_id,
                 }),
         )
@@ -1636,6 +1648,7 @@ mod tests {
             display_name: display_name.map(str::to_owned),
             avatar_hash: None,
             main_lane: None,
+            public_profile_enabled: user_id.map(|_| true),
             matched_by_riot_id: user_id.map(|_| false),
         }
     }

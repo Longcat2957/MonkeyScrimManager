@@ -98,7 +98,6 @@ WS는 위 다섯 편집 workspace에만 사용한다.
 | SeriesResultLedgerBoard                 | nullable `durationSeconds`, `-` 표시 adapter            |
 | AuctionTournamentCaptainPointSetupBoard | create tournament callback                              |
 | AuctionMatchStartingLineupInputBoard    | match ID/revision, role/lock callback                   |
-| AuctionTournamentOverviewBoard          | operator checkpoint revert callback                     |
 | GuildMemberManagementPanel              | nullable `mainLane`, `미설정` adapter                   |
 | OperationsQueueBoard                    | `RESULT` 작업을 pick-ban 입력 route로 연결              |
 | Admin page handler                      | silent return 대신 typed 409                            |
@@ -775,6 +774,12 @@ Event:
 - recruitment topic의 revision은 `recruitments.revision`이고, entry-draft topic의 revision은
   `recruitment_entry_drafts.revision`이다. 같은 recruitment ID를 공유해도 event revision을 교차 비교하지
   않는다.
+- 경매에서는 OPEN/CLOSED 모집의 operator roster invalidate에 `auction-recruitment` topic을 사용한다.
+  `BIDDING` 상태의 active operator는 `auction-tournament` topic도 구독한다. 입찰 command는 HTTP
+  snapshot의 `expectedRevision`, CSRF, idempotency key, transaction으로 확정하고, WebSocket은 invalidate와
+  GET refetch만 담당한다.
+- 경매 준비, `BRACKET_SETUP` 이후의 브래킷, match 작업대와 일반 길드 멤버는 `auction-tournament`을
+  구독하지 않는다. `auction-match`는 outbox namespace로만 예약되어 있으며 `/ws` subscribe 대상이 아니다.
 
 Frontend state:
 

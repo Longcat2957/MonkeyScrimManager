@@ -92,6 +92,46 @@ const auctionTournamentCancelResult = {
 	reversedGameCount: 2
 };
 
+const auctionRecruitmentForceCancelResult = {
+	recruitmentId: auctionRecruitmentId,
+	recruitmentStatus: 'CANCELLED' as const,
+	recruitmentRevision: 8,
+	tournamentId: auctionTournamentId,
+	tournamentStatus: 'CANCELLED' as const,
+	tournamentRevision: 10,
+	reversedGameCount: 2
+};
+
+const auctionTournamentList = {
+	tournaments: [
+		{
+			id: auctionTournamentId,
+			displayNumber: 216,
+			title: '20인 경매 내전 #216',
+			format: 'TWENTY_PERSON' as const,
+			participantCount: 20 as const,
+			teamCount: 4 as const,
+			status: 'IN_GAME' as const,
+			revision: 9,
+			activeMemberCount: 20,
+			bidMemberCount: 20,
+			incompleteMatchCount: 2,
+			nextMatch: {
+				id: '01900000-0000-7000-8000-000000000104',
+				label: '준결승 A',
+				matchKey: 'SEMIFINAL_A' as const,
+				status: 'READY' as const,
+				confirmedGameCount: 0
+			},
+			championTeam: null,
+			updatedAt: '2026-07-15T10:00:00Z',
+			endedAt: null,
+			href: `/g/${guildId}/auction/matches/01900000-0000-7000-8000-000000000104`
+		}
+	],
+	nextCursor: null
+};
+
 const setupData: SetupGuildData = {
 	guild: {
 		id: guildId,
@@ -264,9 +304,7 @@ describe('MonkeyBotApiClient', () => {
 	});
 
 	it('creates an auction recruitment with the bot actor and interaction idempotency key', async () => {
-		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-			envelope(auctionSnapshot)
-		);
+		const fetchMock = vi.fn(async () => envelope(auctionSnapshot));
 		const client = createClient(fetchMock);
 
 		await expect(
@@ -298,9 +336,7 @@ describe('MonkeyBotApiClient', () => {
 	});
 
 	it('joins and leaves an auction recruitment with the canonical member routes', async () => {
-		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-			envelope(auctionSnapshot)
-		);
+		const fetchMock = vi.fn(async () => envelope(auctionSnapshot));
 		const client = createClient(fetchMock);
 		const context = { idempotencyKey: '400000000000000008' };
 
@@ -335,6 +371,88 @@ describe('MonkeyBotApiClient', () => {
 			const headers = new Headers((init as RequestInit).headers);
 			expect(headers.get('idempotency-key')).toBe(context.idempotencyKey);
 		}
+	});
+
+	it('force-adds a selected guild member through the canonical auction member route', async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+			void _input;
+			void _init;
+			return envelope(auctionSnapshot);
+		});
+		const client = createClient(fetchMock);
+		const context = { idempotencyKey: '400000000000000010' };
+		const member = {
+			id: '100000000000000002',
+			globalDisplayName: 'Target Player',
+			displayName: 'Target Player (MSM)',
+			avatarHash: null,
+			roleIds: ['300000000000000002']
+		};
+
+		await expect(
+			client.forceAddAuctionRecruitmentMember(
+				guildId,
+				auctionRecruitmentId,
+				{ actor, member, declaredLane: 'JUNGLE' },
+				context
+			)
+		).resolves.toEqual(auctionSnapshot);
+
+		const [input, init] = fetchMock.mock.calls[0] ?? [];
+		expect(String(input)).toBe(
+			`http://api.local:8080/api/guilds/${guildId}/auction-recruitments/${auctionRecruitmentId}/members`
+		);
+		expect((init as RequestInit).method).toBe('POST');
+		expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+			actor,
+			member,
+			declaredLane: 'JUNGLE'
+		});
+	});
+
+	it('lists auction tournaments with service authentication and query filters', async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+			void _input;
+			void _init;
+			return envelope(auctionTournamentList);
+		});
+		const client = createClient(fetchMock);
+		const seasonId = '01900000-0000-7000-8000-000000000201';
+
+		await expect(
+			client.listAuctionTournaments(guildId, { state: 'active', seasonId, limit: 5 })
+		).resolves.toEqual(auctionTournamentList);
+
+		const [input, init] = fetchMock.mock.calls[0] ?? [];
+		expect(String(input)).toBe(
+			`http://api.local:8080/api/guilds/${guildId}/auction-tournaments?state=active&seasonId=${seasonId}&limit=5`
+		);
+		const headers = new Headers((init as RequestInit).headers);
+		expect(headers.get('authorization')).toBe(`Bearer ${serviceToken}`);
+		expect((init as RequestInit).method).toBe('GET');
+	});
+
+	it('force-cancels an auction recruitment with an idempotent service request', async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+			void _input;
+			void _init;
+			return envelope(auctionRecruitmentForceCancelResult);
+		});
+		const client = createClient(fetchMock);
+		const context = { idempotencyKey: '400000000000000011' };
+
+		await expect(
+			client.forceCancelAuctionRecruitment(guildId, auctionRecruitmentId, { actor }, context)
+		).resolves.toEqual(auctionRecruitmentForceCancelResult);
+
+		const [input, init] = fetchMock.mock.calls[0] ?? [];
+		expect(String(input)).toBe(
+			`http://api.local:8080/api/guilds/${guildId}/auction-recruitments/${auctionRecruitmentId}/force-cancel`
+		);
+		expect((init as RequestInit).method).toBe('POST');
+		expect(JSON.parse(String((init as RequestInit).body))).toEqual({ actor });
+		const headers = new Headers((init as RequestInit).headers);
+		expect(headers.get('idempotency-key')).toBe(context.idempotencyKey);
 	});
 
 	it('reads the cancellation revision before cancelling an auction tournament', async () => {
@@ -539,6 +657,31 @@ describe('MonkeyBotApiClient', () => {
 			expect(headers.get('content-type')).toBe('application/json');
 			expect(headers.has('idempotency-key')).toBe(false);
 		}
+	});
+
+	it('reports durable bot heartbeats with the service bearer and strict contract', async () => {
+		const fetchMock = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return envelope({ accepted: true, lastHeartbeatAt: '2026-07-15T12:00:00Z' });
+		});
+		const client = createClient(fetchMock);
+
+		await expect(
+			client.heartbeat({ instanceId: 'bot-main-1', version: '0.1.0', commitSha: 'abc1234' })
+		).resolves.toEqual({ accepted: true, lastHeartbeatAt: '2026-07-15T12:00:00Z' });
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const [input, init] = fetchMock.mock.calls[0]!;
+		expect(String(input)).toBe('http://api.local:8080/internal/heartbeat');
+		expect((init as RequestInit).method).toBe('POST');
+		expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+			instanceId: 'bot-main-1',
+			version: '0.1.0',
+			commitSha: 'abc1234'
+		});
+		const headers = new Headers((init as RequestInit).headers);
+		expect(headers.get('authorization')).toBe(`Bearer ${serviceToken}`);
+		expect(headers.has('idempotency-key')).toBe(false);
 	});
 
 	it('strictly validates Discord catalog request and response limits', async () => {

@@ -148,6 +148,34 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/users/{discordId}/profile:
+    get:
+      operationId: getPublicUserProfile
+      summary: Get the minimal public profile for a Discord identity
+      description: >-
+        Returns only the public display name, canonical Discord ID, active guild count, and
+        season count. Users who disabled publicProfile and nonexistent users are both hidden as
+        not_found. Riot accounts, guild names, roles, MMR, and other profile data are not exposed.
+      parameters:
+        - $ref: '#/components/parameters/DiscordUserId'
+      responses:
+        '200':
+          description: Minimal public user profile.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUserProfileResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/me/privacy:
     get:
       operationId: getCurrentUserPrivacySettings
@@ -469,6 +497,39 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/heartbeat:
+    post:
+      operationId: recordBotHeartbeat
+      summary: Persist a Bot instance heartbeat
+      description: >-
+        Bot service-principal only. Repeated heartbeats for an instance retain its original
+        startedAt while updating version, commitSha, and lastHeartbeatAt.
+      security:
+        - BotBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequest'
+      responses:
+        '200':
+          description: Heartbeat persisted.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
@@ -2283,12 +2344,14 @@ paths:
       operationId: joinGuildAuctionRecruitment
       summary: Join a member to an open auction recruitment
       description: >-
-        Bot requests sync the Discord actor identity and join that actor while capacity remains.
-        Browser requests are limited to a current active operator and select an existing ACTIVE
-        guild member by memberId. The target is an opaque stored user identifier and can be a
-        Discord or development-dummy user; browser callers must explicitly choose declaredLane.
-        The backend captures the current-season lane MMR and serializes capacity, duplicate, and
-        lifecycle checks against the canonical roster. A changed bound Discord message queues
+        Bot requests sync the Discord actor identity and self-join when member is omitted. An
+        optional member Discord snapshot selects a target instead; a distinct target requires the
+        actor to hold the configured operator role. Browser requests are limited to a current
+        active operator and select an existing ACTIVE guild member by memberId. The browser target
+        is an opaque stored user identifier and can be a Discord or development-dummy user;
+        browser callers must explicitly choose declaredLane. The backend captures the
+        current-season target lane MMR and serializes capacity, duplicate, and lifecycle checks
+        against the canonical roster. A changed bound Discord message queues
         AUCTION_RECRUITMENT_MESSAGE_UPDATE in the same transaction.
       security:
         - BotBearer: []
@@ -2333,6 +2396,63 @@ paths:
           headers:
             X-Request-ID:
               $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/force-cancel:
+    post:
+      operationId: forceCancelGuildAuctionRecruitment
+      summary: Force-cancel an auction recruitment from the Bot workflow
+      description: >-
+        Bot service-principal, active-operator recovery command. OPEN and CLOSED recruitments are
+        cancelled while participant and setup history is retained. A CONVERTED recruitment delegates
+        to the linked tournament cancellation transaction: BIDDING, BRACKET_SETUP, and IN_GAME are
+        eligible; confirmed games are reversed newest first only when each MMR ledger is still the
+        global history tail. A later MMR mutation rejects the whole command rather than partially
+        cancelling. Immutable bid, action, point, and game history is never deleted. This is not a
+        browser lifecycle action or a Discord recruitment-card component action.
+      security:
+        - BotBearer: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActorRequest'
+      responses:
+        '200':
+          description: >-
+            Cancelled recruitment, linked tournament state when applicable, or an identical
+            interaction replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentForceCancelResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes invalid_recruitment_state, auction_tournament_cancel_unavailable, or
+            auction_tournament_cancel_mmr_history_advanced when a later MMR mutation prevents a
+            safe rollback.
           content:
             application/json:
               schema:
@@ -2401,12 +2521,17 @@ paths:
       description: >-
         Lists the requested tournament state ordered by updatedAt and opaque id descending. Active
         selects BIDDING, BRACKET_SETUP, and IN_GAME; completed selects COMPLETED and CANCELLED.
-        A non-null nextCursor continues after the last returned row.
+        seasonId optionally restricts results to one canonical season UUID. Browser session
+        requests require an ACTIVE guild member; BotBearer requests use the same canonical
+        projection without a browser viewer session. A non-null nextCursor continues after the
+        last returned row.
       security:
+        - BotBearer: []
         - SessionCookie: []
       parameters:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/ActiveCompletedState'
+        - $ref: '#/components/parameters/AuctionTournamentSeasonId'
         - $ref: '#/components/parameters/PageCursor'
         - $ref: '#/components/parameters/PageLimit'
       responses:
@@ -2559,8 +2684,9 @@ paths:
       summary: Get an auction tournament bracket aggregate
       description: >-
         Returns the authoritative bracket slots, created matches, score summary, and viewer
-        permissions. Any active guild member can read the aggregate. Only an active operator can
-        edit an unlocked BRACKET_SETUP tournament.
+        permissions. Any active guild member can read the aggregate after the bidding draft is
+        complete. BIDDING returns 409 auction_tournament_bracket_unavailable. Only an active
+        operator can edit an unlocked BRACKET_SETUP tournament.
       security:
         - SessionCookie: []
       parameters:
@@ -2580,6 +2706,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -2641,7 +2769,10 @@ paths:
       description: >-
         CANCELLED tournaments remain readable as an archive. A cancellation can occur before a
         bracket exists, so its matches may be empty; any prior confirmed games have been reversed
-        and the response never grants result-reversal permission for the cancelled state.
+        and the response never grants result-reversal or bracket-recovery permission for the
+        cancelled state. An IN_GAME result grants canRecoverBracket only when a locked bracket has
+        generated matches and no game or game-input artifact exists; recovery still uses the
+        existing bracket command endpoint.
       security:
         - SessionCookie: []
       parameters:
@@ -2959,7 +3090,9 @@ paths:
       description: >-
         Browser-only active-operator command. The exact locked ten-player lineup defines pick map
         keys and MMR lanes. The server validates the next set number, per-game champion uniqueness,
-        hard fearless history within the same match, and terminal best-of score atomically.
+        hard fearless history within the same match, and terminal best-of score atomically. For a
+        TWENTY_PERSON SEMIFINAL_A or SEMIFINAL_B, both semifinal lineups must be locked first or
+        the server returns 409 auction_match_semifinal_lineups_incomplete.
       security:
         - SessionCookie: []
           CsrfHeader: []
@@ -3100,8 +3233,10 @@ paths:
         an active member of the same guild; an inaccessible guild and a missing target both return
         404. Riot ID resolution and the returned riotAccounts array disclose the Discord-to-Riot
         linkage only when the target has show_riot_ids enabled. Public Riot records search is
-        independent from this privacy setting. The response never contains a Discord user ID or
-        Riot PUUID.
+        independent from this privacy setting. member.profileHref is a nullable canonical
+        /users/{discordId} route only when the resolved Discord user enabled publicProfile;
+        otherwise it is null. The response never contains a standalone Discord user ID or Riot
+        PUUID.
       security:
         - SessionCookie: []
       parameters:
@@ -3126,6 +3261,7 @@ paths:
                     displayName: Longcat
                     avatarUrl: https://cdn.discordapp.com/avatars/1525847677542207548/abcdef.webp?size=128
                     mainLane: MID
+                    profileHref: /users/1525847677542207548
                   championPreferences:
                     TOP: [Ornn]
                     JUNGLE: []
@@ -3196,6 +3332,7 @@ paths:
                         displayName: Longcat
                         avatarUrl: null
                         mainLane: MID
+                        profileHref: /users/1525847677542207548
                       championPreferences:
                         TOP: []
                         JUNGLE: []
@@ -4622,6 +4759,34 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/admin/status:
+    get:
+      operationId: getServiceAdminStatus
+      summary: Get the current service health aggregate
+      description: >-
+        Service-admin-only status snapshot for API, PostgreSQL, Bot heartbeat, and Valkey. Bot
+        heartbeat is normal through 90 seconds, delayed through five minutes, and down when older
+        or absent; lastHealthyAt retains the last persisted heartbeat even after it becomes stale.
+      security:
+        - SessionCookie: []
+      responses:
+        '200':
+          description: Current service status snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /healthz:
     get:
       operationId: getLiveness
@@ -4686,6 +4851,13 @@ components:
       in: path
       required: true
       description: Discord guild snowflake encoded as a JSON/URL string.
+      schema:
+        $ref: '#/components/schemas/DiscordSnowflake'
+    DiscordUserId:
+      name: discordId
+      in: path
+      required: true
+      description: Canonical Discord user snowflake. Display names are never identity keys.
       schema:
         $ref: '#/components/schemas/DiscordSnowflake'
     RecruitmentId:
@@ -4823,6 +4995,14 @@ components:
       schema:
         type: string
         enum: [active, completed]
+    AuctionTournamentSeasonId:
+      name: seasonId
+      in: query
+      required: false
+      description: Optional canonical season UUID that restricts the auction tournament list.
+      schema:
+        type: string
+        format: uuid
     PageCursor:
       name: cursor
       in: query
@@ -5436,11 +5616,73 @@ components:
       type: object
       additionalProperties: false
       required: [actor]
+      description: >-
+        Bot roster command. Omit member for actor self-service participation. Supply a distinct
+        member Discord snapshot only when actor is a configured operator; declaredLane applies to
+        the actual participant and otherwise falls back to that participant's stored guild main
+        lane.
       properties:
         actor:
           $ref: '#/components/schemas/DiscordActor'
+        member:
+          $ref: '#/components/schemas/DiscordActor'
         declaredLane:
           $ref: '#/components/schemas/Lane'
+    AuctionRecruitmentForceCancelResult:
+      type: object
+      additionalProperties: false
+      required:
+        - recruitmentId
+        - recruitmentStatus
+        - recruitmentRevision
+        - tournamentId
+        - tournamentStatus
+        - tournamentRevision
+        - reversedGameCount
+      description: >-
+        tournamentId, tournamentStatus, and tournamentRevision are all null when only an OPEN or
+        CLOSED recruitment was cancelled; otherwise all three identify the cancelled linked
+        tournament. reversedGameCount is zero for a recruitment-only cancellation.
+      properties:
+        recruitmentId:
+          type: string
+          format: uuid
+        recruitmentStatus:
+          type: string
+          const: CANCELLED
+        recruitmentRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        tournamentId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        tournamentStatus:
+          oneOf:
+            - type: string
+              const: CANCELLED
+            - type: 'null'
+        tournamentRevision:
+          oneOf:
+            - type: integer
+              format: int64
+              minimum: 0
+            - type: 'null'
+        reversedGameCount:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionRecruitmentForceCancelResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionRecruitmentForceCancelResult'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     WebAddAuctionRecruitmentMemberRequest:
       type: object
       additionalProperties: false
@@ -6770,6 +7012,132 @@ components:
           $ref: '#/components/schemas/LogoutData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
+    PublicUserProfileData:
+      type: object
+      additionalProperties: false
+      required: [discordId, displayName, activeGuildCount, seasonCount]
+      properties:
+        discordId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        activeGuildCount:
+          type: integer
+          format: int64
+          minimum: 0
+        seasonCount:
+          type: integer
+          format: int64
+          minimum: 0
+    PublicUserProfileResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/PublicUserProfileData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    HeartbeatRequest:
+      type: object
+      additionalProperties: false
+      required: [instanceId, version, commitSha]
+      properties:
+        instanceId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        version:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '^[!-~]+$'
+        commitSha:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 128
+              pattern: '^[A-Za-z0-9._-]+$'
+            - type: 'null'
+    HeartbeatData:
+      type: object
+      additionalProperties: false
+      required: [accepted, lastHeartbeatAt]
+      properties:
+        accepted:
+          type: boolean
+          const: true
+        lastHeartbeatAt:
+          type: string
+          format: date-time
+    HeartbeatResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/HeartbeatData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    ServiceStatusKey:
+      type: string
+      enum: [API, POSTGRESQL, BOT_HEARTBEAT, VALKEY]
+    ServiceHealth:
+      type: string
+      enum: [normal, delayed, down]
+    ServiceStatusItem:
+      type: object
+      additionalProperties: false
+      required: [key, status, latencyMs, value, lastHealthyAt, issue]
+      properties:
+        key:
+          $ref: '#/components/schemas/ServiceStatusKey'
+        status:
+          $ref: '#/components/schemas/ServiceHealth'
+        latencyMs:
+          oneOf:
+            - type: integer
+              format: int64
+              minimum: 0
+            - type: 'null'
+        value:
+          type: string
+          minLength: 1
+        lastHealthyAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        issue:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+    ServiceStatusData:
+      type: object
+      additionalProperties: false
+      required: [checkedAt, services]
+      properties:
+        checkedAt:
+          type: string
+          format: date-time
+        services:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/ServiceStatusItem'
+    ServiceStatusResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ServiceStatusData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     MeData:
       type: object
       additionalProperties: false
@@ -6948,7 +7316,7 @@ components:
     GuildRecordsProfileMember:
       type: object
       additionalProperties: false
-      required: [displayName, avatarUrl, mainLane]
+      required: [displayName, avatarUrl, mainLane, profileHref]
       properties:
         displayName:
           type: string
@@ -6961,6 +7329,14 @@ components:
         mainLane:
           oneOf:
             - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        profileHref:
+          description: >-
+            Canonical public-profile route for a Discord identity with publicProfile enabled;
+            null for private or DUMMY identities. Clients must use this value as-is.
+          oneOf:
+            - type: string
+              pattern: '^/users/[1-9][0-9]{0,19}$'
             - type: 'null'
     GuildRecordsVisibleRiotAccount:
       type: object
@@ -9341,7 +9717,16 @@ components:
       type: object
       additionalProperties: false
       required:
-        [teamMemberId, userId, displayName, declaredLane, mmrAtAcquisition, snapshotOrigin, acquiredVia, rosterSlot]
+        [
+          teamMemberId,
+          userId,
+          displayName,
+          declaredLane,
+          mmrAtAcquisition,
+          snapshotOrigin,
+          acquiredVia,
+          rosterSlot
+        ]
       properties:
         teamMemberId:
           type: string
@@ -9403,7 +9788,17 @@ components:
     AuctionTournamentDraftCandidate:
       type: object
       additionalProperties: false
-      required: [userId, displayName, declaredLane, mmrAtStart, snapshotOrigin, queuePosition, state, drawCount]
+      required:
+        [
+          userId,
+          displayName,
+          declaredLane,
+          mmrAtStart,
+          snapshotOrigin,
+          queuePosition,
+          state,
+          drawCount
+        ]
       properties:
         userId:
           $ref: '#/components/schemas/UserIdentifier'
@@ -9431,10 +9826,170 @@ components:
         drawCount:
           type: integer
           minimum: 0
+    AuctionTournamentCandidateRecordSummary:
+      type: object
+      additionalProperties: false
+      required: [games, wins, losses]
+      properties:
+        games:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+    AuctionTournamentCandidateLaneMmr:
+      type: object
+      additionalProperties: false
+      required: [lane, mmr, games, wins]
+      properties:
+        lane:
+          $ref: '#/components/schemas/Lane'
+        mmr:
+          type: number
+        games:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+    AuctionTournamentCandidateChampionRecord:
+      type: object
+      additionalProperties: false
+      required: [championId, games, wins, losses]
+      properties:
+        championId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        games:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+    AuctionTournamentCandidateRecentGame:
+      type: object
+      additionalProperties: false
+      required: [id, playedAt, result, lane, championId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        playedAt:
+          type: string
+          format: date-time
+        result:
+          type: string
+          enum: [WIN, LOSS]
+        lane:
+          $ref: '#/components/schemas/Lane'
+        championId:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 64
+            - type: 'null'
+    AuctionTournamentCurrentTargetRiot:
+      type: object
+      additionalProperties: false
+      required: [games, wins, championIds, refreshedAt]
+      properties:
+        games:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+        championIds:
+          type: array
+          maxItems: 3
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        refreshedAt:
+          type: string
+          format: date-time
+    AuctionTournamentCurrentTargetProfile:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          avatarUrl,
+          profileIconId,
+          riotTier,
+          mainLane,
+          summary,
+          laneMmr,
+          championIds,
+          championRecords,
+          recentGames,
+          riot
+        ]
+      properties:
+        avatarUrl:
+          oneOf:
+            - type: string
+              format: uri
+            - type: 'null'
+        profileIconId:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+        riotTier:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 16
+            - type: 'null'
+        mainLane:
+          oneOf:
+            - $ref: '#/components/schemas/Lane'
+            - type: 'null'
+        summary:
+          $ref: '#/components/schemas/AuctionTournamentCandidateRecordSummary'
+        laneMmr:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AuctionTournamentCandidateLaneMmr'
+        championIds:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        championRecords:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/AuctionTournamentCandidateChampionRecord'
+        recentGames:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/AuctionTournamentCandidateRecentGame'
+        riot:
+          description: >-
+            Cached non-identifying Riot summary for the active target. This never includes a Riot
+            ID, PUUID, or match identifier and does not trigger a provider refresh.
+          oneOf:
+            - $ref: '#/components/schemas/AuctionTournamentCurrentTargetRiot'
+            - type: 'null'
     AuctionTournamentSummary:
       type: object
       additionalProperties: false
-      required: [id, sourceRecruitmentId, displayNumber, title, format, rules, status, revision, href]
+      required:
+        [id, sourceRecruitmentId, displayNumber, title, format, rules, status, revision, href]
       properties:
         id:
           type: string
@@ -9471,15 +10026,31 @@ components:
       properties:
         kind:
           type: string
-          enum: [DRAW_NEXT, MARK_UNSOLD, AWARD_BID, ASSIGN_CURRENT, ASSIGN_UNSOLD, RESTORE_UNSOLD, REVERT_LAST]
+          enum:
+            [
+              DRAW_NEXT,
+              MARK_UNSOLD,
+              AWARD_BID,
+              ASSIGN_CURRENT,
+              ASSIGN_UNSOLD,
+              RESTORE_UNSOLD,
+              REVERT_LAST
+            ]
     AuctionTournamentDraftState:
       type: object
       additionalProperties: false
-      required: [currentTarget, unsold, recentAction]
+      required: [currentTarget, currentTargetProfile, unsold, recentAction]
       properties:
         currentTarget:
           oneOf:
             - $ref: '#/components/schemas/AuctionTournamentDraftCandidate'
+            - type: 'null'
+        currentTargetProfile:
+          description: >-
+            Read-time profile detail for the active target only. It is null when currentTarget is
+            null and never changes the immutable candidate mmrAtStart used for bidding.
+          oneOf:
+            - $ref: '#/components/schemas/AuctionTournamentCurrentTargetProfile'
             - type: 'null'
         unsold:
           type: array
@@ -9714,8 +10285,20 @@ components:
       type: object
       additionalProperties: false
       required:
-        [id, matchKey, bestOf, hardFearless, leftTeamId, rightTeamId, status, revision,
-         leftScore, rightScore, winnerTeamId, lineupsLocked]
+        [
+          id,
+          matchKey,
+          bestOf,
+          hardFearless,
+          leftTeamId,
+          rightTeamId,
+          status,
+          revision,
+          leftScore,
+          rightScore,
+          winnerTeamId,
+          lineupsLocked
+        ]
       properties:
         id:
           type: string
@@ -9950,7 +10533,23 @@ components:
     AuctionMatchSnapshotMatch:
       type: object
       additionalProperties: false
-      required: [id, tournamentId, matchKey, label, bestOf, hardFearless, status, revision, leftTeamId, rightTeamId, leftScore, rightScore, winnerTeamId, lineupsLocked]
+      required:
+        [
+          id,
+          tournamentId,
+          matchKey,
+          label,
+          bestOf,
+          hardFearless,
+          status,
+          revision,
+          leftTeamId,
+          rightTeamId,
+          leftScore,
+          rightScore,
+          winnerTeamId,
+          lineupsLocked
+        ]
       properties:
         id:
           type: string
@@ -10150,7 +10749,22 @@ components:
     AuctionTournamentResultMatch:
       type: object
       additionalProperties: false
-      required: [id, matchKey, bestOf, hardFearless, status, leftTeamId, rightTeamId, leftScore, rightScore, winnerTeamId, lineupsLocked, lineups, games]
+      required:
+        [
+          id,
+          matchKey,
+          bestOf,
+          hardFearless,
+          status,
+          leftTeamId,
+          rightTeamId,
+          leftScore,
+          rightScore,
+          winnerTeamId,
+          lineupsLocked,
+          lineups,
+          games
+        ]
       properties:
         id:
           type: string
@@ -10226,9 +10840,11 @@ components:
     AuctionTournamentResultPermissions:
       type: object
       additionalProperties: false
-      required: [canRevertResults]
+      required: [canRevertResults, canRecoverBracket]
       properties:
         canRevertResults:
+          type: boolean
+        canRecoverBracket:
           type: boolean
     AuctionTournamentResultSnapshot:
       type: object
@@ -10238,7 +10854,8 @@ components:
         tournament:
           type: object
           additionalProperties: false
-          required: [id, title, displayNumber, format, rules, status, revision, championTeamId, href]
+          required:
+            [id, title, displayNumber, format, rules, status, revision, championTeamId, href]
           properties:
             id:
               type: string
@@ -10573,8 +11190,7 @@ components:
           type: integer
           enum: [2, 4]
         status:
-          type: string
-          enum: [BIDDING, BRACKET_SETUP, IN_GAME, COMPLETED]
+          $ref: '#/components/schemas/AuctionTournamentStatus'
         revision:
           type: integer
           format: int64

@@ -1962,9 +1962,10 @@ updated_at        timestamptz NOT NULL
 
 `/internal/heartbeat`가 instance별 row를 upsert한다. `/api/admin/status`의
 normal/delayed/down label은 `last_heartbeat_at`과 현재 시각에서 파생하며 status 문자열을 저장하지
-않는다. Heartbeat는 성공한 Bot 생존 신호만 기록하므로 UI의 `lastNormal`도
-`last_heartbeat_at`에서 표시한다. Main/dev는 database 자체가 분리되므로 environment column으로
-논리 격리하지 않는다.
+않는다. `<=90초`는 normal, `>90초~<=5분`은 delayed, 미수신 또는 `>5분`은 down이다. Heartbeat는
+성공한 Bot 생존 신호만 기록하므로 stale 상태라도 UI의 `lastHealthyAt`은 마지막
+`last_heartbeat_at`을 보존한다. Main/dev는 database 자체가 분리되므로 environment column으로 논리
+격리하지 않는다.
 
 ## Revision owner
 

@@ -17,6 +17,8 @@ pub mod outbox;
 pub mod riot;
 pub mod riot_records;
 pub mod search_suggestions;
+pub mod service_status;
+pub mod user_profiles;
 pub mod workflow;
 
 use crate::domain::GuildId;

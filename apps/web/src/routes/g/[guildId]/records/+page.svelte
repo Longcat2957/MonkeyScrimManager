@@ -328,26 +328,28 @@
 						</ul>
 					{/if}
 				</div>
-				<label class="season-control">
-					<span>시즌</span>
-					<select
-						value={profile.selectedSeasonId ?? ''}
-						onchange={seasonChanged}
-						aria-label="내전 시즌"
-						disabled={profile.seasons.length === 0 || isNavigating}
-					>
-						{#if profile.seasons.length === 0}
-							<option value="">시즌 없음</option>
-						{:else}
-							{#if !hasActiveSeason}
-								<option value="">활성 시즌 없음</option>
+				<div class="profile-actions">
+					<label class="season-control">
+						<span>시즌</span>
+						<select
+							value={profile.selectedSeasonId ?? ''}
+							onchange={seasonChanged}
+							aria-label="내전 시즌"
+							disabled={profile.seasons.length === 0 || isNavigating}
+						>
+							{#if profile.seasons.length === 0}
+								<option value="">시즌 없음</option>
+							{:else}
+								{#if !hasActiveSeason}
+									<option value="">활성 시즌 없음</option>
+								{/if}
+								{#each profile.seasons as season (season.id)}
+									<option value={season.id}>{season.name}</option>
+								{/each}
 							{/if}
-							{#each profile.seasons as season (season.id)}
-								<option value={season.id}>{season.name}</option>
-							{/each}
-						{/if}
-					</select>
-				</label>
+						</select>
+					</label>
+				</div>
 			</section>
 
 			<section class="preferred-champions" aria-labelledby="preferred-champions-title">
@@ -873,10 +875,17 @@
 		font-weight: 600;
 	}
 	.profile-copy h1 {
+		min-width: 0;
 		margin: 5px 0;
 		color: #f8fafc;
 		font-size: 27px;
 		line-height: 1.1;
+		overflow-wrap: anywhere;
+	}
+	.profile-actions {
+		display: flex;
+		align-items: center;
+		gap: 12px;
 	}
 	.linked-riot-accounts {
 		display: flex;
@@ -920,7 +929,8 @@
 		font-size: 9px;
 	}
 	.season-control {
-		display: grid;
+		display: inline-flex;
+		align-items: center;
 		gap: 6px;
 		color: #64748b;
 		font-size: 11px;
@@ -1729,8 +1739,9 @@
 			width: 72px;
 			height: 72px;
 		}
-		.season-control {
+		.profile-actions {
 			grid-column: 1 / -1;
+			justify-content: flex-end;
 		}
 		.preferred-lane-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));

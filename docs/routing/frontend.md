@@ -53,12 +53,17 @@ Workflow root는 API의 UUID `id`와 사람용 `displayNumber`를 구분한다. 
 /g/[guildId]/recruitments/[id]/entry       entry draft autosave + conflict notice
 /g/[guildId]/series/[id]/pick-ban          pick/ban autosave + game result command guard
 /g/[guildId]/auction/recruitments/[id]      operator roster invalidate refresh
+/g/[guildId]/auction/tournaments/[id]/draft operator bid invalidate refresh
 ```
 
-경매 준비 설정, 입찰, 브래킷, 경기 작업대는 현재 WebSocket을 열지 않는다. 해당 route는 authoritative HTTP
-snapshot, `expectedRevision`, CSRF, idempotency key로 충돌을 처리하고 `409`이면 최신 snapshot을 다시 읽는다.
-경매 모집 상세의 operator roster refresh만 `guild:{guildId}:auction-recruitment:{id}` invalidate를 구독한다.
-이는 background HTTP refresh 전용이며 local draft나 `RealtimeEditStateBar`를 표시하는 동시 편집 화면이 아니다.
+경매 입찰은 `BIDDING` 상태의 `canManageDraft` active operator만
+`guild:{guildId}:auction-tournament:{id}` invalidate를 구독한다. mutation은 authoritative HTTP snapshot,
+`expectedRevision`, CSRF, idempotency key로 확정하고, WebSocket은 더 높은 revision, reconnect,
+`resync_required` 후 GET refetch만 수행한다. 일반 길드 멤버는 socket을 열지 않는다.
+
+경매 준비 설정, `BRACKET_SETUP` 이후의 브래킷, 경기 작업대는 WebSocket을 열지 않고 `409`이면 최신 snapshot을
+다시 읽는다. 경매 모집 상세의 operator roster refresh는
+`guild:{guildId}:auction-recruitment:{id}` invalidate를 구독한다.
 
 일반 내전 엔트리 편성은 하나의 recruitment ID를 쓰더라도 두 revision domain을 구분한다. 제한적 realtime이
 활성화되면 `guild:{guildId}:recruitment:{id}`는 `snapshot.recruitment.revision`으로,
@@ -446,6 +451,11 @@ WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 
 - 상단에는 경매 모집과 진행 중 경매 토너먼트, 하단에는 완료된 경매를 표시한다.
 - 팀장 설정, 입찰 진행, 브래킷 진행, 결과 입력, 결과 확정 상태를 구분한다.
+- `IN_GAME` row는 현재 작업을 여는 primary link와 read-only `토너먼트 현황` link를 함께 제공한다.
+  진행 현황은 active guild member가 같은 브래킷 화면에서 경기 점수·승자·팀 구성을 확인하는 read-only route다.
+- actionable 모집, 진행 중 tournament, 완료/보관 tournament는 각각 독립 `nextCursor`를 가진다. 각
+  section의 `더 불러오기`는 해당 cursor만 이어 읽고 ID 기준으로 중복을 제거한다. 진행 중 section은 모집과
+  tournament cursor가 모두 남아 있으면 둘을 함께 읽은 뒤 같은 작업 목록으로 병합한다.
 - ACTIVE guild member가 10인 또는 20인 형식, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
   dialog를 제공한다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
   목록을 낙관적으로 추가하지 않고, `201` snapshot의 `recruitment.href`로 OPEN 모집 상세 화면에 이동한다.
@@ -536,16 +546,26 @@ WebSocket: 사용하지 않는다. 저장과 생성 성공 뒤에는 response의
 목적:
 
 - `BIDDING` 단계의 경매 토너먼트 드래프트.
-- 후보 draw, 낙찰, 수동 배치, 유찰, 유찰 복구와 마지막 입찰/배치 단계 되돌리기를 제공한다.
+- 후보 draw, 낙찰, 유찰, 유찰 복구와 마지막 입찰/드래그 배치 단계 되돌리기를 제공한다.
+- 현재 매물 기본 화면은 프로필, Riot tier, 모집 시점 MMR, 해당 tournament season의 내전 요약을 보여준다.
+  `상세보기`는 라인별 MMR, 확정 내전의 주력 챔피언·최근 게임, 신청 라인의 선호 챔피언, cached Riot 요약을
+  기존 정보 영역으로 확장한다. Riot cache가 비어 있으면 해당 영역만 빈 상태로 유지하며 provider refresh는
+  발생시키지 않는다. 상세 조회값은 입찰 MMR을 대체하지 않는다.
 - 모든 팀 roster가 채워지면 server 상태가 `BRACKET_SETUP`으로 전환된다. Web은 local count로 다음 단계를
   추론하지 않고 다음 snapshot의 status와 permissions를 따른다.
+- `BIDDING` 동안에는 브래킷으로 이동하는 control을 노출하지 않는다. 직접
+  `/g/[guildId]/auction/tournaments/[id]/bracket`에 접근해도 backend의 lifecycle `409`을 받아 draft로
+  되돌린다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/auction-tournaments/:id`
 - `POST /api/guilds/:guildId/auction-tournaments/:id/commands`
 
-WebSocket: 사용하지 않는다. command 성공과 `409` 충돌 복구 모두 tournament snapshot을 다시 적용한다.
+WebSocket: `BIDDING` 상태의 `permissions.canManageDraft=true` active operator만
+`guild:{guildId}:auction-tournament:{id}`를 구독한다. command는 HTTP로 확정하며, 더 높은 revision invalidate,
+reconnect, `resync_required`에서는 GET snapshot을 다시 적용한다. 일반 guild member와 이후 단계는 socket을
+열지 않는다.
 
 ### `/g/[guildId]/auction/tournaments/[id]/bracket`
 
@@ -558,9 +578,16 @@ WebSocket: 사용하지 않는다. command 성공과 `409` 충돌 복구 모두 
 - `BRACKET_SETUP` 단계에서 tournament 팀을 slot에 배치하고 bracket을 확정한다.
 - 10인은 결승 slot 두 개만, 20인은 두 준결승 slot 네 개를 표시한다. match의 BO는 saved rules에서 읽으며
   화면이 BO3을 기본값으로 만들거나 바꾸지 않는다.
-- lock 뒤에는 현재 가능한 canonical match card를 `/g/[guildId]/auction/matches/[matchId]`로 연다.
-  라인업·픽밴·세트 결과는 이 route에 넣지 않는다.
-- 브래킷에는 결과 입력 탭이나 page-local 결과 board를 두지 않는다.
+- 10인은 lock 뒤 곧바로 결승 canonical match card를
+  `/g/[guildId]/auction/matches/[matchId]`로 연다.
+- 20인은 lock 뒤 중앙 준결승 라인업 단계에서 네 팀, 20명의 lane을 함께 편성한다. 두 준결승의
+  10인 lineup이 모두 lock되기 전에는 어느 준결승 match의 픽밴·세트 결과 작업대로도 진행하지 않는다.
+- 브래킷 route에는 라인업·픽밴·세트 결과 입력 board를 두지 않는다.
+- `permissions.canRecoverBracket=true`인 active operator에게만 `대진 확정 해제` 확인 control을 보인다.
+  이 command는 결과/픽밴 artifact가 전혀 없을 때만 생성 match를 취소 이력으로 남기고 `BRACKET_SETUP`
+  편집 상태로 되돌린다. client는 eligibility를 추정하거나 우회하지 않는다.
+- `IN_GAME`, `COMPLETED`, `CANCELLED` 상태로 직접 접근하면 `/result`로 redirect한다. 이 route는
+  `BRACKET_SETUP` 편집 단계에만 남긴다.
 
 Backend 데이터:
 
@@ -568,6 +595,31 @@ Backend 데이터:
 - `POST /api/guilds/:guildId/auction-tournaments/:id/bracket/commands`
 
 WebSocket: 사용하지 않는다. bracket command 성공과 `409` 충돌 복구는 bracket snapshot을 다시 적용한다.
+
+### `/g/[guildId]/auction/tournaments/[id]/lineup`
+
+파일:
+
+- `apps/web/src/routes/g/[guildId]/auction/tournaments/[id]/lineup/+page.svelte`
+
+목적:
+
+- lock된 20인 브래킷의 `SEMIFINAL_A`, `SEMIFINAL_B` match snapshot을 함께 읽어 기존 경기 라인업 보드 두 개로
+  네 팀, 20명의 lane을 한 단계에서 편성한다.
+- 각 lineup mutation은 해당 match의 revision과 독립 idempotency key를 사용한다. 한 준결승의 저장 충돌은
+  다른 준결승의 화면 state를 덮어쓰지 않고 해당 match snapshot만 다시 읽는다.
+- 두 준결승 lineup이 모두 lock되기 전에는 pick/ban link를 보이지 않는다. 두 match가 모두 준비된 뒤에만
+  각각의 canonical match 작업대로 이동한다.
+- 10인 tournament나 unlock bracket은 이 route에서 bracket route로 되돌린다.
+
+Backend 데이터:
+
+- `GET /api/guilds/:guildId/auction-tournaments/:id/bracket`
+- `GET /api/guilds/:guildId/auction-matches/:matchId` for `SEMIFINAL_A` and `SEMIFINAL_B`
+- 기존 lineup assign/lock/unlock endpoints
+
+WebSocket: 사용하지 않는다. authoritative HTTP snapshot, match revision, CSRF, idempotency key로만 상태를
+확정한다.
 
 ### `/g/[guildId]/auction/matches/[matchId]`
 
@@ -577,8 +629,12 @@ WebSocket: 사용하지 않는다. bracket command 성공과 `409` 충돌 복구
 
 목적:
 
-- 한 경기에 대한 canonical 작업대다. 브래킷에서 선택한 match의 라인업 확정과 게임별 pick/ban·승패 입력을
-  한 authoritative snapshot으로 렌더링한다.
+- 10인 경매에서는 브래킷에서 선택한 결승 match의 라인업 확정과 게임별 pick/ban·승패 입력을 한
+  authoritative snapshot으로 렌더링한다.
+- 20인 경매에서는 중앙 준결승 라인업 단계가 두 준결승의 lineup을 모두 lock한 뒤에만 각 준결승 match의
+  pick/ban·승패 입력 작업대로 진입한다. match route에서 한 준결승만 먼저 편성하거나, 다른 준결승의
+  라인업이 남은 상태로 결과 입력을 시작할 수 없다. 이 조건이 남아 있는 준결승 match URL을 직접 열면
+  중앙 준결승 라인업 route로 redirect한다.
 - operator는 양 팀의 TOP/JUNGLE/MID/BOTTOM/SUPPORT를 각각 한 명씩 배치한 뒤 라인업을 확정한다. 확정 전에는
   결과 입력을 허용하지 않는다.
 - 확정 뒤에는 saved `bestOf`, `hardFearless`, 이전 확정 게임, 현재 라인업을 기준으로 다음 세트만 입력한다.
@@ -600,6 +656,8 @@ Backend 데이터:
 
 - lineups locked 전에는 `POST /api/guilds/:guildId/auction-matches/:matchId/games`를 호출할 수 없다.
 - 각 팀은 TOP/JUNGLE/MID/BOTTOM/SUPPORT가 정확히 1명씩 있어야 한다.
+- 20인 준결승은 두 match의 lineup이 모두 lock되기 전에는 어떤 match도 pick/ban 또는 game result 단계로
+  진입할 수 없다.
 - `permissions.canUnlockLineup`이 true일 때만 lock된 lineup의 recovery control을 보인다. unlock은 `READY`
   상태이며 games와 game_inputs가 전혀 없는 경우에만 성공하므로 client가 자체 조건으로 override하지 않는다.
 
@@ -614,15 +672,20 @@ canonical match snapshot을 다시 읽는다.
 
 목적:
 
-- 경매 토너먼트의 read-only 결과 및 진행 요약이다.
-- 우승 팀이 아직 없거나 진행 중인 match가 있더라도 동일 snapshot을 일관되게 표시하며, 완료 후에는 팀 구성,
-  획득 포인트, MMR 변화, match score를 정리한다.
-- 이 route에는 결과 입력이나 checkpoint revert control을 두지 않는다. 해당 입력은 canonical match route에서
-  수행한다.
+- 경매 토너먼트의 read-only 브래킷 현황 및 결과다.
+- `AuctionTournamentBracketResultBoard`가 20인은 좌측 준결승 A/B와 우측 결승, 10인은 결승 단일 구조로
+  대진을 표시한다. 기본 간략 대진에서 `상세보기`를 선택하면 각 team의 확정 lineup까지 읽기 전용으로
+  확인할 수 있다. match score, 승자와 canonical match 진입점은 같은 대진 카드에 둔다.
+- 진행 중에는 경매 목록, 브래킷, `READY`/`IN_PROGRESS` match 작업대에서 이 route로 이동한다. 현재 작업을
+  바꾸는 control은 각 canonical match route에 남긴다.
+- `IN_GAME`이고 result snapshot의 `permissions.canRecoverBracket=true`이면 active operator에게만 `대진 확정
+  해제` 확인 control을 보인다. 성공 시 `/bracket`의 편집 단계로 이동한다. 결과가 기록된 이후의 복구는
+  canonical match route에서 마지막 game을 먼저 되돌려야 하며, result route가 범용 rollback을 만들지 않는다.
 
 Backend 데이터:
 
 - `GET /api/guilds/:guildId/auction-tournaments/:id/result`
+- `POST /api/guilds/:guildId/auction-tournaments/:id/bracket/commands` (`UNLOCK_BRACKET`, capability가 true일 때만)
 
 WebSocket은 사용하지 않는다.
 
@@ -651,7 +714,9 @@ Backend 데이터:
 계정이 여러 개 공개되면 main 계정을 먼저 표시하되 모두 확인할 수 있다.
 
 선호 챔피언은 포지션별 사용자 지정 순서이며 season별 `챔피언 사용 기록`과 별도 영역으로 표시한다.
-Frontend는 search/profile 응답에서 Discord user ID나 PUUID를 기대하거나 privacy를 재판단하지 않는다.
+검색 결과 헤더의 사용자명은 `member.profileHref`가 있을 때만 `/users/[discordId]`로 연결한다. Frontend는
+search/profile 응답에서 Discord user ID나 PUUID를 기대하거나 privacy를 재판단하지 않고, nullable canonical
+href가 `null`이면 일반 텍스트로 표시한다.
 
 Season control은 응답의 실제 `seasons`만 사용한다. 초기 요청에 `seasonId`가 없으면 backend의 ACTIVE
 selection을 사용하고, 사용자가 season을 바꾸면 cursor를 비운 새 server navigation을 수행한다. ACTIVE
@@ -708,6 +773,7 @@ WebSocket: 사용하지 않는다.
 
 - 사용자 프로필.
 - 현재 MVP에서는 표시 이름, Discord ID, 활동 guild 수, season 수를 보여준다.
+- `/g/[guildId]/records` 검색 결과 헤더의 공개 사용자명에서 진입한다.
 
 Backend 데이터:
 
@@ -1013,6 +1079,9 @@ Season POST는 trim한 `name`, snapshot의 `current.id`를 `expectedCurrentSeaso
 목적:
 
 - API, PostgreSQL, Bot heartbeat, Valkey 상태 확인.
+- 최초 mount와 새로고침 action에서 authoritative snapshot을 읽는다. `401`, `403`, network, invalid response는
+  backend의 message/request ID를 유지한 retryable error panel로 보이며, client가 status를 추정하거나
+  mock timestamp를 만들지 않는다.
 
 Backend 데이터:
 
@@ -1021,6 +1090,9 @@ Backend 데이터:
 권한:
 
 - service admin allowlist.
+
+WebSocket: 사용하지 않는다. Bot heartbeat의 90초/5분 분류와 모든 service 상태는 backend snapshot이
+결정한다.
 
 ## Frontend 우선순위
 

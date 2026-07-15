@@ -205,6 +205,30 @@ const botInstanceIdSchema = z
 	.max(128)
 	.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
+export const heartbeatRequestSchema = z
+	.object({
+		instanceId: botInstanceIdSchema,
+		version: z
+			.string()
+			.min(1)
+			.max(100)
+			.regex(/^[\x21-\x7e]+$/),
+		commitSha: z
+			.string()
+			.min(1)
+			.max(128)
+			.regex(/^[A-Za-z0-9._-]+$/)
+			.nullable()
+	})
+	.strict();
+
+export const heartbeatDataSchema = z
+	.object({
+		accepted: z.literal(true),
+		lastHeartbeatAt: timestampSchema
+	})
+	.strict();
+
 export const recruitmentMessageNotificationPayloadSchema = z
 	.object({
 		schemaVersion: z.literal(1),
@@ -378,6 +402,103 @@ export const auctionRecruitmentMemberRequestSchema = z
 	.object({
 		actor: actorSchema,
 		declaredLane: laneSchema.optional()
+	})
+	.strict();
+
+export const forceAuctionRecruitmentMemberRequestSchema = z
+	.object({
+		actor: actorSchema,
+		member: actorSchema,
+		declaredLane: laneSchema.optional()
+	})
+	.strict();
+
+export const auctionRecruitmentForceCancelRequestSchema = z.object({ actor: actorSchema }).strict();
+
+export const auctionRecruitmentForceCancelResultSchema = z
+	.object({
+		recruitmentId: uuidSchema,
+		recruitmentStatus: z.literal('CANCELLED'),
+		recruitmentRevision: z.number().int().nonnegative(),
+		tournamentId: uuidSchema.nullable(),
+		tournamentStatus: z.literal('CANCELLED').nullable(),
+		tournamentRevision: z.number().int().nonnegative().nullable(),
+		reversedGameCount: z.number().int().nonnegative()
+	})
+	.strict()
+	.superRefine((result, context) => {
+		const tournamentFields = [
+			result.tournamentId,
+			result.tournamentStatus,
+			result.tournamentRevision
+		];
+		if (
+			tournamentFields.some((value) => value === null) &&
+			tournamentFields.some((value) => value !== null)
+		) {
+			context.addIssue({
+				code: 'custom',
+				path: ['tournamentId'],
+				message: 'tournament cancellation fields must be all null or all present'
+			});
+		}
+		if (result.tournamentId === null && result.reversedGameCount !== 0) {
+			context.addIssue({
+				code: 'custom',
+				path: ['reversedGameCount'],
+				message: 'a recruitment-only cancellation cannot reverse tournament games'
+			});
+		}
+	});
+
+export const auctionTournamentListStateSchema = z.enum(['active', 'completed']);
+
+export const auctionTournamentListRequestSchema = z
+	.object({
+		state: auctionTournamentListStateSchema,
+		seasonId: uuidSchema.optional(),
+		limit: z.number().int().min(1).max(100).optional()
+	})
+	.strict();
+
+const auctionTournamentListMatchSchema = z
+	.object({
+		id: uuidSchema,
+		label: z.string().min(1).max(100),
+		matchKey: z.enum(['SEMIFINAL_A', 'SEMIFINAL_B', 'FINAL']),
+		status: z.enum(['LINEUP_PENDING', 'READY', 'IN_PROGRESS']),
+		confirmedGameCount: z.number().int().nonnegative()
+	})
+	.strict();
+
+const auctionTournamentListItemSchema = z
+	.object({
+		id: uuidSchema,
+		displayNumber: z.number().int().positive(),
+		title: z.string().min(1).max(200),
+		format: auctionRecruitmentFormatSchema,
+		participantCount: z.union([z.literal(10), z.literal(20)]),
+		teamCount: z.union([z.literal(2), z.literal(4)]),
+		status: auctionTournamentStatusSchema,
+		revision: z.number().int().nonnegative(),
+		activeMemberCount: z.number().int().nonnegative(),
+		bidMemberCount: z.number().int().nonnegative(),
+		incompleteMatchCount: z.number().int().nonnegative(),
+		nextMatch: auctionTournamentListMatchSchema.nullable(),
+		championTeam: z
+			.object({ id: uuidSchema, name: z.string().min(1).max(100) })
+			.strict()
+			.nullable(),
+		updatedAt: timestampSchema,
+		endedAt: timestampSchema.nullable(),
+		href: z.string().startsWith('/g/')
+	})
+	.strict();
+
+export const auctionTournamentListDataSchema = z
+	.object({
+		tournaments: z.array(auctionTournamentListItemSchema).max(100),
+		nextCursor: z.string().min(1).nullable()
 	})
 	.strict();
 
@@ -1091,6 +1212,17 @@ export type AuctionRecruitmentRules = z.infer<typeof auctionRecruitmentRulesSche
 export type AuctionRecruitmentSnapshot = z.infer<typeof auctionRecruitmentSnapshotSchema>;
 export type CreateAuctionRecruitmentRequest = z.infer<typeof createAuctionRecruitmentRequestSchema>;
 export type AuctionRecruitmentMemberRequest = z.infer<typeof auctionRecruitmentMemberRequestSchema>;
+export type ForceAuctionRecruitmentMemberRequest = z.infer<
+	typeof forceAuctionRecruitmentMemberRequestSchema
+>;
+export type AuctionRecruitmentForceCancelRequest = z.infer<
+	typeof auctionRecruitmentForceCancelRequestSchema
+>;
+export type AuctionRecruitmentForceCancelResult = z.infer<
+	typeof auctionRecruitmentForceCancelResultSchema
+>;
+export type AuctionTournamentListRequest = z.infer<typeof auctionTournamentListRequestSchema>;
+export type AuctionTournamentListData = z.infer<typeof auctionTournamentListDataSchema>;
 export type AuctionTournamentCancelPreviewData = z.infer<
 	typeof auctionTournamentCancelPreviewDataSchema
 >;
@@ -1123,6 +1255,8 @@ export type AuctionTournamentResultDeleteNotificationPayload = z.infer<
 	typeof auctionTournamentResultDeleteNotificationPayloadSchema
 >;
 export type BotNotification = z.infer<typeof botNotificationSchema>;
+export type HeartbeatRequest = z.infer<typeof heartbeatRequestSchema>;
+export type HeartbeatData = z.infer<typeof heartbeatDataSchema>;
 export type ClaimNotificationsRequest = z.infer<typeof claimNotificationsRequestSchema>;
 export type ClaimNotificationsData = z.infer<typeof claimNotificationsDataSchema>;
 export type AcknowledgeNotificationRequest = z.infer<typeof acknowledgeNotificationRequestSchema>;

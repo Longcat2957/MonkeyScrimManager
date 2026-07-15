@@ -292,7 +292,7 @@
 		description={`BO${match.bestOf} · ${match.hardFearless ? '하드 피어리스' : '일반'} · ${statusLabel}`}
 	>
 		{#snippet actions()}
-			{#if match.status === 'COMPLETED'}
+			{#if match.status === 'READY' || match.status === 'IN_PROGRESS' || match.status === 'COMPLETED'}
 				<a
 					href={resolve('/g/[guildId]/auction/tournaments/[id]/result', {
 						guildId: data.guildId,
@@ -300,18 +300,20 @@
 					})}
 					class="inline-flex h-9 shrink-0 items-center justify-center border border-emerald-300/30 px-3 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/10"
 				>
-					토너먼트 결과
+					{match.status === 'COMPLETED' ? '토너먼트 결과' : '토너먼트 현황'}
 				</a>
 			{/if}
-			<a
-				href={resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {
-					guildId: data.guildId,
-					id: match.tournamentId
-				})}
-				class="inline-flex h-9 shrink-0 items-center justify-center border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-300 hover:border-cyan-400/30 hover:bg-cyan-400/5"
-			>
-				브래킷
-			</a>
+			{#if match.status === 'LINEUP_PENDING'}
+				<a
+					href={resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {
+						guildId: data.guildId,
+						id: match.tournamentId
+					})}
+					class="inline-flex h-9 shrink-0 items-center justify-center border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-300 hover:border-cyan-400/30 hover:bg-cyan-400/5"
+				>
+					브래킷
+				</a>
+			{/if}
 		{/snippet}
 	</WorkspaceHeader>
 

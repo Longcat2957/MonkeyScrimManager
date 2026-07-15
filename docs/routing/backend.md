@@ -1076,9 +1076,12 @@ replay하며 새 key의 재취소는 lifecycle conflict다. bound Discord messag
 
 Bot과 Browser가 같은 canonical roster command를 사용한다.
 
-- Bot service principal은 Discord interaction `Idempotency-Key`와 `{ actor, declaredLane? }`를 보낸다.
-  actor 자신의 ACTIVE 길드 소속을 확보한 뒤 OPEN 모집에 self-service로 참가한다. lane을 생략하면 저장된
-  guild main lane을 사용하고, 둘 다 없으면 `422 auction_declared_lane_required`를 반환한다.
+- Bot service principal은 Discord interaction `Idempotency-Key`와
+  `{ actor, member?, declaredLane? }`를 보낸다. `member`를 생략하면 actor 자신의 ACTIVE 길드 소속을
+  확보한 뒤 OPEN 모집에 self-service로 참가한다. `member`를 지정하면 actor는 configured operator여야 하고,
+  backend가 대상 actor snapshot을 동기화한 뒤 대상의 ACTIVE 길드 소속을 검증해 참가시킨다. lane을 생략하면
+  참가 대상의 저장된 guild main lane을 사용하고, 둘 다 없으면
+  `422 auction_declared_lane_required`를 반환한다.
 - Browser는 Discord OAuth session, CSRF, browser `Idempotency-Key`와
   `{ memberId, declaredLane }`를 보낸다. 현재 active operator만 existing ACTIVE guild member를 추가할 수
   있다. `memberId`는 opaque stored user ID이므로 Discord user와 development dummy user 모두 같은 경로로
@@ -1101,6 +1104,24 @@ OPEN 모집에서만 허용하며, 참가 row를 `WITHDRAWN`으로 전환하고 
 transaction에서 비운다. recruitment/setup draft revision, audit, realtime outbox와 bound Discord message
 update도 같은 transaction에 기록한다.
 
+### POST /api/guilds/{guildId}/auction-recruitments/{id}/force-cancel
+
+BotBearer 전용의 operator recovery command다. body는 `{ actor }`, `Idempotency-Key`는 Discord interaction
+ID다. browser lifecycle action이나 Discord 모집 카드 component가 이 endpoint를 호출하지 않는다.
+
+- backend는 actor의 ACTIVE guild membership 및 configured operator role을 다시 검증한다. 동일 interaction
+  ID와 동일 body는 stored result를 replay하고, 다른 body는 `409 idempotency_conflict`다.
+- `OPEN` 또는 `CLOSED` 모집은 participant, setup draft, team slot과 history를 유지한 채 모집만
+  `CANCELLED`로 전환한다. bound Discord 모집 메시지는 typed DELETE outbox로 제거한다.
+- `CONVERTED` 모집은 linked tournament를 해석해 기존 tournament cancellation transaction으로 위임한다.
+  `BIDDING`, `BRACKET_SETUP`, `IN_GAME`만 취소 가능하며 active match, tournament, source recruitment은 함께
+  `CANCELLED`가 된다. `COMPLETED` 또는 이미 `CANCELLED`인 tournament는 lifecycle conflict다.
+- confirmed game이 있으면 latest confirmed time 순으로 MMR rollback을 수행한다. 각 ledger가 global MMR
+  history tail인지 검증하므로 더 최근의 MMR mutation이 있으면 부분 취소 없이
+  `409 auction_tournament_cancel_mmr_history_advanced`로 전체 transaction을 rollback한다. immutable
+  bid/action/point/game history는 삭제하지 않는다.
+- audit와 tournament/recruitment realtime invalidation은 같은 transaction에 기록한다.
+
 ### GET/PATCH /api/guilds/{guildId}/auction-recruitments/{id}/setup-draft
 
 `GET`은 ACTIVE 길드 멤버에게 CLOSED 모집의 setup draft와 JOINED roster를 반환한다. `PATCH`는
@@ -1122,16 +1143,24 @@ source recruitment, setup draft, setup team, JOINED participant를 잠그고 sou
 
 ### GET /api/guilds/{guildId}/auction-tournaments
 
-query state=active|completed.
+query는 `state=active|completed`, 선택 `seasonId`, `cursor`, `limit`이다. `seasonId`가 있으면 그 canonical
+season UUID의 tournament만 반환한다.
 
 `active`는 `BIDDING`, `BRACKET_SETUP`, `IN_GAME`만, `completed`는 `COMPLETED`와 `CANCELLED`를 함께 반환한다.
-취소된 row는 결과 확정이 아닌 archive로 표시하지만, 기존 결과 snapshot URL은 계속 읽을 수 있다.
+취소된 row는 결과 확정이 아닌 archive로 표시하지만, 기존 결과 snapshot URL은 계속 읽을 수 있다. Browser
+session은 ACTIVE 길드 소속을 검증한 뒤 viewer-scoped list를 받고, BotBearer는 service principal branch로
+같은 canonical projection을 읽는다. Bot list branch는 browser session이나 viewer identity를 요구하지 않는다.
 
 ### GET /api/guilds/{guildId}/auction-tournaments/{id}
 
 ACTIVE 길드 멤버가 canonical draft aggregate를 읽는다. 응답은 tournament immutable rule snapshot, team별
 현재 point/roster, 전체 candidate queue, current target, UNSOLD 후보, 마지막 revert 가능한 action, viewer
-permission을 포함한다. `href`는 `/g/{guildId}/auction/tournaments/{tournamentId}/draft`다. `canManageDraft`는
+permission을 포함한다. current target이 있으면 그 대상의 Discord/Riot 아이콘, cached Riot tier, 해당 tournament
+season의 내전 요약/라인 MMR, 신청 라인 선호 챔피언, 확정된 내전 주력 챔피언과 최근 게임, 식별자를 제외한
+cached Riot 요약도 `currentTargetProfile`로 함께 반환한다. Riot cache가 없거나 유효하지 않으면 해당 Riot
+영역만 `null`이며 provider refresh를 발생시키지 않는다. 이 정보는 화면 조회용이며 입찰 판정은 항상 candidate의
+immutable `mmrAtStart`만 사용한다. `href`는
+`/g/{guildId}/auction/tournaments/{tournamentId}/draft`다. `canManageDraft`는
 현재 active operator에게만 true다.
 
 ### POST /api/guilds/{guildId}/auction-tournaments/{id}/commands
@@ -1150,7 +1179,8 @@ REVERT_LAST
 
 browser-only command route다. current active operator, CSRF, browser `Idempotency-Key`,
 `expectedRevision`이 모두 필요하다. command는 tournament -> teams -> active team members -> candidates ->
-lots -> actions -> point ledger 순서로 잠그며 action/audit/outbox와 snapshot을 같은 transaction에서 기록한다.
+lots의 mutable row를 잠근다. append-only action/point ledger는 tournament lock 아래서 읽고,
+action/audit/outbox와 snapshot을 같은 transaction에서 기록한다.
 
 - `DRAW_NEXT`는 가장 앞 QUEUED candidate를 ACTIVE로 만들고 drawCount를 증가시킨다.
 - `MARK_UNSOLD`, `AWARD_BID`, `ASSIGN_CURRENT`는 현재 target과 일치해야 한다. AWARD_BID는 team point를
@@ -1194,6 +1224,9 @@ non-empty reason, actor snapshot과 audit가 필요하다.
 `A_0`, `A_1`, `B_0`, `B_1` slot, 생성된 match의 score 요약, viewer 권한을 함께 반환한다.
 `rules.semifinalBestOf`는 10인에서는 명시적으로 `null`, 20인에서는 1/3/5 숫자다.
 
+- `BIDDING`에서는 `409 auction_tournament_bracket_unavailable`을 반환한다. `BRACKET_SETUP`, `IN_GAME`,
+  `COMPLETED`, `CANCELLED`는 bracket history를 읽을 수 있다.
+
 ### POST /api/guilds/{guildId}/auction-tournaments/{id}/bracket/commands
 
 ```text
@@ -1225,6 +1258,9 @@ snapshot을 같은 transaction에 기록한다. `BRACKET_SETUP`이면서 아직 
 `match`, 양 팀 roster, `lineups`, 확정 `games`, viewer `permissions`를 한 snapshot으로 반환한다.
 각 game의 `picks` key는 반드시 잠긴 lineup의 10개 user ID와 정확히 일치하며, pick/ban은 null일 수 있다.
 `leftScore`/`rightScore`는 확정 game의 side preset과 winner에서만 계산한다.
+20인 `SEMIFINAL_A/B`는 두 준결승 lineup이 모두 lock되기 전까지 `permissions.canEnterResults=false`를
+반환한다. 이 projection은 화면 제어용이며 game submit endpoint도 같은 조건을 transaction 안에서 다시
+검증한다.
 
 ### PATCH /api/guilds/{guildId}/auction-matches/{matchId}/lineup
 
@@ -1248,6 +1284,8 @@ assignment는 유지하고 lock metadata만 비운 뒤 match를 `LINEUP_PENDING`
 받는다. 별도 tournament revision은 받지 않는다. 서버는 tournament -> match -> locked lineup 순서로 lock한 뒤
 다음 set만 허용하고, set 안의 pick/ban 중복 및 같은 match 안의 hard fearless 과거 pick 재사용을 거절한다.
 lock 전 입력은 거부한다. 경매 game은 일반 game과 같은 guild MMR service/ledger를 사용한다.
+20인 `SEMIFINAL_A/B`는 두 준결승의 10인 lineup이 모두 lock되기 전에는
+`409 auction_match_semifinal_lineups_incomplete`로 거절한다.
 
 첫 확정 game은 match를 `IN_PROGRESS`로 전환한다. BO 승점에 도달하면 match를 `COMPLETED`로 전환하고,
 20인 `SEMIFINAL_A/B` 승자는 같은 transaction에서 `FINAL`의 left/right team으로 전파한다. 전파 시 해당
@@ -1284,6 +1322,11 @@ match가 0개일 수 있고, bracket recovery의 이전 CANCELLED match history�
 canonical team/match history를 반환하되 result rollback 권한은 항상 false이며, 취소 전 confirmed game은
 cancellation transaction에서 MMR과 함께 void되어 score/delta에 포함되지 않는다. 일반 참가자에게는 read-only이고,
 operator의 결과 되돌리기는 각 canonical match의 `DELETE .../games/last`만 사용한다. 별도 checkpoint API는 없다.
+
+`permissions.canRecoverBracket`은 active operator, lock된 bracket, 생성된 active match가 있고 games와
+game_inputs artifact가 전혀 없는 `IN_GAME` tournament에서만 true다. true일 때 Web은 별도 result mutation을
+만들지 않고 기존 `POST .../bracket/commands`의 `UNLOCK_BRACKET`을 사용한다. 성공하면 생성 match는
+`CANCELLED` history로 보존되고 tournament는 `BRACKET_SETUP` 편집 상태로 돌아간다.
 
 ## 길드 전적과 랭킹
 
@@ -1353,9 +1396,11 @@ ambiguous_guild_member`를 반환한다. 공백이거나 100자를 넘는 검색
 `championPreferences`는 season 통계가 아니라 global user가 지정한 순서를 보존한 다섯 lane 전체
 snapshot이다. `show_riot_ids=true`면 연결된 모든 Riot 계정을 main 우선으로 반환하고, false거나 privacy
 row가 없거나 연결 계정이 없으면 `riotAccounts`는 빈 배열이다. Browser가 privacy flag를 받아 다시
-판단하지 않는다. 응답에는 Discord user ID를 독립 field로 넣지 않으며 PUUID, routing region과 계정 소유
-내부 key도 반환하지 않는다. `avatarUrl`은 Discord CDN provider URL이므로 URL path에는 provider가 요구하는
-Discord ID가 포함될 수 있다.
+판단하지 않는다. `member.profileHref`는 대상이 Discord identity이고 `public_profile_enabled=true`일 때만
+`/users/{discordId}`를 반환하며, 비공개 사용자와 DUMMY identity에는 `null`이다. Browser는 이 nullable
+canonical href를 그대로 사용하고 Discord ID를 조합하거나 privacy를 재판단하지 않는다. 응답에는 Discord
+user ID를 독립 field로 넣지 않으며 PUUID, routing region과 계정 소유 내부 key도 반환하지 않는다.
+`avatarUrl`은 Discord CDN provider URL이므로 URL path에는 provider가 요구하는 Discord ID가 포함될 수 있다.
 
 `show_riot_ids`는 Discord 사용자와 Riot 계정의 연결 관계 공개만 제어한다. `/api/riot/records`와
 `/api/riot/records/suggestions`에서 Riot ID 자체를 검색하는 기능에는 적용하지 않는다.
@@ -1400,8 +1445,9 @@ nextCursor
 `member`, `championPreferences`, `riotAccounts`는 profile endpoint와 같은 projection이다. 따라서
 `show_riot_ids=true`인 연결 계정만 main 우선으로 반환하고, false 또는 privacy row 부재면 빈 배열이다.
 `show_riot_ids`는 Riot ID로 target을 resolve하고 Discord-Riot 연결 관계를 표시하는 범위만 제어한다. 같은
-guild의 내부 game/MMR/champion 통계는 개인 privacy 설정으로 숨기지 않는다. Discord user ID는 독립 field로
-반환하지 않지만 profile과 같은 Discord CDN `avatarUrl` path에는 provider ID가 포함될 수 있다. PUUID,
+guild의 내부 game/MMR/champion 통계는 개인 privacy 설정으로 숨기지 않는다. `member.profileHref`는
+`public_profile_enabled=true`인 Discord identity만 가진 nullable canonical route이며, UI의 대상 이름은 이
+값이 있을 때만 `/users/[discordId]`로 연결한다. Discord user ID는 독립 field로 반환하지 않으며 PUUID,
 routing region, normalized Riot ID는 넣지 않는다.
 
 `laneMmr`는 선택 season에 대해 `TOP, JUNGLE, MID, BOTTOM, SUPPORT` 다섯 row를 항상 canonical 순서로
@@ -1607,9 +1653,23 @@ external match expand는 Riot 원본 데이터의 KDA/CS/gold/damage/vision/item
 
 ### GET /api/users/{discordId}/profile
 
-MVP는 현재 UI가 사용하는 displayName, Discord ID, 활동 guild 수, season
-수부터 제공한다. MMR history, auction card, screening은 UI가 생기기 전
-선행 구현하지 않는다.
+로그인 없이 읽는 public profile route다. MVP는 현재 UI가 사용하는 `displayName`, Discord ID, 활동
+guild 수, season 수만 반환한다. `public_profile_enabled=false`인 사용자와 존재하지 않는 사용자는 같은
+`404 not_found`로 숨기며, Riot ID/PUUID, avatar, guild 이름, membership role, MMR history, auction card,
+screening은 반환하지 않는다.
+
+```json
+{
+	"discordId": "1525847677542207548",
+	"displayName": "Longcat",
+	"activeGuildCount": 2,
+	"seasonCount": 3
+}
+```
+
+`activeGuildCount`는 ACTIVE 사용자 membership과 ACTIVE guild만 센다. `seasonCount`는 그 활동 guild에
+속한 ACTIVE/CLOSED season의 distinct 수다. path가 canonical Discord snowflake가 아니면
+`400 invalid_discord_id`를 반환한다.
 
 ### GET /api/me/champion-preferences
 
@@ -1969,7 +2029,8 @@ adapter가 Discord interaction ID를 idempotency key로 사용하고 동일 seas
 
 ### GET /api/admin/status
 
-SERVICE_ADMIN만 접근한다.
+Session과 service-admin allowlist가 모두 필요하다. 미인증은 `401`, 로그인했지만 allowlist에 없는 사용자는
+`403 service_admin_required`다.
 
 ```text
 API
@@ -1978,8 +2039,14 @@ Bot heartbeat
 Valkey
 ```
 
-각 항목은 normal/delayed/down, latency/value, lastHealthyAt, issue를 가진다.
-Data Dragon과 internal notify를 별도 tile로 만들지 않는다.
+성공 body는 `{ checkedAt, services }`이고 service key는 `API`, `POSTGRESQL`, `BOT_HEARTBEAT`, `VALKEY`다.
+각 service는 `status`(`normal|delayed|down`), `latencyMs|null`, 사람이 읽는 `value`,
+`lastHealthyAt|null`, `issue|null`을 가진다. Data Dragon과 internal notify를 별도 tile로 만들지 않는다.
+
+Bot heartbeat는 newest persisted `bot_instances.last_heartbeat_at`을 기준으로 `<=90초 normal`,
+`>90초~<=5분 delayed`, 미수신 또는 `>5분 down`이다. stale Bot도 마지막 persisted timestamp는
+`lastHealthyAt`으로 유지한다. API가 PostgreSQL row를 읽을 수 없으면 status aggregate 자체를 만들 수 없으므로
+`503 database_unavailable`을 반환한다.
 
 ### GET /healthz
 
@@ -1999,7 +2066,20 @@ internal route는 user cookie가 아니라 service principal을 사용한다.
 
 ### POST /internal/heartbeat
 
-Bot status 갱신.
+BotBearer 전용의 status 갱신 route다.
+
+```json
+{
+	"instanceId": "bot-main-1",
+	"version": "0.1.0",
+	"commitSha": "abc1234"
+}
+```
+
+`instanceId`는 `[A-Za-z0-9][A-Za-z0-9._:-]*` 1..128 bytes, `version`은 visible ASCII 1..100 bytes,
+`commitSha`는 nullable `[A-Za-z0-9._-]{1,128}`이다. backend는 instance row를 upsert하되 최초
+`started_at`은 유지하고 version/commit/last heartbeat만 갱신한다. 성공 응답은
+`{ "accepted": true, "lastHeartbeatAt": "RFC 3339" }`이며 invalid body는 `422 invalid_heartbeat`다.
 
 ### POST /internal/notifications/claim
 
@@ -2057,14 +2137,21 @@ cookie session으로 handshake한다.
 ```text
 guild:{guildId}:recruitment:{id}
 guild:{guildId}:recruitment-entry-draft:{id}
+guild:{guildId}:series:{id}
 guild:{guildId}:auction-recruitment:{id}
+guild:{guildId}:auction-tournament:{id}
 ```
 
 `auction-recruitment` topic은 OPEN 또는 CLOSED 모집의 현재 active operator만 subscribe할 수 있다. Web은
 `canManageMembers`가 true인 모집 detail에서만 이 topic을 열고, `invalidate` 또는 `resync_required`를 받으면
-authoritative auction recruitment snapshot을 다시 읽는다. 일반 guild member는 이 socket을 열지 않고 HTTP
-read만 사용한다. series와 auction tournament/match topic은 namespace 예약 상태이며 endpoint가 아직
-subscribe하지 않는다.
+authoritative auction recruitment snapshot을 다시 읽는다.
+
+`auction-tournament` topic은 `BIDDING` 상태의 현재 active operator만 subscribe할 수 있다. Web은
+`canManageDraft=true`인 입찰 작업대에서만 이 topic을 열고, 더 높은 revision invalidate, reconnect,
+`resync_required` 뒤 authoritative tournament snapshot을 다시 읽는다. 입찰 command는 HTTP의 CSRF,
+Idempotency-Key, expectedRevision transaction으로만 확정하며 WebSocket은 mutation payload를 받지 않는다.
+일반 guild member, `BRACKET_SETUP` 이후 tournament, `auction-match`는 socket을 열지 않는다. auction match
+topic은 namespace 예약 상태이며 endpoint가 subscribe하지 않는다.
 
 client는 `{ "type": "subscribe", "topics": [...] }` 또는 `unsubscribe` frame을 보낸다. 성공하면
 `{ "type": "subscribed", "topics": [...] }`, hub lag에는 `{ "type": "resync_required" }`, 거부에는
@@ -2076,7 +2163,7 @@ event:
 {
 	"type": "invalidate",
 	"eventId": "0190f4a2-8b3c-7d5e-8f01-23456789abcd",
-	"topic": "guild:123:auction-recruitment:0190f49d-3e20-7a41-9810-123456789abc",
+	"topic": "guild:123:auction-tournament:0190f49d-3e20-7a41-9810-123456789abc",
 	"resourceId": "0190f49d-3e20-7a41-9810-123456789abc",
 	"revision": 43,
 	"occurredAt": "2026-07-11T11:20:12Z"
@@ -2096,6 +2183,8 @@ event:
   교환하거나 비교하지 않는다.
 - auction-recruitment topic event의 revision은 `auction_recruitments` aggregate만 나타낸다. setup draft,
   auction tournament, auction match revision과 교환하거나 비교하지 않는다.
+- auction-tournament topic event의 revision은 `auction_tournaments.revision`만 나타낸다. 모집, bracket,
+  match revision과 교환하거나 비교하지 않는다.
 
 ## 구현 순서
 

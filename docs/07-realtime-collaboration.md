@@ -10,9 +10,13 @@
 
 - 일반 내전 엔트리 편성
 - 일반 내전 픽밴과 결과 입력
-- 경매 팀장/포인트 설정
-- 경매 draw, 낙찰, 유찰, 복구, 수동 배치
+- 경매 모집 roster
+- 경매 팀장/포인트 설정, draw, 낙찰, 유찰, 복구, 수동 배치
 - 경매 match 라인업과 결과 입력
+
+경매 모집 roster와 `BIDDING` 상태의 경매 입찰은 active operator의 invalidate 구독을 사용한다. 입찰 command는
+HTTP snapshot, expected revision, `409` refetch로 충돌을 처리하고, WebSocket은 최신 snapshot 재조회 신호만
+전달한다. 그 외 경매 작업대는 tournament/match topic을 구독하지 않는다.
 
 구현 중 판단이 충돌하면 현재 frontend 동작을 먼저 따르고 이 문서를 수정한다. DB 구조는 `05-db-schema.md`, HTTP route와 topic은 `routing/backend.md`, 상세 구현 순서는 `09-backend-development-plan.md`를 따른다.
 
@@ -211,21 +215,31 @@ guild:{guildId}:auction-match:{matchId}
 ```
 
 엔트리 편성 route는 제한적 realtime 단계가 활성화되면 두 topic을 모두 구독한다. 모집 topic은
-roster/status/capability 변경을, entry-draft topic은 assignment/draft metadata 변경을 알린다. 현재
-WebSocket을 사용하지 않는 HTTP-only route는 이 topic을 구독하지 않고 다음 snapshot 조회로 복구한다.
+roster/status/capability 변경을, entry-draft topic은 assignment/draft metadata 변경을 알린다.
 
-현재 subscribe를 허용하는 범위는 일반 내전 엔트리의 아래 두 topic과 진행 중 일반 series의 topic이다.
+`auction-tournament` topic은 `BIDDING` 상태의 active operator만 구독한다. 경매 입찰 command는 HTTP
+transaction으로 확정하고, WebSocket은 `invalidate`와 GET snapshot 재조회만 담당한다. 일반 길드 멤버,
+`BRACKET_SETUP` 이후의 tournament, `auction-match`는 이 topic을 구독하지 않는다.
+
+현재 WebSocket을 사용하지 않는 HTTP-only route는 이 topic을 구독하지 않고 다음 snapshot 조회로 복구한다.
+
+현재 subscribe를 허용하는 범위는 일반 내전 엔트리의 아래 두 topic, 진행 중 일반 series, OPEN/CLOSED
+경매 모집의 operator roster topic, `BIDDING` 경매 토너먼트의 operator 입찰 topic이다.
 
 ```txt
 guild:{guildId}:recruitment:{recruitmentId}
 guild:{guildId}:recruitment-entry-draft:{recruitmentId}
 guild:{guildId}:series:{seriesId}
+guild:{guildId}:auction-recruitment:{recruitmentId}
+guild:{guildId}:auction-tournament:{tournamentId}
 ```
 
 entry topic은 해당 guild의 active member가 구독할 수 있다. series topic은 `IN_PROGRESS` series의 current
-active operator만 구독할 수 있다. 일반 member와 result ledger는 socket을 열지 않고 HTTP snapshot을 다시
-읽는다. 나머지 topic 형식은 outbox/namespace의 예약 계약이며 해당 화면의 HTTP snapshot, 권한 검사,
-frontend 재조회가 함께 준비되기 전에는 `/ws` subscribe가 `unsupported_topic`을 반환한다.
+active operator만 구독할 수 있다. auction recruitment topic은 OPEN/CLOSED 모집의 current active operator만
+구독할 수 있다. auction tournament topic은 `BIDDING` 상태의 current active operator만 구독할 수 있다. 일반
+member와 result ledger는 socket을 열지 않고 HTTP snapshot을 다시 읽는다. auction match를 포함한 나머지 topic
+형식은 outbox/namespace의 예약 계약이며 해당 화면의 HTTP snapshot, 권한 검사, frontend 재조회가 함께 준비되기
+전에는 `/ws` subscribe가 `unsupported_topic`을 반환한다.
 
 ### Client frame
 

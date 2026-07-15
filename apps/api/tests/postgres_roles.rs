@@ -184,6 +184,14 @@ async fn assert_current_table_contract(runtime: &PgPool) -> TestResult {
         assert_permission_denied(runtime, &format!("DELETE FROM public.{table} WHERE false"))
             .await?;
     }
+
+    for table in ["auction_actions", "auction_point_ledger"] {
+        sqlx::query(AssertSqlSafe(format!(
+            "SELECT id FROM public.{table} WHERE guild_id = current_user"
+        )))
+        .execute(runtime)
+        .await?;
+    }
     Ok(())
 }
 
@@ -205,12 +213,12 @@ async fn assert_future_table_defaults(migration: &PgPool, runtime: &PgPool) -> T
             .fetch_one(runtime)
             .await?;
     assert_eq!(value, "allowed");
-    assert_permission_denied(
-        runtime,
-        "UPDATE future_permission_probe SET value = 'denied' WHERE id = 1",
-    )
-    .await?;
-    assert_permission_denied(runtime, "DELETE FROM future_permission_probe WHERE id = 1").await?;
+    sqlx::query("UPDATE future_permission_probe SET value = 'updated' WHERE id = 1")
+        .execute(runtime)
+        .await?;
+    sqlx::query("DELETE FROM future_permission_probe WHERE id = 1")
+        .execute(runtime)
+        .await?;
     Ok(())
 }
 

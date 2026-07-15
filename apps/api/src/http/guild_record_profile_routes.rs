@@ -11,7 +11,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 use crate::{
-    domain::{GuildId, Lane, SeasonId},
+    domain::{DiscordUserId, GuildId, Lane, SeasonId},
     error::{self, ApiError},
     http::extractors::AuthenticatedSession,
     repository::{
@@ -71,6 +71,7 @@ struct GuildRecordProfileMemberData {
     display_name: String,
     avatar_url: Option<String>,
     main_lane: Option<Lane>,
+    profile_href: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -431,6 +432,7 @@ fn validated_query<'a>(value: &'a str, request_id: &RequestId) -> Result<&'a str
 }
 
 fn map_member(member: GuildRecordProfileMember) -> GuildRecordProfileMemberData {
+    let profile_href = public_profile_href(&member);
     let avatar_url = member
         .avatar_hash
         .as_deref()
@@ -439,7 +441,16 @@ fn map_member(member: GuildRecordProfileMember) -> GuildRecordProfileMemberData 
         display_name: member.display_name,
         avatar_url,
         main_lane: member.main_lane,
+        profile_href,
     }
+}
+
+fn public_profile_href(member: &GuildRecordProfileMember) -> Option<String> {
+    if !member.public_profile_enabled {
+        return None;
+    }
+    let discord_id = DiscordUserId::try_from(member.user_id.clone()).ok()?;
+    Some(format!("/users/{}", discord_id.as_str()))
 }
 
 fn map_preferences(snapshot: ChampionPreferencesSnapshot) -> ChampionPreferencesData {
@@ -775,6 +786,31 @@ mod tests {
         );
         assert_eq!(
             discord_avatar_url("100000000000000001", "../../secret"),
+            None
+        );
+    }
+
+    #[test]
+    fn public_profile_href_only_exposes_public_discord_identities() {
+        let member = |user_id: &str, public_profile_enabled| GuildRecordProfileMember {
+            user_id: crate::domain::UserId::parse(user_id).expect("valid test user ID"),
+            display_name: "Player".to_owned(),
+            avatar_hash: None,
+            main_lane: None,
+            public_profile_enabled,
+            matched_by_riot_id: false,
+        };
+
+        assert_eq!(
+            public_profile_href(&member("100000000000000001", true)).as_deref(),
+            Some("/users/100000000000000001")
+        );
+        assert_eq!(
+            public_profile_href(&member("100000000000000001", false)),
+            None
+        );
+        assert_eq!(
+            public_profile_href(&member("dmy_01900000-0000-7000-8000-000000000001", true)),
             None
         );
     }

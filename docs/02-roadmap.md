@@ -161,13 +161,12 @@ WS route:
 ```text
 /g/{guildId}/recruitments/{id}/entry
 /g/{guildId}/series/{id}/pick-ban
-/g/{guildId}/auction/recruitments/{id}/draft
-/g/{guildId}/auction/tournaments/{id}/draft
-/g/{guildId}/auction/tournaments/{id}/bracket
+/g/{guildId}/auction/recruitments/{id}
 ```
 
 HTTP가 mutation을 수행하고 WS는 outbox/Valkey를 통해 invalidate와 presence만
-전달한다.
+전달한다. 경매 준비, 입찰, 브래킷, match 작업대는 saved snapshot, expected revision, `409` refetch를
+사용하며 tournament/match topic을 구독하지 않는다.
 
 완료 기준:
 

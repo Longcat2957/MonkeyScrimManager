@@ -17,7 +17,7 @@ use monkeybot_api::{
 };
 use reqwest::Url;
 use secrecy::SecretString;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
@@ -39,6 +39,8 @@ const MEMBER_4_ID: &str = "100000000000000004";
 const OUTSIDER_ID: &str = "100000000000000099";
 const GUILD_A: &str = "200000000000000001";
 const GUILD_B: &str = "200000000000000002";
+const OPERATOR_ROLE_ID: &str = "300000000000000001";
+const RECRUITMENT_CHANNEL_ID: &str = "400000000000000001";
 const DISCORD_CLIENT_ID: &str = "900000000000000001";
 const PUBLIC_ORIGIN: &str = "http://localhost:5173";
 const OAUTH_KEY_BASE64URL: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -126,7 +128,9 @@ async fn run_workflow_read_flow() -> TestResult {
     assert_auction_recruitment_cursor(&app, &member_cookie).await?;
     assert_auction_tournaments(&app, &member_cookie).await?;
     assert_cancelled_auction_tournament_archive(&app, &member_cookie).await?;
+    assert_bidding_auction_tournament_bracket_is_unavailable(&app, &pool, &member_cookie).await?;
     assert_auction_tournament_cancel_preview(&app).await?;
+    assert_twenty_person_semifinal_game_requires_both_lineups(&app, &pool).await?;
     assert_legacy_auction_match_lock_exemption(&pool).await?;
 
     pool.close().await;
@@ -325,6 +329,14 @@ async fn assert_auction_tournaments(app: &Router, cookie: &str) -> TestResult {
         format!("/g/{GUILD_A}/auction/matches/{ACTIVE_MATCH}")
     );
 
+    let bot_active = bot_get(app, &active_path).await?;
+    assert_eq!(bot_active.status(), StatusCode::OK);
+    let bot_active = body_json(bot_active).await?;
+    assert_eq!(
+        bot_active["data"]["tournaments"][0]["id"],
+        ACTIVE_TOURNAMENT
+    );
+
     let completed_path = format!("/api/guilds/{GUILD_A}/auction-tournaments?state=completed");
     let completed = get(app, &completed_path, Some(cookie)).await?;
     assert_eq!(completed.status(), StatusCode::OK);
@@ -372,6 +384,39 @@ async fn assert_cancelled_auction_tournament_archive(app: &Router, cookie: &str)
     assert_eq!(body["data"]["teams"].as_array().map(Vec::len), Some(2));
     assert_eq!(body["data"]["players"].as_array().map(Vec::len), Some(0));
     assert_eq!(body["data"]["permissions"]["canRevertResults"], false);
+    assert_eq!(body["data"]["permissions"]["canRecoverBracket"], false);
+    Ok(())
+}
+
+async fn assert_bidding_auction_tournament_bracket_is_unavailable(
+    app: &Router,
+    pool: &PgPool,
+    cookie: &str,
+) -> TestResult {
+    sqlx::query(
+        "UPDATE auction_tournaments
+         SET status = 'BIDDING', champion_team_id = NULL, ended_at = NULL
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_A)
+    .bind(id(COMPLETED_TOURNAMENT))
+    .execute(pool)
+    .await?;
+
+    let path = format!("/api/guilds/{GUILD_A}/auction-tournaments/{COMPLETED_TOURNAMENT}/bracket");
+    let response = get(app, &path, Some(cookie)).await?;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_json(response).await?;
+    assert_eq!(
+        body["error"]["code"],
+        "auction_tournament_bracket_unavailable"
+    );
+    assert_eq!(
+        body["error"]["message"],
+        "경매 드래프트가 완료된 후 브래킷을 확인할 수 있습니다."
+    );
+    assert_eq!(body["error"]["details"]["currentStatus"], "BIDDING");
+    assert!(body["error"]["requestId"].is_string());
     Ok(())
 }
 
@@ -385,6 +430,77 @@ async fn assert_auction_tournament_cancel_preview(app: &Router) -> TestResult {
     assert_eq!(body["data"]["tournament"]["displayNumber"], 116);
     assert_eq!(body["data"]["tournament"]["status"], "CANCELLED");
     assert_eq!(body["data"]["tournament"]["revision"], 6);
+    Ok(())
+}
+
+async fn assert_twenty_person_semifinal_game_requires_both_lineups(
+    app: &Router,
+    pool: &PgPool,
+) -> TestResult {
+    sqlx::query(
+        "INSERT INTO guild_config (
+             guild_id, display_name, operator_role_id, recruitment_channel_id,
+             log_channel_id, is_externally_public, revision, updated_by, updated_at
+         ) VALUES ($1, 'Workflow Guild', $2, $3, NULL, false, 0, $4, CURRENT_TIMESTAMP)",
+    )
+    .bind(GUILD_A)
+    .bind(OPERATOR_ROLE_ID)
+    .bind(RECRUITMENT_CHANNEL_ID)
+    .bind(USER_ID)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_member_discord_roles (guild_id, user_id, role_id, last_synced_at)
+         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)",
+    )
+    .bind(GUILD_A)
+    .bind(USER_ID)
+    .bind(OPERATOR_ROLE_ID)
+    .execute(pool)
+    .await?;
+
+    let path = format!("/api/guilds/{GUILD_A}/auction-matches/{ACTIVE_MATCH}/games");
+    let response = browser_post(
+        app,
+        &path,
+        "01900000-0000-7000-8000-000000000901",
+        json!({
+            "expectedRevision": 2,
+            "setNumber": 1,
+            "sidePreset": "DEFAULT",
+            "winner": "BLUE",
+            "picks": {},
+            "bans": {
+                "BLUE": [null, null, null, null, null],
+                "RED": [null, null, null, null, null]
+            },
+            "patchVersion": null
+        }),
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_json(response).await?;
+    assert_eq!(
+        body["error"]["code"],
+        "auction_match_semifinal_lineups_incomplete"
+    );
+    assert_eq!(
+        body["error"]["message"],
+        "20인 경매 내전은 두 준결승의 라인업을 모두 확정한 뒤 세트 결과를 입력할 수 있습니다."
+    );
+    assert!(body["error"]["requestId"].is_string());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM game_inputs
+             WHERE guild_id = $1 AND auction_match_id = $2",
+        )
+        .bind(GUILD_A)
+        .bind(id(ACTIVE_MATCH))
+        .fetch_one(pool)
+        .await?,
+        0
+    );
     Ok(())
 }
 
@@ -1021,6 +1137,26 @@ async fn get(app: &Router, uri: &str, cookie: Option<&str>) -> TestResult<Respon
         request = request.header(header::COOKIE, cookie);
     }
     Ok(app.clone().oneshot(request.body(Body::empty())?).await?)
+}
+
+async fn browser_post(
+    app: &Router,
+    path: &str,
+    idempotency_key: &str,
+    body: Value,
+) -> TestResult<Response<Body>> {
+    let csrf = format!("{SESSION_TOKEN}-csrf");
+    let request = Request::post(path)
+        .header(
+            header::COOKIE,
+            format!("monkeybot_session={SESSION_TOKEN}; monkeybot_csrf={csrf}"),
+        )
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, PUBLIC_ORIGIN)
+        .header("x-csrf-token", &csrf)
+        .header("idempotency-key", idempotency_key)
+        .body(Body::from(serde_json::to_vec(&body)?))?;
+    Ok(app.clone().oneshot(request).await?)
 }
 
 async fn bot_get(app: &Router, uri: &str) -> TestResult<Response<Body>> {

@@ -133,6 +133,7 @@ export interface AuctionWorkItem {
 }
 
 export function buildAuctionView(input: {
+	guildId: string;
 	recruitments: AuctionRecruitmentDto[];
 	activeTournaments: AuctionTournamentDto[];
 	completedTournaments: AuctionTournamentDto[];
@@ -152,7 +153,9 @@ export function buildAuctionView(input: {
 		tone: 'warning',
 		sortTimestamp: item.updatedAt
 	}));
-	const activeTournamentRows = input.activeTournaments.map(mapActiveAuctionTournament);
+	const activeTournamentRows = input.activeTournaments.map((item) =>
+		mapActiveAuctionTournament(item, input.guildId)
+	);
 	const activeWork = [...recruitmentRows, ...activeTournamentRows]
 		.sort(compareUpdatedRows)
 		.map(({ sortTimestamp, ...item }) => {
@@ -204,7 +207,7 @@ function mapArchivedAuctionTournament(item: AuctionTournamentDto): AuctionWorkIt
 	};
 }
 
-function mapActiveAuctionTournament(item: AuctionTournamentDto): AuctionWorkItem {
+function mapActiveAuctionTournament(item: AuctionTournamentDto, guildId: string): AuctionWorkItem {
 	if (item.status === 'BIDDING') {
 		return {
 			id: `tournament:${item.id}`,
@@ -245,7 +248,7 @@ function mapActiveAuctionTournament(item: AuctionTournamentDto): AuctionWorkItem
 				? `${item.nextMatch.label} · ${item.nextMatch.confirmedGameCount + 1}세트 결과 대기`
 				: `${item.nextMatch.label} · 라인업 대기`
 			: `${item.incompleteMatchCount}경기 진행 대기`,
-		href: item.href,
+		href: `/g/${guildId}/auction/tournaments/${item.id}/result`,
 		iconKind: 'bracket',
 		tone: 'warning',
 		sortTimestamp: item.updatedAt

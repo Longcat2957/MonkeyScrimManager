@@ -20,7 +20,12 @@ const championCatalog: ChampionCatalog = {
 };
 
 const snapshot: GuildRecordsSearchSnapshot = {
-	member: { displayName: 'Longcat', avatarUrl: null, mainLane: 'MID' },
+	member: {
+		displayName: 'Longcat',
+		avatarUrl: null,
+		mainLane: 'MID',
+		profileHref: '/users/390526792496054283'
+	},
 	championPreferences: {
 		TOP: [],
 		JUNGLE: [],
@@ -103,5 +108,13 @@ describe('/g/[guildId]/records page', () => {
 		expect(body).toContain('FutureChampion');
 		expect(body).toContain('FutureChampion (이미지 없음)');
 		expect(body).not.toContain('/img/champion/FutureChampion.png');
+		expect(body).not.toContain('href="/users/390526792496054283"');
+	});
+
+	it('does not expose the deferred public-profile route from guild records', () => {
+		const { body } = renderPage();
+
+		expect(body).toContain('Longcat');
+		expect(body).not.toContain('href="/users/390526792496054283"');
 	});
 });

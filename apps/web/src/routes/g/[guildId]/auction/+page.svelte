@@ -17,20 +17,99 @@
 		auctionRecruitmentErrorText,
 		createAuctionRecruitment
 	} from '$lib/api/auctionRecruitment';
+	import {
+		auctionListErrorText,
+		fetchActionableAuctionRecruitments,
+		fetchAuctionTournaments
+	} from '$lib/api/auctionList';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import {
 		auctionBestOfValues,
 		type AuctionBestOf,
-		type AuctionRecruitmentDto
+		type AuctionRecruitmentDto,
+		type AuctionTournamentDto
 	} from '$lib/contracts/workflow';
+	import { buildAuctionView } from '$lib/workflow/presentation';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { formatAuctionRules } from '$lib/workflow/auctionRules';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
-	const activeAuctionWork = $derived(data.view.activeWork);
-	const completedAuctionWork = $derived(data.view.completedWork);
+	type AuctionPageSource = {
+		actionableRecruitments: {
+			recruitments: AuctionRecruitmentDto[];
+			nextCursor: string | null;
+		};
+		activeTournaments: {
+			tournaments: AuctionTournamentDto[];
+			nextCursor: string | null;
+		};
+		completedTournaments: {
+			tournaments: AuctionTournamentDto[];
+			nextCursor: string | null;
+		};
+	};
+	type AuctionPaginationState = {
+		source: AuctionPageSource;
+		recruitments: AuctionRecruitmentDto[];
+		activeTournaments: AuctionTournamentDto[];
+		completedTournaments: AuctionTournamentDto[];
+		nextRecruitmentCursor: string | null;
+		nextActiveTournamentCursor: string | null;
+		nextCompletedTournamentCursor: string | null;
+		activeLoading: boolean;
+		completedLoading: boolean;
+		activeError: string | null;
+		completedError: string | null;
+	};
+	type PageResult<T> = { page: T; error: null } | { page: null; error: unknown };
+
+	let auctionPagination = $state<AuctionPaginationState | null>(null);
+	const currentAuctionPagination = $derived(
+		auctionPagination?.source === data.auctionPages ? auctionPagination : null
+	);
+	const actionableRecruitments = $derived(
+		currentAuctionPagination?.recruitments ?? data.auctionPages.actionableRecruitments.recruitments
+	);
+	const activeTournaments = $derived(
+		currentAuctionPagination?.activeTournaments ?? data.auctionPages.activeTournaments.tournaments
+	);
+	const completedTournaments = $derived(
+		currentAuctionPagination?.completedTournaments ??
+			data.auctionPages.completedTournaments.tournaments
+	);
+	const nextRecruitmentCursor = $derived(
+		currentAuctionPagination?.nextRecruitmentCursor ??
+			data.auctionPages.actionableRecruitments.nextCursor
+	);
+	const nextActiveTournamentCursor = $derived(
+		currentAuctionPagination?.nextActiveTournamentCursor ??
+			data.auctionPages.activeTournaments.nextCursor
+	);
+	const nextCompletedTournamentCursor = $derived(
+		currentAuctionPagination?.nextCompletedTournamentCursor ??
+			data.auctionPages.completedTournaments.nextCursor
+	);
+	const activeAuctionLoading = $derived(currentAuctionPagination?.activeLoading ?? false);
+	const completedAuctionLoading = $derived(currentAuctionPagination?.completedLoading ?? false);
+	const activeAuctionLoadMoreError = $derived(currentAuctionPagination?.activeError ?? null);
+	const completedAuctionLoadMoreError = $derived(currentAuctionPagination?.completedError ?? null);
+	const hasMoreActiveAuctionWork = $derived(
+		nextRecruitmentCursor !== null || nextActiveTournamentCursor !== null
+	);
+	const hasMoreCompletedAuctionWork = $derived(nextCompletedTournamentCursor !== null);
+	const auctionView = $derived(
+		buildAuctionView({
+			guildId: data.guildId,
+			recruitments: actionableRecruitments,
+			activeTournaments,
+			completedTournaments
+		})
+	);
+	const activeAuctionWork = $derived(auctionView.activeWork);
+	const completedAuctionWork = $derived(auctionView.completedWork);
 	const iconByKind = {
 		recruitment: UsersRound,
 		bidding: Gavel,
@@ -59,6 +138,207 @@
 	let createSemifinalBestOf = $state<AuctionBestOf>(3);
 	let createFinalBestOf = $state<AuctionBestOf>(3);
 	let createHardFearless = $state(false);
+	const consumedRecruitmentCursors = new SvelteSet<string>();
+	const consumedActiveTournamentCursors = new SvelteSet<string>();
+	const consumedCompletedTournamentCursors = new SvelteSet<string>();
+	let consumedCursorSource: AuctionPageSource | null = null;
+
+	function currentPaginationState(source: AuctionPageSource): AuctionPaginationState {
+		const current = auctionPagination?.source === source ? auctionPagination : null;
+		return {
+			source,
+			recruitments: current?.recruitments ?? source.actionableRecruitments.recruitments,
+			activeTournaments: current?.activeTournaments ?? source.activeTournaments.tournaments,
+			completedTournaments:
+				current?.completedTournaments ?? source.completedTournaments.tournaments,
+			nextRecruitmentCursor:
+				current?.nextRecruitmentCursor ?? source.actionableRecruitments.nextCursor,
+			nextActiveTournamentCursor:
+				current?.nextActiveTournamentCursor ?? source.activeTournaments.nextCursor,
+			nextCompletedTournamentCursor:
+				current?.nextCompletedTournamentCursor ?? source.completedTournaments.nextCursor,
+			activeLoading: current?.activeLoading ?? false,
+			completedLoading: current?.completedLoading ?? false,
+			activeError: current?.activeError ?? null,
+			completedError: current?.completedError ?? null
+		};
+	}
+
+	function resetConsumedCursors(source: AuctionPageSource) {
+		if (consumedCursorSource === source) return;
+		consumedRecruitmentCursors.clear();
+		consumedActiveTournamentCursors.clear();
+		consumedCompletedTournamentCursors.clear();
+		consumedCursorSource = source;
+	}
+
+	function mergePages<T extends { id: string }>(existing: T[], additions: T[]): T[] {
+		const knownIds = new Set(existing.map((item) => item.id));
+		return [...existing, ...additions.filter((item) => !knownIds.has(item.id))];
+	}
+
+	async function capturePage<T>(request: Promise<T>): Promise<PageResult<T>> {
+		try {
+			return { page: await request, error: null };
+		} catch (error) {
+			return { page: null, error };
+		}
+	}
+
+	function repeatedCursor(
+		nextCursor: string | null,
+		cursor: string,
+		consumedCursors: SvelteSet<string>
+	): boolean {
+		return nextCursor === cursor || consumedCursors.has(nextCursor ?? '');
+	}
+
+	async function loadMoreActiveAuctionWork() {
+		const source = data.auctionPages;
+		resetConsumedCursors(source);
+		const state = currentPaginationState(source);
+		const recruitmentCursor = state.nextRecruitmentCursor;
+		const tournamentCursor = state.nextActiveTournamentCursor;
+		if (
+			state.activeLoading ||
+			state.completedLoading ||
+			(!recruitmentCursor && !tournamentCursor) ||
+			(recruitmentCursor && consumedRecruitmentCursors.has(recruitmentCursor)) ||
+			(tournamentCursor && consumedActiveTournamentCursors.has(tournamentCursor))
+		) {
+			return;
+		}
+
+		const sourceGuildId = data.guildId;
+		if (recruitmentCursor) consumedRecruitmentCursors.add(recruitmentCursor);
+		if (tournamentCursor) consumedActiveTournamentCursors.add(tournamentCursor);
+		auctionPagination = { ...state, activeLoading: true, activeError: null };
+		const [recruitmentResult, tournamentResult] = await Promise.all([
+			recruitmentCursor
+				? capturePage(
+						fetchActionableAuctionRecruitments(globalThis.fetch, sourceGuildId, {
+							limit: 100,
+							cursor: recruitmentCursor
+						})
+					)
+				: Promise.resolve(null),
+			tournamentCursor
+				? capturePage(
+						fetchAuctionTournaments(globalThis.fetch, sourceGuildId, 'active', {
+							limit: 100,
+							cursor: tournamentCursor
+						})
+					)
+				: Promise.resolve(null)
+		]);
+		if (data.auctionPages !== source || data.guildId !== sourceGuildId) return;
+
+		let recruitments = state.recruitments;
+		let activeTournaments = state.activeTournaments;
+		let nextRecruitmentCursor = recruitmentCursor;
+		let nextActiveTournamentCursor = tournamentCursor;
+		const errors: string[] = [];
+		if (recruitmentCursor && recruitmentResult) {
+			if (recruitmentResult.page) {
+				recruitments = mergePages(recruitments, recruitmentResult.page.recruitments);
+				if (
+					repeatedCursor(
+						recruitmentResult.page.nextCursor,
+						recruitmentCursor,
+						consumedRecruitmentCursors
+					)
+				) {
+					nextRecruitmentCursor = null;
+					errors.push('경매 모집 목록 페이지가 갱신되지 않았습니다. 페이지를 새로고침해 주세요.');
+				} else {
+					nextRecruitmentCursor = recruitmentResult.page.nextCursor;
+				}
+			} else {
+				consumedRecruitmentCursors.delete(recruitmentCursor);
+				errors.push(auctionListErrorText(recruitmentResult.error));
+			}
+		}
+		if (tournamentCursor && tournamentResult) {
+			if (tournamentResult.page) {
+				activeTournaments = mergePages(activeTournaments, tournamentResult.page.tournaments);
+				if (
+					repeatedCursor(
+						tournamentResult.page.nextCursor,
+						tournamentCursor,
+						consumedActiveTournamentCursors
+					)
+				) {
+					nextActiveTournamentCursor = null;
+					errors.push('진행 중인 경매 페이지가 갱신되지 않았습니다. 페이지를 새로고침해 주세요.');
+				} else {
+					nextActiveTournamentCursor = tournamentResult.page.nextCursor;
+				}
+			} else {
+				consumedActiveTournamentCursors.delete(tournamentCursor);
+				errors.push(auctionListErrorText(tournamentResult.error));
+			}
+		}
+		auctionPagination = {
+			...state,
+			recruitments,
+			activeTournaments,
+			nextRecruitmentCursor,
+			nextActiveTournamentCursor,
+			activeLoading: false,
+			activeError: errors.join(' ') || null
+		};
+	}
+
+	async function loadMoreCompletedAuctionWork() {
+		const source = data.auctionPages;
+		resetConsumedCursors(source);
+		const state = currentPaginationState(source);
+		const cursor = state.nextCompletedTournamentCursor;
+		if (
+			!cursor ||
+			state.activeLoading ||
+			state.completedLoading ||
+			consumedCompletedTournamentCursors.has(cursor)
+		) {
+			return;
+		}
+
+		const sourceGuildId = data.guildId;
+		consumedCompletedTournamentCursors.add(cursor);
+		auctionPagination = { ...state, completedLoading: true, completedError: null };
+		const result = await capturePage(
+			fetchAuctionTournaments(globalThis.fetch, sourceGuildId, 'completed', { limit: 100, cursor })
+		);
+		if (data.auctionPages !== source || data.guildId !== sourceGuildId) return;
+
+		if (!result.page) {
+			consumedCompletedTournamentCursors.delete(cursor);
+			auctionPagination = {
+				...state,
+				completedLoading: false,
+				completedError: auctionListErrorText(result.error)
+			};
+			return;
+		}
+
+		const nextCursor = repeatedCursor(
+			result.page.nextCursor,
+			cursor,
+			consumedCompletedTournamentCursors
+		)
+			? null
+			: result.page.nextCursor;
+		auctionPagination = {
+			...state,
+			completedTournaments: mergePages(state.completedTournaments, result.page.tournaments),
+			nextCompletedTournamentCursor: nextCursor,
+			completedLoading: false,
+			completedError:
+				nextCursor === null && result.page.nextCursor !== null
+					? '완료된 경매 목록 페이지가 갱신되지 않았습니다. 페이지를 새로고침해 주세요.'
+					: null
+		};
+	}
 
 	function openCreateDialog() {
 		if (creatingRecruitment) return;
@@ -134,7 +414,7 @@
 {#snippet AuctionRow(item: AuctionWorkItem, actionLabel: string)}
 	{@const Icon = iconByKind[item.iconKind]}
 	<div
-		class="grid gap-3 px-4 py-3 md:grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_116px] md:items-center"
+		class="grid gap-3 px-4 py-3 md:grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_minmax(116px,15rem)] md:items-center"
 	>
 		<div class="flex min-w-0 items-center gap-3">
 			<span
@@ -156,13 +436,15 @@
 			<StatusPill label={item.status} tone={item.tone} />
 			<span class="truncate text-xs text-slate-500">{item.detail}</span>
 		</div>
-		<a
-			href={item.href}
-			class="inline-flex h-9 items-center justify-center gap-1.5 border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
-		>
-			{item.kind === '보관' ? '기록 보기' : actionLabel}
-			<ArrowRight size={14} aria-hidden="true" />
-		</a>
+		<div class="flex flex-wrap items-center gap-2 md:justify-end">
+			<a
+				href={item.href}
+				class="inline-flex h-9 items-center justify-center gap-1.5 border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
+			>
+				{item.kind === '보관' ? '기록 보기' : actionLabel}
+				<ArrowRight size={14} aria-hidden="true" />
+			</a>
+		</div>
 	</div>
 {/snippet}
 
@@ -202,7 +484,7 @@
 			<span class="text-xs font-semibold text-slate-500">{activeAuctionWork.length}건</span>
 		</header>
 		<div
-			class="hidden grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_116px] border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-4 py-2 text-[10px] font-semibold text-slate-600 md:grid"
+			class="hidden grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_minmax(116px,15rem)] border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-4 py-2 text-[10px] font-semibold text-slate-600 md:grid"
 		>
 			<span>경매</span><span>구분</span><span>현재 상태</span><span></span>
 		</div>
@@ -215,6 +497,28 @@
 				</div>
 			{/each}
 		</div>
+		{#if hasMoreActiveAuctionWork || activeAuctionLoadMoreError}
+			<div class="grid gap-2 border-t border-[var(--color-app-border)] px-4 py-3">
+				{#if hasMoreActiveAuctionWork}
+					<button
+						type="button"
+						disabled={activeAuctionLoading || completedAuctionLoading}
+						onclick={() => void loadMoreActiveAuctionWork()}
+						class="inline-flex h-9 w-full items-center justify-center gap-1.5 border border-[var(--color-app-border)] text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] disabled:opacity-35"
+					>
+						{#if activeAuctionLoading}
+							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
+							불러오는 중
+						{:else}
+							더 불러오기
+						{/if}
+					</button>
+				{/if}
+				{#if activeAuctionLoadMoreError}
+					<p class="text-xs leading-5 text-rose-300" role="alert">{activeAuctionLoadMoreError}</p>
+				{/if}
+			</div>
+		{/if}
 	</section>
 
 	<section
@@ -230,7 +534,7 @@
 			<span class="text-xs font-semibold text-slate-500">{completedAuctionWork.length}건</span>
 		</header>
 		<div
-			class="hidden grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_116px] border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-4 py-2 text-[10px] font-semibold text-slate-600 md:grid"
+			class="hidden grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_minmax(116px,15rem)] border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-4 py-2 text-[10px] font-semibold text-slate-600 md:grid"
 		>
 			<span>경매</span><span>구분</span><span>결과 · 보관</span><span></span>
 		</div>
@@ -243,6 +547,30 @@
 				</div>
 			{/each}
 		</div>
+		{#if hasMoreCompletedAuctionWork || completedAuctionLoadMoreError}
+			<div class="grid gap-2 border-t border-[var(--color-app-border)] px-4 py-3">
+				{#if hasMoreCompletedAuctionWork}
+					<button
+						type="button"
+						disabled={activeAuctionLoading || completedAuctionLoading}
+						onclick={() => void loadMoreCompletedAuctionWork()}
+						class="inline-flex h-9 w-full items-center justify-center gap-1.5 border border-[var(--color-app-border)] text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] disabled:opacity-35"
+					>
+						{#if completedAuctionLoading}
+							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
+							불러오는 중
+						{:else}
+							더 불러오기
+						{/if}
+					</button>
+				{/if}
+				{#if completedAuctionLoadMoreError}
+					<p class="text-xs leading-5 text-rose-300" role="alert">
+						{completedAuctionLoadMoreError}
+					</p>
+				{/if}
+			</div>
+		{/if}
 	</section>
 </div>
 
@@ -298,7 +626,7 @@
 							role="radiogroup"
 							aria-label="4강 시리즈 형식"
 						>
-							{#each auctionBestOfValues as bestOf}
+							{#each auctionBestOfValues as bestOf (bestOf)}
 								<button
 									type="button"
 									role="radio"
@@ -327,7 +655,7 @@
 						role="radiogroup"
 						aria-label={createFormat === 'TEN_PERSON' ? '시리즈 형식' : '결승 시리즈 형식'}
 					>
-						{#each auctionBestOfValues as bestOf}
+						{#each auctionBestOfValues as bestOf (bestOf)}
 							<button
 								type="button"
 								role="radio"

@@ -175,7 +175,8 @@ async fn assert_visible_profile(app: &Router) -> TestResult {
             json!({
                 "displayName": "Longcat",
                 "avatarUrl": null,
-                "mainLane": "MID"
+                "mainLane": "MID",
+                "profileHref": format!("/users/{VISIBLE_ID}")
             })
         );
         assert_eq!(
@@ -219,6 +220,12 @@ async fn assert_privacy_filtering(app: &Router) -> TestResult {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await?;
         assert_eq!(body["data"]["riotAccounts"], json!([]));
+        let expected_profile_href = if query == "Hidden" {
+            Value::Null
+        } else {
+            Value::String(format!("/users/{MISSING_PRIVACY_ID}"))
+        };
+        assert_eq!(body["data"]["member"]["profileHref"], expected_profile_href);
         assert_private_fields_absent(&body);
     }
 
@@ -240,6 +247,10 @@ async fn assert_records_search(app: &Router) -> TestResult {
     assert_eq!(first.status(), StatusCode::OK);
     let first = body_json(first).await?;
     assert_eq!(first["data"]["member"]["displayName"], "Longcat");
+    assert_eq!(
+        first["data"]["member"]["profileHref"],
+        format!("/users/{VISIBLE_ID}")
+    );
     assert_eq!(first["data"]["selectedSeasonId"], SEASON_ID);
     assert_eq!(
         first["data"]["summary"],
@@ -583,14 +594,17 @@ async fn seed_profile_data(pool: &PgPool) -> TestResult {
         .await?;
     }
 
-    for (user_id, show_riot_ids) in [(VISIBLE_ID, true), (HIDDEN_ID, false)] {
+    for (user_id, public_profile_enabled, show_riot_ids) in
+        [(VISIBLE_ID, true, true), (HIDDEN_ID, false, false)]
+    {
         sqlx::query(
             "INSERT INTO user_privacy_settings (
                  user_id, public_profile_enabled, show_riot_ids,
                  allow_external_record_search, updated_at
-             ) VALUES ($1, true, $2, false, clock_timestamp())",
+             ) VALUES ($1, $2, $3, false, clock_timestamp())",
         )
         .bind(user_id)
+        .bind(public_profile_enabled)
         .bind(show_riot_ids)
         .execute(pool)
         .await?;

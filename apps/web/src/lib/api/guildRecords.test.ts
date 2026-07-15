@@ -6,7 +6,12 @@ const guildId = '1525851181157580861';
 const seasonId = '01900000-0000-7000-8000-000000000010';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const snapshot: GuildRecordsSearchSnapshot = {
-	member: { displayName: 'Longcat', avatarUrl: null, mainLane: 'MID' },
+	member: {
+		displayName: 'Longcat',
+		avatarUrl: null,
+		mainLane: 'MID',
+		profileHref: '/users/390526792496054283'
+	},
 	championPreferences: {
 		TOP: [],
 		JUNGLE: [],

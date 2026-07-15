@@ -10,6 +10,7 @@ import { renderAuctionTournamentResultMessage } from './auction-tournament-resul
 const guildId = '200000000000000001';
 const channelId = '500000000000000001';
 const tournamentId = '01900000-0000-7000-8000-000000000601';
+const webOrigin = new URL('https://dev.monkeybot.lol');
 
 function payload(): AuctionTournamentResultNotificationPayload {
 	return {
@@ -80,8 +81,8 @@ function json(value: unknown): Record<string, unknown> {
 }
 
 describe('renderAuctionTournamentResultMessage', () => {
-	it('renders a compact embed with the champion, rule snapshot, and completed bracket', () => {
-		const rendered = json(renderAuctionTournamentResultMessage(payload()));
+	it('renders a compact embed with the champion, rule snapshot, completed bracket, and result link', () => {
+		const rendered = json(renderAuctionTournamentResultMessage(payload(), webOrigin));
 		const serialized = JSON.stringify(rendered);
 
 		expect(serialized).toContain('경매 내전 완료 #42');
@@ -89,8 +90,11 @@ describe('renderAuctionTournamentResultMessage', () => {
 		expect(serialized).toContain('4강 BO1 · 결승 BO3 · 하드 피어리스');
 		expect(serialized).toContain('준결승 A');
 		expect(serialized).toContain('결승');
+		expect(serialized).toContain('결과 보기');
 		expect(rendered.embeds).toHaveLength(1);
-		expect(rendered).not.toHaveProperty('components');
+		expect(JSON.stringify(rendered.components)).toContain(
+			`https://dev.monkeybot.lol/g/${guildId}/auction/tournaments/${tournamentId}/result`
+		);
 		expect(rendered).not.toHaveProperty('files');
 	});
 
@@ -116,9 +120,9 @@ describe('renderAuctionTournamentResultMessage', () => {
 	});
 
 	it('strictly validates the result deletion payload independently from the result snapshot', () => {
-		expect(auctionTournamentResultDeleteNotificationPayloadSchema.safeParse(deletePayload()).success).toBe(
-			true
-		);
+		expect(
+			auctionTournamentResultDeleteNotificationPayloadSchema.safeParse(deletePayload()).success
+		).toBe(true);
 		expect(
 			auctionTournamentResultDeleteNotificationPayloadSchema.safeParse({
 				...deletePayload(),

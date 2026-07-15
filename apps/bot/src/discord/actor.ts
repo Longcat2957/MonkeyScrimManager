@@ -8,12 +8,9 @@ interface GuildInteractionIdentity {
 
 export function actorFromInteraction(interaction: GuildInteractionIdentity): Actor {
 	const member = interaction.member;
-	const displayName =
-		member instanceof GuildMember
-			? member.displayName
-			: (member?.nick ?? interaction.user.globalName ?? interaction.user.username);
-	const roleIds =
-		member instanceof GuildMember ? [...member.roles.cache.keys()] : [...(member?.roles ?? [])];
+	if (member instanceof GuildMember) return actorFromGuildMember(interaction.user, member);
+	const displayName = member?.nick ?? interaction.user.globalName ?? interaction.user.username;
+	const roleIds = [...(member?.roles ?? [])];
 
 	return {
 		id: interaction.user.id,
@@ -21,6 +18,16 @@ export function actorFromInteraction(interaction: GuildInteractionIdentity): Act
 		displayName,
 		avatarHash: interaction.user.avatar,
 		roleIds
+	};
+}
+
+export function actorFromGuildMember(user: User, member: GuildMember): Actor {
+	return {
+		id: user.id,
+		globalDisplayName: user.globalName ?? user.username,
+		displayName: member.displayName,
+		avatarHash: user.avatar,
+		roleIds: [...member.roles.cache.keys()]
 	};
 }
 

@@ -8,6 +8,19 @@ const source = readFileSync(
 const normalizedSource = source.replace(/\s+/g, ' ');
 
 describe('AuctionMatchGameResultInputBoard', () => {
+	it('adapts the shared series pick-ban workspace to the auction game command', () => {
+		expect(source).toContain(
+			"import ScrimPickBanResultInputBoard from './ScrimPickBanResultInputBoard.svelte'"
+		);
+		expect(source).toContain('<ScrimPickBanResultInputBoard');
+		expect(source).toContain('teams={boardTeams}');
+		expect(source).toContain('hardFearless={snapshot.match.hardFearless}');
+		expect(source).toContain('validateDraft');
+		expect(source).toContain('expectedRevision: snapshot.match.revision');
+		expect(source).toContain('setNumber: nextSetNumber');
+		expect(source).toContain('patchVersion: catalog.version');
+	});
+
 	it('requires explicit confirmation before reverting a confirmed game result', () => {
 		expect(source).toContain('let revertDialogOpen = $state(false)');
 		expect(source).toContain('onclick={() => (revertDialogOpen = true)}');

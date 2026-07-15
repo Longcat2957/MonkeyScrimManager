@@ -133,9 +133,11 @@ impl RealtimeRuntime {
                 self.authorize_auction_recruitment_topic(pool, user_id, topic)
                     .await
             }
-            RealtimeTopicKind::AuctionTournament | RealtimeTopicKind::AuctionMatch => {
-                Err(TopicAuthorizationError::Unsupported)
+            RealtimeTopicKind::AuctionTournament => {
+                self.authorize_auction_tournament_topic(pool, user_id, topic)
+                    .await
             }
+            RealtimeTopicKind::AuctionMatch => Err(TopicAuthorizationError::Unsupported),
         }
     }
 
@@ -254,6 +256,52 @@ impl RealtimeRuntime {
         .bind(topic.guild_id())
         .bind(user_id)
         .bind(recruitment_id.as_uuid())
+        .fetch_one(pool)
+        .await
+        .map_err(TopicAuthorizationError::Database)?;
+
+        if authorized {
+            Ok(())
+        } else {
+            Err(TopicAuthorizationError::Forbidden)
+        }
+    }
+
+    /// Auction bid updates are a narrow operator-only realtime surface. Commands still travel
+    /// through the existing HTTP endpoint; this subscription only delivers invalidations for the
+    /// authoritative tournament snapshot.
+    async fn authorize_auction_tournament_topic(
+        &self,
+        pool: &sqlx::PgPool,
+        user_id: &UserId,
+        topic: &RealtimeTopic,
+    ) -> Result<(), TopicAuthorizationError> {
+        let authorized = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM auction_tournaments AS tournament
+                 JOIN guilds AS guild
+                   ON guild.guild_id = tournament.guild_id
+                  AND guild.status = 'ACTIVE'
+                 JOIN guild_members AS member
+                   ON member.guild_id = tournament.guild_id
+                  AND member.user_id = $2
+                  AND member.status = 'ACTIVE'
+                 JOIN guild_config AS config
+                   ON config.guild_id = tournament.guild_id
+                 JOIN guild_member_discord_roles AS role
+                   ON role.guild_id = member.guild_id
+                  AND role.user_id = member.user_id
+                  AND role.role_id = config.operator_role_id
+                 WHERE tournament.guild_id = $1
+                   AND tournament.id = $3
+                   AND tournament.status = 'BIDDING'
+                   AND tournament.deleted_at IS NULL
+             )",
+        )
+        .bind(topic.guild_id())
+        .bind(user_id)
+        .bind(topic.resource_id())
         .fetch_one(pool)
         .await
         .map_err(TopicAuthorizationError::Database)?;
@@ -789,6 +837,7 @@ mod tests {
 
     const GUILD_ID: &str = "123456789012345678";
     const RECRUITMENT_ID: &str = "01900000-0000-7000-8000-000000000001";
+    const TOURNAMENT_ID: &str = "01900000-0000-7000-8000-000000000004";
     const EVENT_ID: &str = "01900000-0000-7000-8000-000000000002";
     const LEASE_TOKEN: &str = "01900000-0000-7000-8000-000000000003";
 
@@ -848,6 +897,19 @@ mod tests {
                 .expect("auction recruitment")
                 .to_string(),
             RECRUITMENT_ID
+        );
+
+        let auction_tournament_topic = RealtimeTopic::parse(&format!(
+            "guild:{GUILD_ID}:auction-tournament:{TOURNAMENT_ID}"
+        ))
+        .expect("canonical auction tournament topic");
+        assert_eq!(
+            auction_tournament_topic.kind(),
+            RealtimeTopicKind::AuctionTournament
+        );
+        assert_eq!(
+            auction_tournament_topic.resource_id(),
+            Uuid::parse_str(TOURNAMENT_ID).expect("auction tournament ID")
         );
 
         assert!(matches!(

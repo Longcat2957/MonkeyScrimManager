@@ -61,6 +61,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         )
         .route("/api/me", get(context_routes::me))
         .route(
+            "/api/users/{discord_id}/profile",
+            get(context_routes::user_profile),
+        )
+        .route(
             "/api/me/champion-preferences",
             get(champion_preference_routes::get_champion_preferences),
         )
@@ -186,6 +190,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}",
             get(workflow_routes::auction_recruitment).delete(bot_routes::cancel_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/force-cancel",
+            post(bot_routes::force_cancel_auction_recruitment),
         )
         .route(
             "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/setup-draft",

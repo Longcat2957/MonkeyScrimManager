@@ -1,10 +1,17 @@
-import { EmbedBuilder, escapeMarkdown } from 'discord.js';
+import {
+	ActionRowBuilder,
+	ButtonBuilder,
+	ButtonStyle,
+	EmbedBuilder,
+	escapeMarkdown
+} from 'discord.js';
 import type { AuctionTournamentResultNotificationPayload } from '../api/contracts.js';
 
 const MATCH_FIELD_VALUE_LIMIT = 1_024;
 
 export function renderAuctionTournamentResultMessage(
-	payload: AuctionTournamentResultNotificationPayload
+	payload: AuctionTournamentResultNotificationPayload,
+	webOrigin: URL
 ) {
 	const { tournament } = payload;
 	const format = tournament.format === 'TEN_PERSON' ? '10인 경매 내전' : '20인 경매 내전';
@@ -31,7 +38,22 @@ export function renderAuctionTournamentResultMessage(
 		.setTimestamp(new Date(payload.completedAt))
 		.setFooter({ text: 'MonkeyBot' });
 
-	return { embeds: [embed] };
+	return {
+		embeds: [embed],
+		components: [
+			new ActionRowBuilder<ButtonBuilder>().addComponents(
+				new ButtonBuilder()
+					.setLabel('결과 보기')
+					.setStyle(ButtonStyle.Link)
+					.setURL(
+						new URL(
+							`/g/${payload.guildId}/auction/tournaments/${payload.tournamentId}/result`,
+							webOrigin
+						).toString()
+					)
+			)
+		]
+	};
 }
 
 function matchResults(payload: AuctionTournamentResultNotificationPayload): string {

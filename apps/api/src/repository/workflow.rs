@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::domain::{
     AuctionMatchId, AuctionRecruitmentId, AuctionTournamentId, AuctionTournamentStatus, GuildId,
-    RecruitmentId, RecruitmentStatus, SeriesId, SeriesStatus, UserId,
+    RecruitmentId, RecruitmentStatus, SeasonId, SeriesId, SeriesStatus, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -706,6 +706,39 @@ pub async fn list_auction_tournaments(
     user_id: &UserId,
     guild_id: &GuildId,
     state: ListState,
+    season_id: Option<SeasonId>,
+    cursor: Option<PageCursor>,
+    limit: i64,
+) -> Result<Page<AuctionTournamentRecord>, WorkflowRepositoryError> {
+    list_auction_tournaments_for_viewer(
+        pool,
+        Some(user_id),
+        guild_id,
+        state,
+        season_id,
+        cursor,
+        limit,
+    )
+    .await
+}
+
+pub async fn list_auction_tournaments_for_bot(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    state: ListState,
+    season_id: Option<SeasonId>,
+    cursor: Option<PageCursor>,
+    limit: i64,
+) -> Result<Page<AuctionTournamentRecord>, WorkflowRepositoryError> {
+    list_auction_tournaments_for_viewer(pool, None, guild_id, state, season_id, cursor, limit).await
+}
+
+async fn list_auction_tournaments_for_viewer(
+    pool: &PgPool,
+    user_id: Option<&UserId>,
+    guild_id: &GuildId,
+    state: ListState,
+    season_id: Option<SeasonId>,
     cursor: Option<PageCursor>,
     limit: i64,
 ) -> Result<Page<AuctionTournamentRecord>, WorkflowRepositoryError> {
@@ -726,22 +759,31 @@ pub async fn list_auction_tournaments(
              JOIN guilds AS guild
                ON guild.guild_id = tournament.guild_id
               AND guild.status = 'ACTIVE'
-             JOIN guild_members AS viewer
-               ON viewer.guild_id = tournament.guild_id
-              AND viewer.user_id = $1
-              AND viewer.status = 'ACTIVE'
              WHERE tournament.guild_id = $2
+               AND (
+                   $1::text IS NULL
+                   OR EXISTS (
+                       SELECT 1
+                       FROM guild_members AS viewer
+                       WHERE viewer.guild_id = tournament.guild_id
+                         AND viewer.user_id = $1
+                         AND viewer.status = 'ACTIVE'
+                   )
+               )
                AND (
                    ($3 = 'active' AND tournament.status IN ('BIDDING', 'BRACKET_SETUP', 'IN_GAME'))
                    OR ($3 = 'completed' AND tournament.status IN ('COMPLETED', 'CANCELLED'))
                )
                AND tournament.deleted_at IS NULL
                AND (
-                   $4::timestamptz IS NULL
-                   OR (tournament.updated_at, tournament.id) < ($4, $5::uuid)
+                   $4::uuid IS NULL OR tournament.season_id = $4
+               )
+               AND (
+                   $5::timestamptz IS NULL
+                   OR (tournament.updated_at, tournament.id) < ($5, $6::uuid)
                )
              ORDER BY tournament.updated_at DESC, tournament.id DESC
-             LIMIT $6
+             LIMIT $7
          )
          SELECT page.id,
                 page.display_number,
@@ -813,9 +855,10 @@ pub async fn list_auction_tournaments(
          ) AS next_match ON TRUE
          ORDER BY page.updated_at DESC, page.id DESC",
     )
-    .bind(user_id)
+    .bind(user_id.map(UserId::as_str))
     .bind(guild_id)
     .bind(state.as_str())
+    .bind(season_id.map(SeasonId::as_uuid))
     .bind(cursor_time)
     .bind(cursor_id)
     .bind(limit + 1)

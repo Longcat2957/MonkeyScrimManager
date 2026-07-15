@@ -30,9 +30,24 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 	});
 
 	it('wires editable pick-ban cells to explicit Tab navigation', () => {
-		expect(source).toContain('scrimPickBanResultInputCellOrder(teams, bans)');
+		expect(source).toContain('scrimPickBanResultInputCellOrder(pickBanTeams, bans)');
 		expect(source).toContain('function navigateInputCell');
 		expect(source).toContain('onNavigate={canEditDraft ? navigateInputCell : undefined}');
+	});
+
+	it('remaps left and right teams to the selected game sides for local drafts', () => {
+		expect(source).toContain('const pickBanTeams = $derived');
+		expect(source).toContain("BLUE: teamForSide('BLUE')");
+		expect(source).toContain("RED: teamForSide('RED')");
+		expect(source).toContain('team={pickBanTeams.BLUE}');
+		expect(source).toContain('team={pickBanTeams.RED}');
+	});
+
+	it('can opt into client-side duplicate and hard-fearless validation', () => {
+		expect(source).toContain('validateDraft?: boolean');
+		expect(source).toContain('validateDraft = false');
+		expect(source).toContain('(!validateDraft || !hasDraftConflicts)');
+		expect(source).toContain('{#if validateDraft && hasDraftConflicts}');
 	});
 
 	it('only exposes bulk input after an explicit side selection', () => {

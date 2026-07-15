@@ -35,6 +35,7 @@
 		teamsAreGameSides?: boolean;
 		hardFearless?: boolean;
 		previousPickChampionIds?: readonly string[];
+		validateDraft?: boolean;
 		readOnly?: boolean;
 		busy?: boolean;
 		onDraftOperation?: (operation: SeriesPickBanDraftOperation) => void | Promise<void>;
@@ -50,6 +51,7 @@
 		teamsAreGameSides = false,
 		hardFearless = false,
 		previousPickChampionIds = [],
+		validateDraft = false,
 		readOnly = false,
 		busy = false,
 		onDraftOperation,
@@ -62,6 +64,10 @@
 		winner: ScrimPickBanResultInputSide | null;
 		bans: Record<ScrimPickBanResultInputSide, Array<string | null>>;
 		picks: Record<string, string | null>;
+	};
+	type ScrimPickBanResultInputDraftConflicts = {
+		duplicateChampionIds: string[];
+		hardFearlessChampionIds: string[];
 	};
 
 	let inputStep = $state<ScrimPickBanResultInputStep>('SIDE');
@@ -83,6 +89,7 @@
 	let redoStack = $state<ScrimPickBanResultInputSnapshot[]>([]);
 	let saved = $state(false);
 	let submitting = $state(false);
+	let submissionError = $state('');
 	let bulkInputOpen = $state(false);
 	let currentSetExpanded = $state(true);
 	let lastSyncedGameFingerprint: string | null = null;
@@ -93,7 +100,16 @@
 	const allPicksFilled = $derived(Object.values(picks).every(Boolean));
 	const sideDone = $derived(true);
 	const pickBanDone = $derived(allBansFilled && allPicksFilled);
-	const canLeavePickBan = $derived(!strict || pickBanDone);
+	const draftConflicts = $derived(
+		findDraftConflicts(picks, bans, hardFearless, previousPickChampionIds)
+	);
+	const hasDraftConflicts = $derived(
+		draftConflicts.duplicateChampionIds.length > 0 ||
+			draftConflicts.hardFearlessChampionIds.length > 0
+	);
+	const canLeavePickBan = $derived(
+		(!strict || pickBanDone) && (!validateDraft || !hasDraftConflicts)
+	);
 	const ready = $derived(sideDone && canLeavePickBan && winner !== null);
 	const serverDraft = $derived(onDraftOperation !== undefined);
 	const canEditDraft = $derived(!readOnly && !busy);
@@ -109,7 +125,11 @@
 	const sidePresets: ScrimPickBanResultInputSidePreset[] = ['DEFAULT', 'SWAPPED'];
 	const winnerSides: ScrimPickBanResultInputSide[] = ['BLUE', 'RED'];
 	const boardColumns: Array<'LEFT' | 'RIGHT'> = ['LEFT', 'RIGHT'];
-	const inputCellOrder = $derived(scrimPickBanResultInputCellOrder(teams, bans));
+	const pickBanTeams = $derived({
+		BLUE: teamForSide('BLUE'),
+		RED: teamForSide('RED')
+	});
+	const inputCellOrder = $derived(scrimPickBanResultInputCellOrder(pickBanTeams, bans));
 
 	$effect(() => {
 		const fingerprint = gameFingerprint(initialGame);
@@ -134,7 +154,41 @@
 		undoStack = [];
 		redoStack = [];
 		saved = false;
+		submissionError = '';
 	});
+
+	function findDraftConflicts(
+		nextPicks: Record<string, string | null>,
+		nextBans: Record<ScrimPickBanResultInputSide, Array<string | null>>,
+		nextHardFearless: boolean,
+		priorPickChampionIds: readonly string[]
+	): ScrimPickBanResultInputDraftConflicts {
+		const selectedChampionIds = [
+			...Object.values(nextPicks).filter((championId): championId is string => championId !== null),
+			...nextBans.BLUE.filter((championId): championId is string => championId !== null),
+			...nextBans.RED.filter((championId): championId is string => championId !== null)
+		];
+		const counts = new Map<string, number>();
+		for (const championId of selectedChampionIds) {
+			counts.set(championId, (counts.get(championId) ?? 0) + 1);
+		}
+		const duplicateChampionIds = [...counts].flatMap(([championId, count]) =>
+			count > 1 ? [championId] : []
+		);
+		const priorPickIds = new Set(priorPickChampionIds);
+		const hardFearlessChampionIds = nextHardFearless
+			? [
+					...new Set(
+						Object.values(nextPicks).filter(
+							(championId): championId is string =>
+								championId !== null && priorPickIds.has(championId)
+						)
+					)
+				]
+			: [];
+
+		return { duplicateChampionIds, hardFearlessChampionIds };
+	}
 
 	function hasExplicitSideSelection(game: ScrimPickBanResultInputGame): boolean {
 		return (
@@ -176,6 +230,7 @@
 		};
 		picks = { ...snapshot.picks };
 		saved = false;
+		submissionError = '';
 	}
 
 	function recordHistory() {
@@ -221,6 +276,7 @@
 			[side]: bans[side].map((value, valueIndex) => (valueIndex === index ? championId : value))
 		};
 		saved = false;
+		submissionError = '';
 	}
 
 	async function setPick(playerId: string, championId: string | null) {
@@ -236,6 +292,7 @@
 		recordHistory();
 		picks = { ...picks, [playerId]: championId };
 		saved = false;
+		submissionError = '';
 	}
 
 	async function applyBulkInput(items: SeriesPickBanBulkItem[]) {
@@ -261,6 +318,7 @@
 		sidePreset = preset;
 		sideSelected = true;
 		saved = false;
+		submissionError = '';
 	}
 
 	function sideForColumn(
@@ -287,9 +345,13 @@
 		return selected ? 'bg-emerald-400/[0.095]' : 'bg-slate-950/20 opacity-75';
 	}
 
-	function teamForSide(side: ScrimPickBanResultInputSide) {
-		if (teamsAreGameSides) return teams[side];
-		return sideForColumn(sidePreset, 'LEFT') === side ? teams.BLUE : teams.RED;
+	function teamForSide(side: ScrimPickBanResultInputSide): ScrimPickBanResultInputTeam {
+		const source = teamsAreGameSides
+			? teams[side]
+			: sideForColumn(sidePreset, 'LEFT') === side
+				? teams.BLUE
+				: teams.RED;
+		return source.side === side ? source : { ...source, side };
 	}
 
 	function setWinner(side: ScrimPickBanResultInputSide) {
@@ -297,6 +359,7 @@
 		recordHistory();
 		winner = side;
 		saved = false;
+		submissionError = '';
 	}
 
 	function navigateInputCell(current: ScrimPickBanResultInputActiveCell, direction: -1 | 1) {
@@ -347,9 +410,21 @@
 				picks: { ...picks }
 			});
 			saved = true;
+		} catch (cause) {
+			saved = false;
+			submissionError = callbackErrorText(cause);
 		} finally {
 			submitting = false;
 		}
+	}
+
+	function callbackErrorText(cause: unknown): string {
+		if (!(cause instanceof Error)) return '게임 결과를 기록하지 못했습니다.';
+		const details = cause as Error & { requestId?: unknown };
+		const requestId = typeof details.requestId === 'string' ? details.requestId : null;
+		return requestId && !cause.message.includes(requestId)
+			? `${cause.message} (요청 ID: ${requestId})`
+			: cause.message;
 	}
 </script>
 
@@ -488,7 +563,7 @@
 					aria-busy={busy}
 				>
 					<ScrimPickBanResultInputTeamPanel
-						team={teams.BLUE}
+						team={pickBanTeams.BLUE}
 						bans={bans.BLUE}
 						{picks}
 						{activeCell}
@@ -502,7 +577,7 @@
 						onNavigate={canEditDraft ? navigateInputCell : undefined}
 					/>
 					<ScrimPickBanResultInputTeamPanel
-						team={teams.RED}
+						team={pickBanTeams.RED}
 						bans={bans.RED}
 						{picks}
 						{activeCell}
@@ -517,6 +592,27 @@
 					/>
 				</div>
 			</section>
+			{#if validateDraft && hasDraftConflicts}
+				<div
+					class="border-y border-rose-300/25 bg-rose-400/[0.06] px-3 py-2 text-xs leading-5 text-rose-100"
+					role="alert"
+				>
+					{#if draftConflicts.duplicateChampionIds.length > 0}
+						<p>
+							같은 세트에서 중복 선택된 챔피언: {draftConflicts.duplicateChampionIds
+								.map((championId) => champions.find((champion) => champion.id === championId)?.name ?? championId)
+								.join(', ')}
+						</p>
+					{/if}
+					{#if draftConflicts.hardFearlessChampionIds.length > 0}
+						<p>
+							하드 피어리스에서 이전 세트에 픽한 챔피언: {draftConflicts.hardFearlessChampionIds
+								.map((championId) => champions.find((champion) => champion.id === championId)?.name ?? championId)
+								.join(', ')}
+						</p>
+					{/if}
+				</div>
+			{/if}
 		{:else}
 			<section
 				class="border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] p-1.5"
@@ -661,6 +757,14 @@
 				<div class="bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100">
 					결과가 기록되었습니다.
 				</div>
+			{/if}
+			{#if submissionError}
+				<p
+					class="border border-rose-300/25 bg-rose-400/[0.06] px-3 py-2 text-xs leading-5 text-rose-100"
+					role="alert"
+				>
+					{submissionError}
+				</p>
 			{/if}
 		</div>
 

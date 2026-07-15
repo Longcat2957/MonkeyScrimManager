@@ -6,8 +6,15 @@ import { apiRoute } from '$lib/routing';
 
 export { apiRoute };
 
+export interface ApiGetError {
+	status: number;
+	code: string | null;
+	message: string | null;
+}
+
 interface ApiGetContext {
 	url: URL;
+	onApiError?: (apiError: ApiGetError) => void;
 }
 
 export async function apiGet<T>(
@@ -25,7 +32,9 @@ export async function apiGet<T>(
 
 	const payload = await readJson(response);
 	if (!response.ok) {
-		handleErrorResponse(response.status, payload, context.url);
+		const apiError = parseApiGetError(response.status, payload);
+		context.onApiError?.(apiError);
+		handleErrorResponse(apiError, context.url);
 	}
 
 	const envelope = dataSchemaEnvelope(dataSchema).safeParse(payload);
@@ -48,9 +57,17 @@ async function readJson(response: Response): Promise<unknown> {
 	}
 }
 
-function handleErrorResponse(status: number, payload: unknown, url: URL): never {
+function parseApiGetError(status: number, payload: unknown): ApiGetError {
 	const parsed = apiErrorEnvelopeSchema.safeParse(payload);
-	const backendMessage = parsed.success ? parsed.data.error.message : null;
+	return {
+		status,
+		code: parsed.success ? parsed.data.error.code : null,
+		message: parsed.success ? parsed.data.error.message : null
+	};
+}
+
+function handleErrorResponse(apiError: ApiGetError, url: URL): never {
+	const { status, message: backendMessage } = apiError;
 
 	if (status === 401) {
 		const next = `${url.pathname}${url.search}`;

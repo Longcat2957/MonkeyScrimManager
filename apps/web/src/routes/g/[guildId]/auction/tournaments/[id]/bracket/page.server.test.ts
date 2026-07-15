@@ -7,7 +7,7 @@ const tournamentId = '01900000-0000-7000-8000-000000000601';
 const teamOneId = '01900000-0000-7000-8000-000000000611';
 const teamTwoId = '01900000-0000-7000-8000-000000000612';
 
-function snapshot() {
+function snapshot(status: 'BRACKET_SETUP' | 'IN_GAME' | 'COMPLETED' | 'CANCELLED' = 'BRACKET_SETUP') {
 	return {
 		tournament: {
 			id: tournamentId,
@@ -15,7 +15,7 @@ function snapshot() {
 			displayNumber: 42,
 			format: 'TEN_PERSON',
 			rules: { hardFearless: false, semifinalBestOf: null, finalBestOf: 3 },
-			status: 'BIDDING',
+			status,
 			revision: 7,
 			href: `/g/${guildId}/auction/tournaments/${tournamentId}`
 		},
@@ -75,4 +75,48 @@ describe('auction tournament bracket page server load', () => {
 			snapshot: { tournament: { id: tournamentId, revision: 7 }, bracket: { locked: false } }
 		});
 	});
+
+	it('redirects an unfinished bidding tournament back to its draft', async () => {
+		await expect(
+			load({
+				fetch: async () =>
+					Response.json(
+						{
+							error: {
+								code: 'auction_tournament_bracket_unavailable',
+								message: '드래프트가 완료된 뒤 브래킷을 확인할 수 있습니다.',
+								requestId
+							}
+						},
+						{ status: 409 }
+					),
+				params: { guildId, id: tournamentId },
+				parent: async () => ({ guildId }),
+				url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/bracket`)
+			} as never)
+		).rejects.toMatchObject({
+			status: 303,
+			location: `/g/${guildId}/auction/tournaments/${tournamentId}/draft`
+		});
+	});
+
+	it.each(['IN_GAME', 'COMPLETED', 'CANCELLED'] as const)(
+		'redirects %s tournaments to the read-only result bracket',
+		async (status) => {
+			await expect(
+				load({
+					fetch: async () =>
+						Response.json({ data: snapshot(status), meta: { requestId } }),
+					params: { guildId, id: tournamentId },
+					parent: async () => ({ guildId }),
+					url: new URL(
+						`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/bracket`
+					)
+				} as never)
+			).rejects.toMatchObject({
+				status: 303,
+				location: `/g/${guildId}/auction/tournaments/${tournamentId}/result`
+			});
+		}
+	);
 });

@@ -40,9 +40,25 @@ function snapshot() {
 				members: []
 			}
 		],
-		matches: [],
+		matches: [
+			{
+				id: '01900000-0000-7000-8000-000000000701',
+				matchKey: 'FINAL',
+				bestOf: 3,
+				hardFearless: false,
+				status: 'IN_PROGRESS',
+				leftTeamId: teamOneId,
+				rightTeamId: teamTwoId,
+				leftScore: 1,
+				rightScore: 0,
+				winnerTeamId: null,
+				lineupsLocked: false,
+				lineups: [],
+				games: []
+			}
+		],
 		players: [],
-		permissions: { canRevertResults: true }
+		permissions: { canRevertResults: true, canRecoverBracket: false }
 	};
 }
 

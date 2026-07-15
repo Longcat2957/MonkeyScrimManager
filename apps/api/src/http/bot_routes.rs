@@ -20,7 +20,8 @@ use crate::{
     repository::bot_workflow::{
         self, AuctionMatchGameRevertCommand, AuctionMatchGameSubmitCommand,
         AuctionMatchLineupAssignmentCommand, AuctionMatchLineupLockCommand,
-        AuctionRecruitmentSeriesRules, AuctionSetupDraftTeamInput, AuctionTournamentBracketCommand,
+        AuctionRecruitmentForceCancelCommand, AuctionRecruitmentSeriesRules,
+        AuctionSetupDraftTeamInput, AuctionTournamentBracketCommand,
         AuctionTournamentCancelCommand, AuctionTournamentDraftCommand, BotActor,
         BotAuctionRecruitmentParticipationCommand, BotRecruitmentCommand, BotWorkflowError,
         EntryDraftOperation, RecruitmentSeriesRules, RegisterGuildMemberCommand,
@@ -102,6 +103,7 @@ struct BotCreateAuctionRecruitmentRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AuctionRecruitmentMemberRequest {
     actor: ActorRequest,
+    member: Option<ActorRequest>,
     declared_lane: Option<Lane>,
 }
 
@@ -828,6 +830,30 @@ pub async fn cancel_auction_recruitment(
     Ok(error::success(StatusCode::OK, &request_id, snapshot))
 }
 
+pub async fn force_cancel_auction_recruitment(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    headers: HeaderMap,
+    _principal: BotServicePrincipal,
+    Json(request): Json<ActorOnlyRequest>,
+) -> Result<Response, ApiError> {
+    let interaction_id = interaction_id(&headers, &request_id)?;
+    let result = bot_workflow::force_cancel_auction_recruitment(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &interaction_id,
+        &request_id,
+        AuctionRecruitmentForceCancelCommand {
+            actor: actor(request.actor, &request_id)?,
+        },
+    )
+    .await
+    .map_err(|error| command_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
+}
+
 pub async fn join_auction_recruitment(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -841,13 +867,20 @@ pub async fn join_auction_recruitment(
             let request = serde_json::from_value::<AuctionRecruitmentMemberRequest>(request)
                 .map_err(|_| invalid_request("body", &request_id))?;
             let interaction_id = interaction_id(&headers, &request_id)?;
+            let command_actor = actor(request.actor, &request_id)?;
+            let participant = request
+                .member
+                .map(|member| actor(member, &request_id))
+                .transpose()?
+                .unwrap_or_else(|| command_actor.clone());
             let snapshot = bot_workflow::execute_auction_recruitment_participation_command(
                 database(&state, &request_id)?,
                 &guild_id,
                 &interaction_id,
                 &request_id,
                 BotAuctionRecruitmentParticipationCommand::Join {
-                    actor: actor(request.actor, &request_id)?,
+                    actor: command_actor,
+                    participant,
                     recruitment_id,
                     declared_lane: request.declared_lane,
                 },
@@ -2217,6 +2250,13 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
         | BotWorkflowError::AuctionTournamentBracketSlotsIncomplete) => {
             web_auction_tournament_bracket_error(error, request_id)
         }
+        BotWorkflowError::AuctionTournamentBracketUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_bracket_unavailable",
+            "경매 드래프트가 완료된 후 브래킷을 확인할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
         error @ (BotWorkflowError::AuctionMatchNotFound
         | BotWorkflowError::AuctionMatchTeamsPending
         | BotWorkflowError::AuctionMatchTournamentNotReady
@@ -2231,7 +2271,8 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
         | BotWorkflowError::AuctionMatchLineupIncomplete) => {
             web_auction_match_lineup_error(error, request_id)
         }
-        error @ (BotWorkflowError::AuctionMatchResultNotEditable(_)
+        error @ (BotWorkflowError::AuctionMatchSemifinalLineupsIncomplete
+        | BotWorkflowError::AuctionMatchResultNotEditable(_)
         | BotWorkflowError::AuctionMatchSetNotCurrent { .. }
         | BotWorkflowError::AuctionMatchGameChampionDuplicate { .. }
         | BotWorkflowError::AuctionMatchHardFearlessChampionUsed { .. }
@@ -3002,6 +3043,13 @@ fn web_auction_match_game_error(error: BotWorkflowError, request_id: &RequestId)
             "대진이 확정된 진행 중 경매 내전에서만 경기 결과를 변경할 수 있습니다.",
             None,
         ),
+        BotWorkflowError::AuctionMatchSemifinalLineupsIncomplete => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_match_semifinal_lineups_incomplete",
+            "20인 경매 내전은 두 준결승의 라인업을 모두 확정한 뒤 세트 결과를 입력할 수 있습니다.",
+            None,
+        ),
         BotWorkflowError::AuctionMatchRevisionConflict { expected, actual } => ApiError::new(
             StatusCode::CONFLICT,
             request_id,
@@ -3333,5 +3381,31 @@ mod tests {
             }),)
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn auction_match_game_gate_explains_missing_semifinal_lineups() {
+        use axum::{body::to_bytes, response::IntoResponse};
+
+        let request_id = RequestId("test-request".to_owned());
+        let response = web_auction_match_game_error(
+            BotWorkflowError::AuctionMatchSemifinalLineupsIncomplete,
+            &request_id,
+        )
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error body should be readable");
+        let body: Value = serde_json::from_slice(&body).expect("error body should be JSON");
+        assert_eq!(
+            body["error"]["code"],
+            "auction_match_semifinal_lineups_incomplete"
+        );
+        assert_eq!(
+            body["error"]["message"],
+            "20인 경매 내전은 두 준결승의 라인업을 모두 확정한 뒤 세트 결과를 입력할 수 있습니다."
+        );
+        assert_eq!(body["error"]["requestId"], "test-request");
     }
 }

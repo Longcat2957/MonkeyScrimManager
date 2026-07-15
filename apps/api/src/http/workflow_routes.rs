@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use axum::{
     Extension,
     extract::{Path, Query, State},
@@ -13,10 +15,10 @@ use uuid::Uuid;
 use crate::{
     domain::{
         AuctionMatchId, AuctionRecruitmentId, AuctionTournamentId, AuctionTournamentStatus,
-        GuildId, RecruitmentId, RecruitmentStatus, SeriesId,
+        GuildId, RecruitmentId, RecruitmentStatus, SeasonId, SeriesId,
     },
     error::{self, ApiError},
-    http::extractors::AuthenticatedSession,
+    http::extractors::{AuthenticatedSession, RecruitmentCreatePrincipal},
     repository::{
         bot_workflow::{self, BotWorkflowError},
         workflow::{
@@ -210,6 +212,8 @@ pub struct ActionableListQuery {
 #[serde(deny_unknown_fields)]
 pub struct StateListQuery {
     state: RequestedListState,
+    #[serde(rename = "seasonId")]
+    season_id: Option<String>,
     cursor: Option<String>,
     limit: Option<u16>,
 }
@@ -439,20 +443,42 @@ pub async fn auction_tournaments(
     Extension(request_id): Extension<RequestId>,
     Path(guild_id): Path<GuildId>,
     Query(query): Query<StateListQuery>,
-    principal: AuthenticatedSession,
+    principal: RecruitmentCreatePrincipal,
 ) -> Result<Response, ApiError> {
     let (cursor, limit) = page_parameters(query.cursor.as_deref(), query.limit, &request_id)?;
+    let season_id = query
+        .season_id
+        .as_deref()
+        .map(SeasonId::from_str)
+        .transpose()
+        .map_err(|_| invalid_season_id(&request_id))?;
     let pool = database(&state, &request_id)?;
-    require_guild_access(pool, &principal, &guild_id, &request_id).await?;
-    let page = workflow::list_auction_tournaments(
-        pool,
-        &principal.session.user_id,
-        &guild_id,
-        query.state.into(),
-        cursor,
-        limit,
-    )
-    .await
+    let page = match principal {
+        RecruitmentCreatePrincipal::Session(principal) => {
+            require_guild_access(pool, &principal, &guild_id, &request_id).await?;
+            workflow::list_auction_tournaments(
+                pool,
+                &principal.session.user_id,
+                &guild_id,
+                query.state.into(),
+                season_id,
+                cursor,
+                limit,
+            )
+            .await
+        }
+        RecruitmentCreatePrincipal::Bot(_) => {
+            workflow::list_auction_tournaments_for_bot(
+                pool,
+                &guild_id,
+                query.state.into(),
+                season_id,
+                cursor,
+                limit,
+            )
+            .await
+        }
+    }
     .map_err(|error| repository_error(error, &request_id))?;
     let data = map_auction_tournament_page(page, &guild_id, &request_id)?;
 
@@ -1045,6 +1071,13 @@ fn auction_tournament_bracket_snapshot_error(
             "요청한 경매 내전을 찾을 수 없습니다.",
             None,
         ),
+        BotWorkflowError::AuctionTournamentBracketUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_tournament_bracket_unavailable",
+            "경매 드래프트가 완료된 후 브래킷을 확인할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
         BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
         BotWorkflowError::DatabaseBusy => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1224,6 +1257,16 @@ fn invalid_projection(message: &'static str, request_id: &RequestId) -> ApiError
         "internal_error",
         "요청을 처리하는 중 내부 오류가 발생했습니다.",
         None,
+    )
+}
+
+fn invalid_season_id(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::BAD_REQUEST,
+        request_id,
+        "invalid_season_id",
+        "seasonId는 UUID 형식이어야 합니다.",
+        Some(serde_json::json!({ "field": "seasonId" })),
     )
 }
 

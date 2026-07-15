@@ -19,6 +19,7 @@ use testcontainers::{
     runners::AsyncRunner,
 };
 use tower::ServiceExt;
+use uuid::Uuid;
 
 const POSTGRES_IMAGE: &str = "postgres";
 const POSTGRES_TAG: &str = "18.4-alpine3.23";
@@ -589,6 +590,8 @@ async fn run_bot_workflow() -> TestResult {
         format!("/g/{GUILD_A}/recruitments/{recruitment_id}/entry")
     );
 
+    assert_auction_recruitment_force_cancel(&app, &pool).await?;
+
     let setup_b = json!({
         "actor": actor(OTHER_OPERATOR_ID, "Guild B Operator", &[OPERATOR_ROLE_B]),
         "guildName": "Other Guild",
@@ -642,6 +645,118 @@ async fn run_bot_workflow() -> TestResult {
 
     pool.close().await;
     drop(server);
+    Ok(())
+}
+
+async fn assert_auction_recruitment_force_cancel(app: &Router, pool: &sqlx::PgPool) -> TestResult {
+    let operator = actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A]);
+    let created = bot_request(
+        app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_A}/auction-recruitments"),
+        BOT_TOKEN,
+        "create-auction-force-cancel",
+        &json!({
+            "actor": operator,
+            "format": "TEN_PERSON",
+            "semifinalBestOf": null,
+            "finalBestOf": 3,
+            "hardFearless": false,
+        }),
+    )
+    .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = body_json(created).await?;
+    let recruitment_id = created["data"]["recruitment"]["id"]
+        .as_str()
+        .ok_or("created auction recruitment had no ID")?
+        .to_owned();
+    let recruitment_uuid = Uuid::parse_str(&recruitment_id)?;
+    let path = format!("/api/guilds/{GUILD_A}/auction-recruitments/{recruitment_id}/force-cancel");
+
+    assert_error(
+        bot_request(
+            app,
+            Method::POST,
+            &path,
+            BOT_TOKEN,
+            "non-operator-auction-force-cancel",
+            &json!({ "actor": actor(MEMBER_IDS[1], "Member 2", &[]) }),
+        )
+        .await?,
+        StatusCode::FORBIDDEN,
+        "operator_required",
+    )
+    .await?;
+
+    let request = json!({
+        "actor": actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A])
+    });
+    let cancelled = bot_request(
+        app,
+        Method::POST,
+        &path,
+        BOT_TOKEN,
+        "auction-force-cancel",
+        &request,
+    )
+    .await?;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled = body_json(cancelled).await?;
+    assert_eq!(cancelled["data"]["recruitmentId"], recruitment_id);
+    assert_eq!(cancelled["data"]["recruitmentStatus"], "CANCELLED");
+    assert!(
+        cancelled["data"]["recruitmentRevision"]
+            .as_i64()
+            .is_some_and(|revision| revision > 0)
+    );
+    assert!(cancelled["data"]["tournamentId"].is_null());
+    assert!(cancelled["data"]["tournamentStatus"].is_null());
+    assert!(cancelled["data"]["tournamentRevision"].is_null());
+    assert_eq!(cancelled["data"]["reversedGameCount"], 0);
+
+    let replay = bot_request(
+        app,
+        Method::POST,
+        &path,
+        BOT_TOKEN,
+        "auction-force-cancel",
+        &request,
+    )
+    .await?;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(body_json(replay).await?["data"], cancelled["data"]);
+    assert_eq!(
+        sqlx::query_as::<_, (String, i64)>(
+            "SELECT status, revision
+             FROM auction_recruitments
+             WHERE guild_id = $1 AND id = $2",
+        )
+        .bind(GUILD_A)
+        .bind(recruitment_uuid)
+        .fetch_one(pool)
+        .await?,
+        (
+            "CANCELLED".to_owned(),
+            cancelled["data"]["recruitmentRevision"]
+                .as_i64()
+                .unwrap_or_default()
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM admin_audit_log
+             WHERE guild_id = $1
+               AND action = 'AUCTION_RECRUITMENT_FORCE_CANCELLED'
+               AND target_id = $2",
+        )
+        .bind(GUILD_A)
+        .bind(&recruitment_id)
+        .fetch_one(pool)
+        .await?,
+        1
+    );
     Ok(())
 }
 
