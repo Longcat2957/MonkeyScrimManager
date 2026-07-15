@@ -2,15 +2,15 @@ import {
 	ActionRowBuilder,
 	ButtonBuilder,
 	ButtonStyle,
-	EmbedBuilder,
 	escapeMarkdown,
 	StringSelectMenuBuilder
 } from 'discord.js';
 
 import type { AuctionRecruitmentSnapshot, Lane } from '../api/contracts.js';
 import { auctionRecruitmentCustomId } from '../interactions/custom-id.js';
+import { BOT_COLORS, botContainer, botReply, botSeparator, botText } from './message-v2.js';
 
-const MAX_EMBED_FIELD_VALUE_LENGTH = 1_024;
+const MAX_ROSTER_TEXT_LENGTH = 1_024;
 const LANE_LABELS = {
 	TOP: '탑',
 	JUNGLE: '정글',
@@ -29,7 +29,7 @@ export function renderAuctionRecruitmentMessage(
 	const full = joinedCount >= recruitment.participantCount;
 	const formatLabel = `${
 		recruitment.format === 'TEN_PERSON' ? '10인 · 2팀' : '20인 · 4팀'
-	}\n${auctionRulesLabel(recruitment.format, recruitment.rules)}`;
+	} · ${auctionRulesLabel(recruitment.format, recruitment.rules)}`;
 	const statusLabel =
 		recruitment.status === 'OPEN'
 			? full
@@ -40,29 +40,34 @@ export function renderAuctionRecruitmentMessage(
 				: recruitment.status === 'CANCELLED'
 					? '모집 취소'
 					: '경매 진행 중';
-	const embed = new EmbedBuilder()
-		.setColor(
-			recruitment.status === 'OPEN'
-				? full
-					? 0x34d399
-					: 0x22d3ee
-				: recruitment.status === 'CANCELLED'
-					? 0xf87171
-					: 0xfbbf24
-		)
-		.setTitle(`경매 내전 모집 #${recruitment.displayNumber}`)
-		.setDescription(recruitment.title)
-		.addFields(
-			{ name: '상태', value: statusLabel, inline: true },
-			{ name: '형식', value: formatLabel, inline: true },
-			{ name: '정원', value: `${joinedCount} / ${recruitment.participantCount}`, inline: true },
-			...rosterFields(snapshot)
-		);
+	const color =
+		recruitment.status === 'OPEN'
+			? full
+				? BOT_COLORS.success
+				: BOT_COLORS.info
+			: recruitment.status === 'CANCELLED'
+				? BOT_COLORS.error
+				: BOT_COLORS.warning;
 
-	return {
-		embeds: [embed],
-		components: auctionRecruitmentComponents(snapshot, webOrigin, full)
-	};
+	return botReply(
+		botContainer({
+			color,
+			children: [
+				botText(
+					`## 경매 내전 모집 #${recruitment.displayNumber}\n${escapeMarkdown(
+						compactText(recruitment.title)
+					)}`
+				),
+				botText(
+					`**${statusLabel}** · 정원 **${joinedCount} / ${recruitment.participantCount}**\n${formatLabel}`
+				),
+				botSeparator(),
+				botText('### 참가자 · 참가 라인'),
+				...auctionRosterBlocks(snapshot).map((block) => botText(block))
+			]
+		}),
+		...auctionRecruitmentComponents(snapshot, webOrigin, full)
+	);
 }
 
 function auctionRulesLabel(
@@ -74,43 +79,31 @@ function auctionRulesLabel(
 	return `4강 BO${rules.semifinalBestOf ?? 3} · 결승 BO${rules.finalBestOf} · ${fearless}`;
 }
 
-function rosterFields(
-	snapshot: AuctionRecruitmentSnapshot
-): Array<{ name: string; value: string }> {
-	if (snapshot.participants.length === 0) {
-		return [{ name: '참가자 · 참가 라인', value: '아직 참가자가 없습니다.' }];
-	}
+function auctionRosterBlocks(snapshot: AuctionRecruitmentSnapshot): string[] {
+	if (snapshot.participants.length === 0) return ['_(아직 참가자가 없습니다.)_'];
 
-	const chunks: string[] = [];
+	const blocks: string[] = [];
 	let current = '';
 	for (const [index, participant] of snapshot.participants.entries()) {
 		const lane = participant.declaredLane ? LANE_LABELS[participant.declaredLane] : '라인 미설정';
-		const line = truncateRosterLine(
-			`\`${String(index + 1).padStart(2, ' ')}.\` **${escapeMarkdown(compactText(participant.displayName))}** · ${lane}`
-		);
+		const line = `\`${String(index + 1).padStart(2, ' ')}.\` **${escapeMarkdown(
+			compactText(participant.displayName)
+		)}** · ${lane}`;
 		const next = current ? `${current}\n${line}` : line;
-		if (next.length > MAX_EMBED_FIELD_VALUE_LENGTH && current) {
-			chunks.push(current);
+		if (next.length > MAX_ROSTER_TEXT_LENGTH && current) {
+			blocks.push(current);
 			current = line;
 		} else {
 			current = next;
 		}
 	}
-	if (current) chunks.push(current);
-
-	return chunks.map((value, index) => ({
-		name: index === 0 ? '참가자 · 참가 라인' : '참가자 · 참가 라인 (계속)',
-		value
-	}));
+	if (current) blocks.push(current);
+	return blocks;
 }
 
 function compactText(value: string): string {
-	return value.replace(/\s+/g, ' ').trim() || '이름 미설정';
-}
-
-function truncateRosterLine(value: string): string {
-	if (value.length <= MAX_EMBED_FIELD_VALUE_LENGTH) return value;
-	return `${value.slice(0, MAX_EMBED_FIELD_VALUE_LENGTH - 1)}…`;
+	const normalized = value.replace(/\s+/g, ' ').trim() || '이름 미설정';
+	return normalized.length <= 120 ? normalized : `${normalized.slice(0, 119)}…`;
 }
 
 function auctionRecruitmentComponents(

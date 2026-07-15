@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { DiscordAPIError, type Client } from 'discord.js';
+import { DiscordAPIError, MessageFlags, type Client } from 'discord.js';
 import type { Logger } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -66,7 +66,13 @@ describe('Bot notification relay', () => {
 		);
 		expect(send).toHaveBeenCalledTimes(1);
 		const sentOptions = send.mock.calls[0]?.[0];
-		expect(sentOptions).toMatchObject({ nonce: discordNonce, enforceNonce: true });
+		expect(sentOptions).toMatchObject({
+			nonce: discordNonce,
+			enforceNonce: true,
+			flags: MessageFlags.IsComponentsV2
+		});
+		expect(sentOptions).not.toHaveProperty('embeds');
+		expect(sentOptions).not.toHaveProperty('content');
 		expect(messagePayload(sentOptions)).toEqual(
 			messagePayload(renderRecruitmentMessage(snapshot, webOrigin))
 		);
@@ -105,7 +111,13 @@ describe('Bot notification relay', () => {
 
 		expect(send).toHaveBeenCalledTimes(1);
 		const sentOptions = send.mock.calls[0]?.[0];
-		expect(sentOptions).toMatchObject({ nonce: discordNonce, enforceNonce: true });
+		expect(sentOptions).toMatchObject({
+			nonce: discordNonce,
+			enforceNonce: true,
+			flags: MessageFlags.IsComponentsV2
+		});
+		expect(sentOptions).not.toHaveProperty('embeds');
+		expect(sentOptions).not.toHaveProperty('content');
 		expect(messagePayload(sentOptions)).toEqual(
 			messagePayload(renderAuctionRecruitmentMessage(snapshot, webOrigin))
 		);
@@ -317,7 +329,7 @@ describe('Bot notification relay', () => {
 		current.relay.close();
 	});
 
-	it('sends a compact auction tournament result embed with a stable nonce and generic acknowledgement', async () => {
+	it('sends a V2 auction tournament result card with a stable nonce and generic acknowledgement', async () => {
 		const payload = auctionTournamentResultPayload();
 		const sent = { id: messageId };
 		const send = vi.fn(async (options: unknown) => {
@@ -335,18 +347,25 @@ describe('Bot notification relay', () => {
 
 		expect(send).toHaveBeenCalledTimes(1);
 		const sentOptions = send.mock.calls[0]?.[0];
-		expect(sentOptions).toMatchObject({ nonce: discordNonce, enforceNonce: true });
+		expect(sentOptions).toMatchObject({
+			nonce: discordNonce,
+			enforceNonce: true,
+			flags: MessageFlags.IsComponentsV2
+		});
 		expect(messagePayload(sentOptions)).toEqual(
 			messagePayload(renderAuctionTournamentResultMessage(payload, webOrigin))
 		);
 		const resultOptions = sentOptions as {
+			flags?: unknown;
 			embeds?: unknown;
+			content?: unknown;
 			files?: unknown;
 			components?: unknown;
 		};
-		expect(resultOptions.embeds).toHaveLength(1);
+		expect(resultOptions.embeds).toBeUndefined();
+		expect(resultOptions.content).toBeUndefined();
 		expect(resultOptions.files).toBeUndefined();
-		expect(resultOptions.components).toHaveLength(1);
+		expect(resultOptions.components).toHaveLength(2);
 		expect(current.acknowledgeNotification).toHaveBeenCalledWith(
 			{
 				instanceId,
@@ -569,6 +588,9 @@ describe('Bot notification relay', () => {
 		await current.relay.poll();
 
 		expect(channel.messages.fetch).toHaveBeenCalledWith(messageId);
+		expect(edit.mock.calls[0]?.[0]).toMatchObject({ flags: MessageFlags.IsComponentsV2 });
+		expect(edit.mock.calls[0]?.[0]).not.toHaveProperty('embeds');
+		expect(edit.mock.calls[0]?.[0]).not.toHaveProperty('content');
 		expect(messagePayload(edit.mock.calls[0]?.[0])).toEqual(
 			messagePayload(renderRecruitmentMessage(snapshot, webOrigin))
 		);
@@ -582,6 +604,41 @@ describe('Bot notification relay', () => {
 			expect.any(Object)
 		);
 		expect(current.acknowledgeRecruitmentMessage).not.toHaveBeenCalled();
+		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('edits an existing auction recruitment message as a V2 card', async () => {
+		const snapshot = auctionRecruitmentSnapshot({ channelId, messageId });
+		const edit = vi.fn(async (options: unknown) => {
+			void options;
+		});
+		const message = { edit };
+		const channel = textChannel(message);
+		const current = createRelay(
+			[auctionNotification('AUCTION_RECRUITMENT_MESSAGE_UPDATE', snapshot)],
+			channel
+		);
+
+		await current.relay.poll();
+
+		expect(channel.messages.fetch).toHaveBeenCalledWith(messageId);
+		expect(edit.mock.calls[0]?.[0]).toMatchObject({ flags: MessageFlags.IsComponentsV2 });
+		expect(edit.mock.calls[0]?.[0]).not.toHaveProperty('embeds');
+		expect(edit.mock.calls[0]?.[0]).not.toHaveProperty('content');
+		expect(messagePayload(edit.mock.calls[0]?.[0])).toEqual(
+			messagePayload(renderAuctionRecruitmentMessage(snapshot, webOrigin))
+		);
+		expect(current.acknowledgeNotification).toHaveBeenCalledWith(
+			{
+				instanceId,
+				notificationId,
+				leaseToken,
+				discordMessageId: messageId
+			},
+			expect.any(Object)
+		);
+		expect(current.acknowledgeAuctionRecruitmentMessage).not.toHaveBeenCalled();
 		expect(current.nackNotification).not.toHaveBeenCalled();
 		current.relay.close();
 	});
@@ -1102,8 +1159,9 @@ function textChannel(message: object) {
 }
 
 function messagePayload(value: unknown) {
-	const record = value as { embeds?: unknown; components?: unknown };
+	const record = value as { flags?: unknown; embeds?: unknown; components?: unknown };
 	return {
+		...(record.flags !== undefined ? { flags: record.flags } : {}),
 		...(record.embeds ? { embeds: JSON.parse(JSON.stringify(record.embeds)) } : {}),
 		...(record.components ? { components: JSON.parse(JSON.stringify(record.components)) } : {})
 	};

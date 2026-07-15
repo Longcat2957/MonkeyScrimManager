@@ -1,7 +1,10 @@
 import {
+	ActionRowBuilder,
 	ApplicationIntegrationType,
+	ButtonBuilder,
+	ButtonStyle,
+	escapeMarkdown,
 	InteractionContextType,
-	MessageFlags,
 	SlashCommandBuilder
 } from 'discord.js';
 
@@ -10,6 +13,16 @@ import {
 	type AuctionTournamentListData,
 	type AuctionTournamentListRequest
 } from '../api/contracts.js';
+import {
+	BOT_COLORS,
+	botContainer,
+	botDeferOptions,
+	botEditReply,
+	botEphemeralReply,
+	botNotice,
+	botSeparator,
+	botText
+} from '../discord/message-v2.js';
 import { guildInteractionError } from '../interactions/guild-context.js';
 import type { BotCommand } from './types.js';
 
@@ -45,17 +58,14 @@ export const auctionTournamentListCommand: BotCommand = {
 	async execute(interaction, { api, config }) {
 		const guildError = guildInteractionError(interaction);
 		if (guildError) {
-			await interaction.reply({ content: guildError, flags: MessageFlags.Ephemeral });
+			await interaction.reply(commandErrorReply(guildError));
 			return;
 		}
 		if (!interaction.inCachedGuild()) return;
 
 		const seasonId = parseSeasonId(interaction.options.getString(SEASON_OPTION));
 		if (interaction.options.getString(SEASON_OPTION) !== null && !seasonId) {
-			await interaction.reply({
-				content: '시즌 ID는 UUID 형식이어야 합니다.',
-				flags: MessageFlags.Ephemeral
-			});
+			await interaction.reply(commandValidationReply('시즌 ID는 UUID 형식이어야 합니다.'));
 			return;
 		}
 
@@ -64,11 +74,11 @@ export const auctionTournamentListCommand: BotCommand = {
 			limit: interaction.options.getInteger(LIMIT_OPTION) ?? MAX_VISIBLE_TOURNAMENTS,
 			...(seasonId ? { seasonId } : {})
 		};
-		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+		await interaction.deferReply(botDeferOptions(true));
 		const page = await api.listAuctionTournaments(interaction.guildId, input);
 		const dashboardUrl = new URL(`/g/${interaction.guildId}/auction`, config.webOrigin).toString();
 		await interaction.editReply(
-			renderTournamentList(page, input.state, dashboardUrl, config.webOrigin)
+			botEditReply(...renderTournamentList(page, input.state, dashboardUrl, config.webOrigin))
 		);
 	}
 };
@@ -88,18 +98,38 @@ function renderTournamentList(
 	state: AuctionTournamentListRequest['state'],
 	dashboardUrl: string,
 	webOrigin: URL
-): string {
+): [ReturnType<typeof botContainer>, ActionRowBuilder<ButtonBuilder>] {
 	const label = state === 'active' ? '진행 중' : '완료';
+	const dashboardAction = new ActionRowBuilder<ButtonBuilder>().addComponents(
+		new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('경매 내전 열기').setURL(dashboardUrl)
+	);
 	if (page.tournaments.length === 0) {
-		return `${label} 경매 내전이 없습니다.\n전체 보기: ${dashboardUrl}`;
+		return [
+			botNotice({
+				tone: 'info',
+				title: `${label} 경매 내전`,
+				body: '조회할 경매 내전이 없습니다.'
+			}),
+			dashboardAction
+		];
 	}
 
 	const lines = page.tournaments.map((tournament) => {
 		const href = new URL(tournament.href, webOrigin).toString();
-		return `- #${tournament.displayNumber} ${truncate(tournament.title)} · ${statusLabel(tournament.status)} · ${href}`;
+		return [
+			`### #${tournament.displayNumber} ${escapeMarkdown(truncate(tournament.title))}`,
+			`${statusLabel(tournament.status)} · [작업 열기](${href})`
+		].join('\n');
 	});
-	const continuation = page.nextCursor ? '\n추가 항목은 경매 페이지에서 확인할 수 있습니다.' : '';
-	return `${label} 경매 내전\n${lines.join('\n')}${continuation}\n전체 보기: ${dashboardUrl}`;
+	const children = [
+		botText(`## ${label} 경매 내전\n현재 ${page.tournaments.length}개를 표시합니다.`),
+		botSeparator(),
+		botText(lines.join('\n\n'))
+	];
+	if (page.nextCursor) {
+		children.push(botSeparator(), botText('추가 항목은 경매 내전 화면에서 확인할 수 있습니다.'));
+	}
+	return [botContainer({ color: BOT_COLORS.info, children }), dashboardAction];
 }
 
 function truncate(value: string): string {
@@ -122,4 +152,16 @@ function statusLabel(status: AuctionTournamentListData['tournaments'][number]['s
 		case 'CANCELLED':
 			return '취소';
 	}
+}
+
+function commandErrorReply(message: string) {
+	return botEphemeralReply(
+		botNotice({ tone: 'error', title: '명령어를 사용할 수 없습니다', body: message })
+	);
+}
+
+function commandValidationReply(message: string) {
+	return botEphemeralReply(
+		botNotice({ tone: 'warning', title: '경매 내전을 조회할 수 없습니다', body: message })
+	);
 }

@@ -1,10 +1,15 @@
 import {
 	ApplicationIntegrationType,
 	InteractionContextType,
-	MessageFlags,
 	SlashCommandBuilder
 } from 'discord.js';
 import { actorFromInteraction } from '../discord/actor.js';
+import {
+	botDeferOptions,
+	botEditReply,
+	botEphemeralReply,
+	botNotice
+} from '../discord/message-v2.js';
 import { renderRecruitmentMessage } from '../discord/recruitment-message.js';
 import { guildInteractionError } from '../interactions/guild-context.js';
 import type { BotCommand } from './types.js';
@@ -35,15 +40,16 @@ export const recruitCommand: BotCommand = {
 	async execute(interaction, { api, config }) {
 		const guildError = guildInteractionError(interaction);
 		if (guildError) {
-			await interaction.reply({
-				content: guildError,
-				flags: MessageFlags.Ephemeral
-			});
+			await interaction.reply(
+				botEphemeralReply(
+					botNotice({ tone: 'error', title: '내전 모집을 시작할 수 없습니다.', body: guildError })
+				)
+			);
 			return;
 		}
 		if (!interaction.inCachedGuild()) return;
 
-		await interaction.deferReply();
+		await interaction.deferReply(botDeferOptions(false));
 		const actor = actorFromInteraction(interaction);
 		const bestOf = selectedBestOf(interaction.options.getInteger(BEST_OF_OPTION));
 		const hardFearless =
@@ -53,9 +59,8 @@ export const recruitCommand: BotCommand = {
 			{ actor, bestOf, hardFearless },
 			{ idempotencyKey: interaction.id }
 		);
-		const message = await interaction.editReply(
-			renderRecruitmentMessage(snapshot, config.webOrigin)
-		);
+		const rendered = renderRecruitmentMessage(snapshot, config.webOrigin);
+		const message = await interaction.editReply(botEditReply(...rendered.components));
 
 		await api.bindRecruitmentMessage(
 			interaction.guildId,

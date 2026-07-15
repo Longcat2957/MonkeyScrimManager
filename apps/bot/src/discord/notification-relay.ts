@@ -1,4 +1,4 @@
-import { DiscordAPIError, Events, type Client, type MessageEditOptions } from 'discord.js';
+import { DiscordAPIError, Events, type Client } from 'discord.js';
 import type { Logger } from 'pino';
 
 import {
@@ -21,6 +21,7 @@ import { renderAuctionRecruitmentMessage } from './auction-recruitment-message.j
 import { renderAuctionMatchLineupConfirmationMessage } from './auction-match-lineup-confirmation-message.js';
 import { renderAuctionTournamentResultMessage } from './auction-tournament-result-message.js';
 import { renderEntryConfirmationMessage } from './entry-confirmation-message.js';
+import { botEditReply } from './message-v2.js';
 import { renderRecruitmentMessage } from './recruitment-message.js';
 import {
 	renderSeriesResultMessage,
@@ -642,7 +643,7 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 		try {
 			const message = await this.#recruitmentMessage(notification.channelId, messageId);
 			const rendered = renderAuctionRecruitmentMessage(snapshot, this.#webOrigin);
-			await message.edit({ embeds: rendered.embeds, components: rendered.components });
+			await message.edit(botEditReply(...rendered.components));
 			await this.#acknowledge(notification, messageId);
 		} catch (error) {
 			await this.#nack(notification, failureFor(error));
@@ -753,12 +754,9 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 function messageEditOptions(
 	snapshot: ReturnType<typeof recruitmentMessageNotificationPayloadSchema.parse>['snapshot'],
 	webOrigin: URL
-): MessageEditOptions {
+): ReturnType<typeof botEditReply> {
 	const rendered = renderRecruitmentMessage(snapshot, webOrigin);
-	return {
-		...(rendered.embeds ? { embeds: rendered.embeds } : {}),
-		...(rendered.components ? { components: rendered.components } : {})
-	};
+	return botEditReply(...rendered.components);
 }
 
 function isUnknownDiscordMessage(error: unknown): boolean {

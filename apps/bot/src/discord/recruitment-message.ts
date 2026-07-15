@@ -2,11 +2,12 @@ import {
 	ActionRowBuilder,
 	ButtonBuilder,
 	ButtonStyle,
-	EmbedBuilder,
+	escapeMarkdown,
 	StringSelectMenuBuilder
 } from 'discord.js';
 import type { RecruitmentSnapshot } from '../api/contracts.js';
 import { recruitmentCustomId } from '../interactions/custom-id.js';
+import { BOT_COLORS, botContainer, botReply, botSeparator, botText } from './message-v2.js';
 
 const LANE_LABELS = {
 	TOP: '탑',
@@ -17,20 +18,12 @@ const LANE_LABELS = {
 } as const;
 
 const LANES = Object.keys(LANE_LABELS) as Array<keyof typeof LANE_LABELS>;
+const MAX_ROSTER_TEXT_LENGTH = 1_024;
 
 export function renderRecruitmentMessage(snapshot: RecruitmentSnapshot, webOrigin: URL) {
 	const recruitment = snapshot.recruitment;
 	const joinedCount = snapshot.participants.length;
 	const full = joinedCount >= recruitment.targetCount;
-	const roster = snapshot.participants
-		.map((participant, index) => {
-			const lanes = participant.preferredLanes.length
-				? participant.preferredLanes.map((lane) => LANE_LABELS[lane]).join(' / ')
-				: '라인 무관';
-			return `\`${String(index + 1).padStart(2, ' ')}.\` **${participant.displayName}** · ${lanes}`;
-		})
-		.join('\n');
-
 	const statusLabel =
 		recruitment.status === 'OPEN'
 			? full
@@ -41,33 +34,69 @@ export function renderRecruitmentMessage(snapshot: RecruitmentSnapshot, webOrigi
 				: recruitment.status === 'CONVERTED'
 					? '시리즈 진행 중'
 					: '모집 취소';
-	const embed = new EmbedBuilder()
-		.setColor(
-			recruitment.status === 'OPEN'
-				? full
-					? 0x34d399
-					: 0x22d3ee
-				: recruitment.status === 'CONVERTED'
-					? 0x34d399
-					: 0xfbbf24
-		)
-		.setTitle(`5v5 내전 모집 #${recruitment.displayNumber}`)
-		.setDescription(recruitment.title)
-		.addFields(
-			{ name: '상태', value: statusLabel, inline: true },
-			{ name: '정원', value: `${joinedCount} / ${recruitment.targetCount}`, inline: true },
-			{
-				name: '규칙',
-				value: `BO${recruitment.bestOf} · ${recruitment.hardFearless ? '하드 피어리스' : '일반'}`,
-				inline: true
-			},
-			{ name: '참가자 · 선호 라인', value: roster || '아직 참가자가 없습니다.' }
-		);
+	const rosterBlocks = recruitmentRosterBlocks(snapshot);
+	const color =
+		recruitment.status === 'OPEN'
+			? full
+				? BOT_COLORS.success
+				: BOT_COLORS.info
+			: recruitment.status === 'CONVERTED'
+				? BOT_COLORS.success
+				: recruitment.status === 'CANCELLED'
+					? BOT_COLORS.error
+					: BOT_COLORS.warning;
 
-	return {
-		embeds: [embed],
-		components: recruitmentComponents(snapshot, webOrigin, full)
-	};
+	return botReply(
+		botContainer({
+			color,
+			children: [
+				botText(
+					`## 5v5 내전 모집 #${recruitment.displayNumber}\n${escapeMarkdown(
+						compactText(recruitment.title)
+					)}`
+				),
+				botText(
+					`**${statusLabel}** · 정원 **${joinedCount} / ${recruitment.targetCount}** · BO${recruitment.bestOf} · ${
+						recruitment.hardFearless ? '하드 피어리스' : '일반'
+					}`
+				),
+				botSeparator(),
+				botText('### 참가자 · 선호 라인'),
+				...rosterBlocks.map((block) => botText(block))
+			]
+		}),
+		...recruitmentComponents(snapshot, webOrigin, full)
+	);
+}
+
+function recruitmentRosterBlocks(snapshot: RecruitmentSnapshot): string[] {
+	if (snapshot.participants.length === 0) return ['_(아직 참가자가 없습니다.)_'];
+
+	const blocks: string[] = [];
+	let current = '';
+	for (const [index, participant] of snapshot.participants.entries()) {
+		const lanes = participant.preferredLanes.length
+			? participant.preferredLanes.map((lane) => LANE_LABELS[lane]).join(' / ')
+			: '라인 무관';
+		const line = `\`${String(index + 1).padStart(2, ' ')}.\` **${escapeMarkdown(
+			compactText(participant.displayName)
+		)}** · ${lanes}`;
+		const next = current ? `${current}\n${line}` : line;
+
+		if (next.length > MAX_ROSTER_TEXT_LENGTH && current) {
+			blocks.push(current);
+			current = line;
+		} else {
+			current = next;
+		}
+	}
+	if (current) blocks.push(current);
+	return blocks;
+}
+
+function compactText(value: string): string {
+	const normalized = value.replace(/\s+/g, ' ').trim() || '이름 미설정';
+	return normalized.length <= 120 ? normalized : `${normalized.slice(0, 119)}…`;
 }
 
 function recruitmentComponents(

@@ -1,12 +1,20 @@
 import {
+	ActionRowBuilder,
 	ApplicationIntegrationType,
+	ButtonBuilder,
+	ButtonStyle,
 	ChannelType,
 	InteractionContextType,
-	MessageFlags,
 	PermissionFlagsBits,
 	SlashCommandBuilder
 } from 'discord.js';
 import { actorFromInteraction } from '../discord/actor.js';
+import {
+	botDeferOptions,
+	botEditReply,
+	botEphemeralReply,
+	botNotice
+} from '../discord/message-v2.js';
 import { guildInteractionError } from '../interactions/guild-context.js';
 import type { BotCommand } from './types.js';
 
@@ -64,23 +72,34 @@ export const setupCommand: BotCommand = {
 	async execute(interaction, { api, catalogSync, config, logger }) {
 		const guildError = guildInteractionError(interaction);
 		if (guildError) {
-			await interaction.reply({
-				content: guildError,
-				flags: MessageFlags.Ephemeral
-			});
+			await interaction.reply(commandErrorReply(guildError));
 			return;
 		}
 		if (!interaction.inCachedGuild()) return;
 
-		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+		await interaction.deferReply(botDeferOptions(true));
 		const operatorRole = interaction.options.getRole('운영자역할', true);
 		if (operatorRole.id === interaction.guildId) {
-			await interaction.editReply('@everyone 역할은 운영자 역할로 사용할 수 없습니다.');
+			await interaction.editReply(
+				botEditReply(
+					botNotice({
+						tone: 'warning',
+						title: '운영자 역할을 확인해 주세요',
+						body: '@everyone 역할은 운영자 역할로 사용할 수 없습니다.'
+					})
+				)
+			);
 			return;
 		}
 		if (operatorRole.managed) {
 			await interaction.editReply(
-				'Discord 또는 연동 서비스가 관리하는 역할은 운영자 역할로 사용할 수 없습니다.'
+				botEditReply(
+					botNotice({
+						tone: 'warning',
+						title: '운영자 역할을 확인해 주세요',
+						body: 'Discord 또는 연동 서비스가 관리하는 역할은 운영자 역할로 사용할 수 없습니다.'
+					})
+				)
 			);
 			return;
 		}
@@ -91,11 +110,11 @@ export const setupCommand: BotCommand = {
 			true
 		);
 		if (!recruitmentChannel.ok) {
-			await interaction.editReply(recruitmentChannel.message);
+			await interaction.editReply(commandValidationEditReply(recruitmentChannel.message));
 			return;
 		}
 		if (!recruitmentChannel.channelId) {
-			await interaction.editReply('모집 채널을 선택해야 합니다.');
+			await interaction.editReply(commandValidationEditReply('모집 채널을 선택해야 합니다.'));
 			return;
 		}
 		const entryChannel = resolveSetupChannel(
@@ -105,7 +124,7 @@ export const setupCommand: BotCommand = {
 			false
 		);
 		if (!entryChannel.ok) {
-			await interaction.editReply(entryChannel.message);
+			await interaction.editReply(commandValidationEditReply(entryChannel.message));
 			return;
 		}
 		const resultChannel = resolveSetupChannel(
@@ -115,7 +134,7 @@ export const setupCommand: BotCommand = {
 			false
 		);
 		if (!resultChannel.ok) {
-			await interaction.editReply(resultChannel.message);
+			await interaction.editReply(commandValidationEditReply(resultChannel.message));
 			return;
 		}
 		const logChannel = resolveSetupChannel(
@@ -125,7 +144,7 @@ export const setupCommand: BotCommand = {
 			false
 		);
 		if (!logChannel.ok) {
-			await interaction.editReply(logChannel.message);
+			await interaction.editReply(commandValidationEditReply(logChannel.message));
 			return;
 		}
 		const requestedName = interaction.options.getString('길드이름')?.trim();
@@ -156,11 +175,48 @@ export const setupCommand: BotCommand = {
 		}
 
 		const dashboardUrl = new URL(`/g/${interaction.guildId}`, config.webOrigin);
+		const dashboardAction = new ActionRowBuilder<ButtonBuilder>().addComponents(
+			new ButtonBuilder()
+				.setStyle(ButtonStyle.Link)
+				.setLabel('길드 운영 열기')
+				.setURL(dashboardUrl.toString())
+		);
 		await interaction.editReply(
-			`초기 설정을 완료했습니다. 길드 운영 화면: ${dashboardUrl.toString()}`
+			botEditReply(
+				botNotice({
+					tone: 'success',
+					title: '초기 설정 완료',
+					body: '현재 Discord 서버를 MonkeyBot 길드로 설정했습니다.',
+					details: [
+						`**길드** ${requestedName || interaction.guild.name}`,
+						`**운영자 역할** <@&${operatorRole.id}>`,
+						`**모집 채널** <#${recruitmentChannel.channelId}>`,
+						`**엔트리 채널** ${channelReference(entryChannel.channelId)}`,
+						`**결과 알림 채널** ${channelReference(resultChannel.channelId)}`,
+						`**운영 로그 채널** ${channelReference(logChannel.channelId)}`
+					]
+				}),
+				dashboardAction
+			)
 		);
 	}
 };
+
+function commandErrorReply(message: string) {
+	return botEphemeralReply(
+		botNotice({ tone: 'error', title: '명령어를 사용할 수 없습니다', body: message })
+	);
+}
+
+function commandValidationEditReply(message: string) {
+	return botEditReply(
+		botNotice({ tone: 'warning', title: '초기 설정을 완료할 수 없습니다', body: message })
+	);
+}
+
+function channelReference(channelId: string | null): string {
+	return channelId ? `<#${channelId}>` : '설정 안 함';
+}
 
 function resolveSetupChannel(
 	interaction: Parameters<BotCommand['execute']>[0],

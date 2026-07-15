@@ -139,7 +139,9 @@ describe('/경매모집', () => {
 
 		await auctionRecruitCommand.execute(current.value, context(createAuctionRecruitment));
 
-		expect(current.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+		expect(current.deferReply).toHaveBeenCalledWith({
+			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		});
 		expect(createAuctionRecruitment).toHaveBeenCalledWith(
 			guildId,
 			{
@@ -157,8 +159,15 @@ describe('/경매모집', () => {
 			},
 			{ idempotencyKey: interactionId }
 		);
-		expect(current.editReply).toHaveBeenCalledWith(
-			`20인 경매 모집을 생성했습니다.\n모집 화면: http://localhost:5173/g/${guildId}/auction/recruitments/${recruitmentId}`
+		expect(serializedReply(current.editReply).flags).toBe(MessageFlags.IsComponentsV2);
+		expect(renderedReply(current.editReply)).toContain('20인 경매 모집 생성');
+		expect(renderedReply(current.editReply)).toContain('결승');
+		expect(renderedReply(current.editReply)).toContain('BO5');
+		expect(renderedReply(current.editReply)).toContain('4강');
+		expect(renderedReply(current.editReply)).toContain('BO1');
+		expect(renderedReply(current.editReply)).toContain('하드 피어리스');
+		expect(renderedReply(current.editReply)).toContain(
+			`http://localhost:5173/g/${guildId}/auction/recruitments/${recruitmentId}`
 		);
 	});
 
@@ -188,9 +197,25 @@ describe('/경매모집', () => {
 
 		expect(createAuctionRecruitment).not.toHaveBeenCalled();
 		expect(current.deferReply).not.toHaveBeenCalled();
-		expect(current.reply).toHaveBeenCalledWith({
-			content: '10인 경매 내전은 4강이 없으므로 `4강` 형식을 설정할 수 없습니다.',
-			flags: MessageFlags.Ephemeral
-		});
+		expect(serializedReply(current.reply).flags).toBe(
+			MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		);
+		expect(renderedReply(current.reply)).toContain(
+			'10인 경매 내전은 4강이 없으므로 `4강` 형식을 설정할 수 없습니다.'
+		);
 	});
 });
+
+function serializedReply(reply: ReturnType<typeof vi.fn>): {
+	flags: number;
+	components: unknown[];
+} {
+	return JSON.parse(JSON.stringify(reply.mock.calls[0]?.[0])) as {
+		flags: number;
+		components: unknown[];
+	};
+}
+
+function renderedReply(reply: ReturnType<typeof vi.fn>): string {
+	return JSON.stringify(serializedReply(reply));
+}

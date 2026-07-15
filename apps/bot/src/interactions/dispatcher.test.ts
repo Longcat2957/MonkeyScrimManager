@@ -1,5 +1,6 @@
 import {
 	ChannelType,
+	MessageFlags,
 	type ChatInputCommandInteraction,
 	type Guild,
 	type Interaction
@@ -84,16 +85,25 @@ describe('Discord interaction error reporting', () => {
 
 		await dispatchInteraction(current.value, context);
 
-		expect(current.deferReply).toHaveBeenCalledWith({ flags: 64 });
-		expect(current.editReply).toHaveBeenCalledWith({
-			content: [
-				'요청을 처리하지 못했습니다.',
-				'사유: 이미 초기 설정이 완료된 길드입니다. 길드 관리 화면에서 설정을 변경해 주세요.',
-				'오류 코드: `guild_already_configured`',
-				'요청 ID: `API:01900000-0000-7000-8000-000000000001`'
-			].join('\n'),
-			allowedMentions: { parse: [] }
+		expect(current.deferReply).toHaveBeenCalledWith({
+			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
 		});
+		const reply = current.editReply.mock.calls[0]?.[0];
+		expect(reply).toEqual(
+			expect.objectContaining({
+				flags: MessageFlags.IsComponentsV2,
+				components: expect.any(Array),
+				allowedMentions: { parse: [] }
+			})
+		);
+		expect(serializedMessage(reply)).toContain('## 요청을 처리하지 못했습니다.');
+		expect(serializedMessage(reply)).toContain(
+			'사유: 이미 초기 설정이 완료된 길드입니다. 길드 관리 화면에서 설정을 변경해 주세요.'
+		);
+		expect(serializedMessage(reply)).toContain('오류 코드: `guild_already_configured`');
+		expect(serializedMessage(reply)).toContain(
+			'요청 ID: `API:01900000-0000-7000-8000-000000000001`'
+		);
 		expect(current.followUp).not.toHaveBeenCalled();
 		expect(context.catalogSync.syncGuild).not.toHaveBeenCalled();
 		expect(error).toHaveBeenCalledWith(
@@ -126,16 +136,58 @@ describe('Discord interaction error reporting', () => {
 
 		await dispatchInteraction(current.value, context);
 
-		expect(current.followUp).toHaveBeenCalledWith(
+		const reply = current.followUp.mock.calls[0]?.[0];
+		expect(reply).toEqual(
 			expect.objectContaining({
-				content: expect.stringContaining('오류 코드: `database_unavailable`'),
-				flags: 64
+				flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+				components: expect.any(Array),
+				allowedMentions: { parse: [] }
 			})
 		);
+		expect(serializedMessage(reply)).toContain('오류 코드: `database_unavailable`');
 		expect(current.deleteReply).toHaveBeenCalledOnce();
 		expect(current.editReply).not.toHaveBeenCalled();
 	});
+
+	it('renders component validation failures as a private V2 notice with an interaction reference', async () => {
+		const reply = vi.fn(async () => undefined);
+		const interaction = {
+			id: '400000000000000003',
+			guildId: null,
+			guild: null,
+			member: null,
+			customId: 'recruit:join:01900000-0000-7000-8000-000000000101',
+			isChatInputCommand: () => false,
+			isButton: () => true,
+			isStringSelectMenu: () => false,
+			isRepliable: () => true,
+			reply
+		} as unknown as Interaction;
+		const context = {
+			api: {} as MonkeyBotApiClient,
+			catalogSync: {} as GuildCatalogSync,
+			config: { webOrigin: new URL('http://localhost:5173') } as BotConfig,
+			logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } as unknown as Logger
+		} satisfies InteractionContext;
+
+		await dispatchInteraction(interaction, context);
+
+		const response = reply.mock.calls[0]?.[0];
+		expect(response).toEqual(
+			expect.objectContaining({
+				flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+				components: expect.any(Array)
+			})
+		);
+		expect(serializedMessage(response)).toContain('## 요청을 처리할 수 없습니다.');
+		expect(serializedMessage(response)).toContain('Discord 서버에서만 사용할 수 있습니다.');
+		expect(serializedMessage(response)).toContain('상호작용 ID: `Discord:400000000000000003`');
+	});
 });
+
+function serializedMessage(value: unknown): string {
+	return JSON.stringify(value);
+}
 
 function setupInteraction(): {
 	value: Interaction;

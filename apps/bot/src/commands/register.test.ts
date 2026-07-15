@@ -1,8 +1,8 @@
 import {
 	ApplicationCommandOptionType,
 	ApplicationIntegrationType,
-	ButtonStyle,
 	InteractionContextType,
+	MessageFlags,
 	type ChatInputCommandInteraction
 } from 'discord.js';
 import type { Logger } from 'pino';
@@ -114,29 +114,15 @@ describe('/등록', () => {
 			},
 			{ idempotencyKey: interactionId }
 		);
-		const reply = serializedReply(current.editReply);
-		expect(reply.embeds).toEqual([
-			expect.objectContaining({
-				title: '계정 등록 완료',
-				fields: [
-					{ name: 'Riot ID', value: 'Longcat#KR1', inline: true },
-					{ name: '길드 소속', value: '등록 완료', inline: true }
-				]
-			})
-		]);
-		expect(reply.components).toEqual([
-			{
-				type: 1,
-				components: [
-					{
-						type: 2,
-						style: ButtonStyle.Link,
-						label: '내 정보',
-						url: 'http://localhost:5173/me'
-					}
-				]
-			}
-		]);
+		expect(current.value.deferReply).toHaveBeenCalledWith({
+			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		});
+		expect(serializedReply(current.editReply).flags).toBe(MessageFlags.IsComponentsV2);
+		expect(renderedReply(current.editReply)).toContain('계정 등록 완료');
+		expect(renderedReply(current.editReply)).toContain('Longcat#KR1');
+		expect(renderedReply(current.editReply)).toContain('길드 소속');
+		expect(renderedReply(current.editReply)).toContain('내 정보');
+		expect(renderedReply(current.editReply)).toContain('http://localhost:5173/me');
 	});
 
 	it('reports a fully idempotent registration as already registered', async () => {
@@ -149,7 +135,7 @@ describe('/등록', () => {
 
 		await registerCommand.execute(current.value, context(registerGuildMember));
 
-		expect(serializedReply(current.editReply).embeds[0]?.title).toBe('이미 등록된 계정입니다');
+		expect(renderedReply(current.editReply)).toContain('이미 등록된 계정입니다');
 	});
 
 	it.each(['Longcat', '#KR1', 'Longcat#', 'Long#cat#KR1'])(
@@ -161,10 +147,11 @@ describe('/등록', () => {
 			await registerCommand.execute(current.value, context(registerGuildMember));
 
 			expect(registerGuildMember).not.toHaveBeenCalled();
-			expect(current.reply).toHaveBeenCalledWith(
-				expect.objectContaining({
-					content: 'Riot ID 형식이 올바르지 않습니다. `GameName#TagLine` 형식으로 입력해 주세요.'
-				})
+			expect(serializedReply(current.reply).flags).toBe(
+				MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+			);
+			expect(renderedReply(current.reply)).toContain(
+				'Riot ID 형식이 올바르지 않습니다. `GameName#TagLine` 형식으로 입력해 주세요.'
 			);
 		}
 	);
@@ -198,10 +185,11 @@ describe('/등록', () => {
 
 		await registerCommand.execute(current.value, context(registerGuildMember));
 
-		expect(current.editReply).toHaveBeenCalledWith(
-			[message, `오류 코드: \`${code}\``, `요청 ID: \`API:${apiRequestId}\``].join('\n')
-		);
-		expect(current.editReply.mock.calls[0]?.[0]).not.toContain('must stay private');
+		expect(renderedReply(current.editReply)).toContain(message);
+		expect(renderedReply(current.editReply)).toContain(`오류 코드`);
+		expect(renderedReply(current.editReply)).toContain(code);
+		expect(renderedReply(current.editReply)).toContain(`API:${apiRequestId}`);
+		expect(renderedReply(current.editReply)).not.toContain('must stay private');
 	});
 
 	it('preserves an untailored public backend reason', async () => {
@@ -217,13 +205,9 @@ describe('/등록', () => {
 
 		await registerCommand.execute(current.value, context(registerGuildMember));
 
-		expect(current.editReply).toHaveBeenCalledWith(
-			[
-				'현재 Discord 길드를 찾을 수 없습니다.',
-				'오류 코드: `not_found`',
-				`요청 ID: \`API:${apiRequestId}\``
-			].join('\n')
-		);
+		expect(renderedReply(current.editReply)).toContain('현재 Discord 길드를 찾을 수 없습니다.');
+		expect(renderedReply(current.editReply)).toContain('not_found');
+		expect(renderedReply(current.editReply)).toContain(`API:${apiRequestId}`);
 	});
 
 	it('reports transport failures without exposing backend details', async () => {
@@ -234,14 +218,12 @@ describe('/등록', () => {
 
 		await registerCommand.execute(current.value, context(registerGuildMember));
 
-		expect(current.editReply).toHaveBeenCalledWith(
-			[
-				'MonkeyBot API에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.',
-				'오류 코드: `bot_api_transport_error`',
-				`요청 ID: \`Discord:${interactionId}\``
-			].join('\n')
+		expect(renderedReply(current.editReply)).toContain(
+			'MonkeyBot API에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'
 		);
-		expect(current.editReply.mock.calls[0]?.[0]).not.toContain('connection refused');
+		expect(renderedReply(current.editReply)).toContain('bot_api_transport_error');
+		expect(renderedReply(current.editReply)).toContain(`Discord:${interactionId}`);
+		expect(renderedReply(current.editReply)).not.toContain('connection refused');
 	});
 
 	it.each([
@@ -265,14 +247,10 @@ describe('/등록', () => {
 
 		await registerCommand.execute(current.value, context(registerGuildMember));
 
-		expect(current.editReply).toHaveBeenCalledWith(
-			[
-				testCase.reason,
-				`오류 코드: \`${testCase.code}\``,
-				`요청 ID: \`Discord:${interactionId}\``
-			].join('\n')
-		);
-		expect(current.editReply.mock.calls[0]?.[0]).not.toContain(testCase.privateDetail);
+		expect(renderedReply(current.editReply)).toContain(testCase.reason);
+		expect(renderedReply(current.editReply)).toContain(testCase.code);
+		expect(renderedReply(current.editReply)).toContain(`Discord:${interactionId}`);
+		expect(renderedReply(current.editReply)).not.toContain(testCase.privateDetail);
 	});
 });
 
@@ -282,23 +260,16 @@ describe('parseRiotId', () => {
 	});
 });
 
-interface SerializedReply {
-	embeds: Array<{
-		title: string;
-		fields: Array<{ name: string; value: string; inline: boolean }>;
-	}>;
-	components: Array<{
-		type: number;
-		components: Array<{
-			type: number;
-			style: number;
-			label: string;
-			url: string;
-		}>;
-	}>;
+function serializedReply(reply: ReturnType<typeof vi.fn>): {
+	flags: number;
+	components: unknown[];
+} {
+	return JSON.parse(JSON.stringify(reply.mock.calls[0]?.[0])) as {
+		flags: number;
+		components: unknown[];
+	};
 }
 
-function serializedReply(editReply: ReturnType<typeof vi.fn>): SerializedReply {
-	const payload = editReply.mock.calls[0]?.[0];
-	return JSON.parse(JSON.stringify(payload)) as SerializedReply;
+function renderedReply(reply: ReturnType<typeof vi.fn>): string {
+	return JSON.stringify(serializedReply(reply));
 }

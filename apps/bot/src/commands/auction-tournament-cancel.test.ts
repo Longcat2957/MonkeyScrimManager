@@ -124,7 +124,9 @@ describe('/경매조기종료', () => {
 			context(getAuctionTournamentCancelPreview, cancelAuctionTournament)
 		);
 
-		expect(current.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+		expect(current.deferReply).toHaveBeenCalledWith({
+			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		});
 		expect(getAuctionTournamentCancelPreview).toHaveBeenCalledWith(guildId, tournamentId);
 		expect(cancelAuctionTournament).toHaveBeenCalledWith(
 			guildId,
@@ -145,9 +147,12 @@ describe('/경매조기종료', () => {
 		expect(getAuctionTournamentCancelPreview.mock.invocationCallOrder[0]).toBeLessThan(
 			cancelAuctionTournament.mock.invocationCallOrder[0]!
 		);
-		expect(current.editReply).toHaveBeenCalledWith(
-			'경매 내전 #216을 조기 종료했습니다. 확정된 세트 2개와 MMR 반영을 되돌렸습니다.'
-		);
+		expect(serializedReply(current.editReply).flags).toBe(MessageFlags.IsComponentsV2);
+		expect(renderedReply(current.editReply)).toContain('경매 내전 조기 종료 완료');
+		expect(renderedReply(current.editReply)).toContain('경매 내전 #216을 조기 종료했습니다.');
+		expect(renderedReply(current.editReply)).toContain('운영 일정 변경');
+		expect(renderedReply(current.editReply)).toContain('되돌린 세트');
+		expect(renderedReply(current.editReply)).toContain('MMR 반영');
 	});
 
 	it('rejects a non-UUID tournament value before making an API request', async () => {
@@ -163,9 +168,25 @@ describe('/경매조기종료', () => {
 		expect(current.deferReply).not.toHaveBeenCalled();
 		expect(getAuctionTournamentCancelPreview).not.toHaveBeenCalled();
 		expect(cancelAuctionTournament).not.toHaveBeenCalled();
-		expect(current.reply).toHaveBeenCalledWith({
-			content: '토너먼트 ID는 경매 내전 페이지 URL에 있는 UUID 형식이어야 합니다.',
-			flags: MessageFlags.Ephemeral
-		});
+		expect(serializedReply(current.reply).flags).toBe(
+			MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		);
+		expect(renderedReply(current.reply)).toContain(
+			'토너먼트 ID는 경매 내전 페이지 URL에 있는 UUID 형식이어야 합니다.'
+		);
 	});
 });
+
+function serializedReply(reply: ReturnType<typeof vi.fn>): {
+	flags: number;
+	components: unknown[];
+} {
+	return JSON.parse(JSON.stringify(reply.mock.calls[0]?.[0])) as {
+		flags: number;
+		components: unknown[];
+	};
+}
+
+function renderedReply(reply: ReturnType<typeof vi.fn>): string {
+	return JSON.stringify(serializedReply(reply));
+}

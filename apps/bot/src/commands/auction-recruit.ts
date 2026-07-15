@@ -1,11 +1,19 @@
 import {
+	ActionRowBuilder,
 	ApplicationIntegrationType,
+	ButtonBuilder,
+	ButtonStyle,
 	InteractionContextType,
-	MessageFlags,
 	SlashCommandBuilder
 } from 'discord.js';
 
 import { actorFromInteraction } from '../discord/actor.js';
+import {
+	botDeferOptions,
+	botEditReply,
+	botEphemeralReply,
+	botNotice
+} from '../discord/message-v2.js';
 import { guildInteractionError } from '../interactions/guild-context.js';
 import type { AuctionBestOf, AuctionRecruitmentFormat } from '../api/contracts.js';
 import type { BotCommand } from './types.js';
@@ -51,26 +59,24 @@ export const auctionRecruitCommand: BotCommand = {
 	async execute(interaction, { api, config }) {
 		const guildError = guildInteractionError(interaction);
 		if (guildError) {
-			await interaction.reply({ content: guildError, flags: MessageFlags.Ephemeral });
+			await interaction.reply(commandErrorReply(guildError));
 			return;
 		}
 		if (!interaction.inCachedGuild()) return;
 
 		const format = auctionFormat(interaction.options.getInteger(PARTICIPANT_COUNT_OPTION, true));
 		if (!format) {
-			await interaction.reply({
-				content: '경매 모집 정원은 10명 또는 20명만 선택할 수 있습니다.',
-				flags: MessageFlags.Ephemeral
-			});
+			await interaction.reply(
+				commandValidationReply('경매 모집 정원은 10명 또는 20명만 선택할 수 있습니다.')
+			);
 			return;
 		}
 
 		const semifinalInput = interaction.options.getInteger(SEMIFINAL_BEST_OF_OPTION);
 		if (format === 'TEN_PERSON' && semifinalInput !== null) {
-			await interaction.reply({
-				content: '10인 경매 내전은 4강이 없으므로 `4강` 형식을 설정할 수 없습니다.',
-				flags: MessageFlags.Ephemeral
-			});
+			await interaction.reply(
+				commandValidationReply('10인 경매 내전은 4강이 없으므로 `4강` 형식을 설정할 수 없습니다.')
+			);
 			return;
 		}
 		const semifinalBestOf = format === 'TWENTY_PERSON' ? selectedBestOf(semifinalInput) : null;
@@ -78,7 +84,7 @@ export const auctionRecruitCommand: BotCommand = {
 		const hardFearless =
 			interaction.options.getBoolean(HARD_FEARLESS_OPTION) ?? DEFAULT_HARD_FEARLESS;
 
-		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+		await interaction.deferReply(botDeferOptions(true));
 		const snapshot = await api.createAuctionRecruitment(
 			interaction.guildId,
 			{
@@ -91,11 +97,43 @@ export const auctionRecruitCommand: BotCommand = {
 			{ idempotencyKey: interaction.id }
 		);
 		const recruitmentUrl = new URL(snapshot.recruitment.href, config.webOrigin);
+		const recruitmentAction = new ActionRowBuilder<ButtonBuilder>().addComponents(
+			new ButtonBuilder()
+				.setStyle(ButtonStyle.Link)
+				.setLabel('모집 화면 열기')
+				.setURL(recruitmentUrl.toString())
+		);
 		await interaction.editReply(
-			`${formatLabel(format)} 경매 모집을 생성했습니다.\n모집 화면: ${recruitmentUrl.toString()}`
+			botEditReply(
+				botNotice({
+					tone: 'success',
+					title: `${formatLabel(format)} 경매 모집 생성`,
+					body: `${formatLabel(format)} 경매 모집을 생성했습니다.`,
+					details: [
+						`**결승** BO${finalBestOf}`,
+						...(format === 'TWENTY_PERSON' && semifinalBestOf !== null
+							? [`**4강** BO${semifinalBestOf}`]
+							: []),
+						`**하드 피어리스** ${hardFearless ? '사용' : '미사용'}`
+					]
+				}),
+				recruitmentAction
+			)
 		);
 	}
 };
+
+function commandErrorReply(message: string) {
+	return botEphemeralReply(
+		botNotice({ tone: 'error', title: '명령어를 사용할 수 없습니다', body: message })
+	);
+}
+
+function commandValidationReply(message: string) {
+	return botEphemeralReply(
+		botNotice({ tone: 'warning', title: '경매 모집을 만들 수 없습니다', body: message })
+	);
+}
 
 function auctionFormat(participantCount: number): AuctionRecruitmentFormat | null {
 	if (participantCount === 10) return 'TEN_PERSON';

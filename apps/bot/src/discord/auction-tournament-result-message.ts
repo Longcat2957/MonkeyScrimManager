@@ -1,11 +1,6 @@
-import {
-	ActionRowBuilder,
-	ButtonBuilder,
-	ButtonStyle,
-	EmbedBuilder,
-	escapeMarkdown
-} from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, escapeMarkdown } from 'discord.js';
 import type { AuctionTournamentResultNotificationPayload } from '../api/contracts.js';
+import { BOT_COLORS, botContainer, botReply, botSeparator, botText } from './message-v2.js';
 
 const MATCH_FIELD_VALUE_LIMIT = 1_024;
 
@@ -23,37 +18,38 @@ export function renderAuctionTournamentResultMessage(
 		tournament.hardFearless ? '하드 피어리스' : '일반'
 	}`;
 	const championName = compactText(payload.champion.teamName, 100);
-	const embed = new EmbedBuilder()
-		.setColor(0xfbbf24)
-		.setTitle(`경매 내전 완료 #${tournament.displayNumber}`)
-		.setDescription(
-			`**${escapeMarkdown(championName)}** 우승\n${escapeMarkdown(compactText(tournament.title, 200))}`
-		)
-		.addFields(
-			{ name: '우승팀', value: escapeMarkdown(championName), inline: true },
-			{ name: '형식', value: format, inline: true },
-			{ name: '규칙', value: rules, inline: true },
-			{ name: '대진 결과', value: matchResults(payload) }
-		)
-		.setTimestamp(new Date(payload.completedAt))
-		.setFooter({ text: 'MonkeyBot' });
+	const completedAt = new Date(payload.completedAt);
+	const completedTimestamp = Number.isFinite(completedAt.getTime())
+		? `\n완료 <t:${Math.floor(completedAt.getTime() / 1_000)}:R>`
+		: '';
 
-	return {
-		embeds: [embed],
-		components: [
-			new ActionRowBuilder<ButtonBuilder>().addComponents(
-				new ButtonBuilder()
-					.setLabel('결과 보기')
-					.setStyle(ButtonStyle.Link)
-					.setURL(
-						new URL(
-							`/g/${payload.guildId}/auction/tournaments/${payload.tournamentId}/result`,
-							webOrigin
-						).toString()
-					)
-			)
-		]
-	};
+	return botReply(
+		botContainer({
+			color: BOT_COLORS.warning,
+			children: [
+				botText(
+					`## 경매 내전 완료 #${tournament.displayNumber}\n**${escapeMarkdown(
+						championName
+					)}** 우승\n${escapeMarkdown(compactText(tournament.title, 200))}`
+				),
+				botSeparator(),
+				botText(`**${format}** · ${rules}${completedTimestamp}`),
+				botSeparator(),
+				botText(`### 대진 결과\n${matchResults(payload)}`)
+			]
+		}),
+		new ActionRowBuilder<ButtonBuilder>().addComponents(
+			new ButtonBuilder()
+				.setLabel('결과 보기')
+				.setStyle(ButtonStyle.Link)
+				.setURL(
+					new URL(
+						`/g/${payload.guildId}/auction/tournaments/${payload.tournamentId}/result`,
+						webOrigin
+					).toString()
+				)
+		)
+	);
 }
 
 function matchResults(payload: AuctionTournamentResultNotificationPayload): string {

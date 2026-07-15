@@ -3,6 +3,7 @@ import {
 	ApplicationIntegrationType,
 	ChannelType,
 	InteractionContextType,
+	MessageFlags,
 	type ChatInputCommandInteraction,
 	type Guild
 } from 'discord.js';
@@ -58,6 +59,7 @@ function setupInteraction(
 	} = {}
 ) {
 	const guild = { id: guildId, name: 'MSM Seoul', icon: null } as Guild;
+	const deferReply = vi.fn(async () => undefined);
 	const editReply = vi.fn(async () => undefined);
 	const getChannel = vi.fn((name: string) => options.channels?.[name] ?? null);
 	return {
@@ -78,11 +80,12 @@ function setupInteraction(
 				getChannel
 			},
 			inCachedGuild: () => true,
-			deferReply: vi.fn(async () => undefined),
+			deferReply,
 			editReply,
 			reply: vi.fn(async () => undefined)
 		} as unknown as ChatInputCommandInteraction,
 		guild,
+		deferReply,
 		editReply,
 		getChannel
 	};
@@ -193,9 +196,13 @@ describe('/초기설정', () => {
 			expect.objectContaining({ guildId }),
 			'Discord catalog sync after guild setup failed'
 		);
-		expect(current.editReply).toHaveBeenCalledWith(
-			`초기 설정을 완료했습니다. 길드 운영 화면: http://localhost:5173/g/${guildId}`
-		);
+		expect(current.deferReply).toHaveBeenCalledWith({
+			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		});
+		expect(renderedReply(current.editReply)).toContain('초기 설정 완료');
+		expect(renderedReply(current.editReply)).toContain('MSM Seoul');
+		expect(renderedReply(current.editReply)).toContain(`http://localhost:5173/g/${guildId}`);
+		expect(serializedReply(current.editReply).flags).toBe(MessageFlags.IsComponentsV2);
 	});
 
 	it('sends every optional channel when the operator selects them', async () => {
@@ -260,7 +267,7 @@ describe('/초기설정', () => {
 
 		await setupCommand.execute(current.value, context(setupGuild, syncGuild));
 
-		expect(current.editReply).toHaveBeenCalledWith(message);
+		expect(renderedReply(current.editReply)).toContain(message);
 		expect(setupGuild).not.toHaveBeenCalled();
 		expect(syncGuild).not.toHaveBeenCalled();
 	});
@@ -283,8 +290,22 @@ describe('/초기설정', () => {
 
 		await setupCommand.execute(current.value, context(setupGuild, syncGuild));
 
-		expect(current.editReply).toHaveBeenCalledWith(message);
+		expect(renderedReply(current.editReply)).toContain(message);
 		expect(setupGuild).not.toHaveBeenCalled();
 		expect(syncGuild).not.toHaveBeenCalled();
 	});
 });
+
+function serializedReply(reply: ReturnType<typeof vi.fn>): {
+	flags: number;
+	components: unknown[];
+} {
+	return JSON.parse(JSON.stringify(reply.mock.calls[0]?.[0])) as {
+		flags: number;
+		components: unknown[];
+	};
+}
+
+function renderedReply(reply: ReturnType<typeof vi.fn>): string {
+	return JSON.stringify(serializedReply(reply));
+}

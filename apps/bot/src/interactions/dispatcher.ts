@@ -1,5 +1,4 @@
 import {
-	MessageFlags,
 	type ButtonInteraction,
 	type ChatInputCommandInteraction,
 	type Client,
@@ -10,6 +9,7 @@ import type { AuctionRecruitmentSnapshot, RecruitmentSnapshot } from '../api/con
 import { commandByName } from '../commands/index.js';
 import { actorFromInteraction } from '../discord/actor.js';
 import { renderAuctionRecruitmentMessage } from '../discord/auction-recruitment-message.js';
+import { botEditReply, botEphemeralReply, botNotice } from '../discord/message-v2.js';
 import { renderRecruitmentMessage } from '../discord/recruitment-message.js';
 import {
 	parseAuctionRecruitmentCustomId,
@@ -104,10 +104,7 @@ async function dispatchRecruitmentButton(
 	if (!component || component.action === 'roles') return;
 	const guildError = guildInteractionError(interaction);
 	if (guildError) {
-		await interaction.reply({
-			content: guildError,
-			flags: MessageFlags.Ephemeral
-		});
+		await interaction.reply(validationReply(guildError, interaction.id));
 		return;
 	}
 	if (!interaction.inCachedGuild()) return;
@@ -141,13 +138,19 @@ async function dispatchRecruitmentButton(
 		);
 	}
 
-	await interaction.editReply(renderRecruitmentMessage(snapshot, context.config.webOrigin));
+	const rendered = renderRecruitmentMessage(snapshot, context.config.webOrigin);
+	await interaction.editReply(botEditReply(...rendered.components));
 	if (component.action === 'start-entry') {
 		const entryUrl = new URL(snapshot.links.entry, context.config.webOrigin);
-		await interaction.followUp({
-			content: `엔트리 편성을 시작했습니다: ${entryUrl.toString()}`,
-			flags: MessageFlags.Ephemeral
-		});
+		await interaction.followUp(
+			botEphemeralReply(
+				botNotice({
+					tone: 'success',
+					title: '엔트리 편성을 시작했습니다.',
+					body: `[엔트리 편성 열기](${entryUrl.toString()})`
+				})
+			)
+		);
 	}
 }
 
@@ -159,10 +162,7 @@ async function dispatchAuctionRecruitmentButton(
 	if (component.action === 'lane') return;
 	const guildError = guildInteractionError(interaction);
 	if (guildError) {
-		await interaction.reply({
-			content: guildError,
-			flags: MessageFlags.Ephemeral
-		});
+		await interaction.reply(validationReply(guildError, interaction.id));
 		return;
 	}
 	if (!interaction.inCachedGuild()) return;
@@ -186,7 +186,8 @@ async function dispatchAuctionRecruitmentButton(
 					requestContext
 				);
 
-	await interaction.editReply(renderAuctionRecruitmentMessage(snapshot, context.config.webOrigin));
+	const rendered = renderAuctionRecruitmentMessage(snapshot, context.config.webOrigin);
+	await interaction.editReply(botEditReply(...rendered.components));
 }
 
 async function dispatchRecruitmentLanes(
@@ -197,10 +198,7 @@ async function dispatchRecruitmentLanes(
 	if (!component || component.action !== 'roles') return;
 	const guildError = guildInteractionError(interaction);
 	if (guildError) {
-		await interaction.reply({
-			content: guildError,
-			flags: MessageFlags.Ephemeral
-		});
+		await interaction.reply(validationReply(guildError, interaction.id));
 		return;
 	}
 	if (!interaction.inCachedGuild()) return;
@@ -208,10 +206,9 @@ async function dispatchRecruitmentLanes(
 	await interaction.deferUpdate();
 	const preferredLanes = parsePreferredLanes(interaction.values);
 	if (!preferredLanes) {
-		await interaction.followUp({
-			content: '선호 라인 값이 올바르지 않습니다.',
-			flags: MessageFlags.Ephemeral
-		});
+		await interaction.followUp(
+			validationReply('선호 라인 값이 올바르지 않습니다.', interaction.id)
+		);
 		return;
 	}
 	const actor = actorFromInteraction(interaction);
@@ -222,7 +219,8 @@ async function dispatchRecruitmentLanes(
 		{ actor, preferredLanes },
 		{ idempotencyKey: interaction.id }
 	);
-	await interaction.editReply(renderRecruitmentMessage(snapshot, context.config.webOrigin));
+	const rendered = renderRecruitmentMessage(snapshot, context.config.webOrigin);
+	await interaction.editReply(botEditReply(...rendered.components));
 }
 
 async function dispatchAuctionRecruitmentLane(
@@ -233,10 +231,7 @@ async function dispatchAuctionRecruitmentLane(
 	if (component.action !== 'lane') return;
 	const guildError = guildInteractionError(interaction);
 	if (guildError) {
-		await interaction.reply({
-			content: guildError,
-			flags: MessageFlags.Ephemeral
-		});
+		await interaction.reply(validationReply(guildError, interaction.id));
 		return;
 	}
 	if (!interaction.inCachedGuild()) return;
@@ -244,10 +239,9 @@ async function dispatchAuctionRecruitmentLane(
 	await interaction.deferUpdate();
 	const declaredLane = parseAuctionLane(interaction.values);
 	if (!declaredLane) {
-		await interaction.followUp({
-			content: '참가 라인은 하나만 선택해 주세요.',
-			flags: MessageFlags.Ephemeral
-		});
+		await interaction.followUp(
+			validationReply('참가 라인은 하나만 선택해 주세요.', interaction.id)
+		);
 		return;
 	}
 	const actor = actorFromInteraction(interaction);
@@ -257,7 +251,8 @@ async function dispatchAuctionRecruitmentLane(
 		{ actor, declaredLane },
 		{ idempotencyKey: interaction.id }
 	);
-	await interaction.editReply(renderAuctionRecruitmentMessage(snapshot, context.config.webOrigin));
+	const rendered = renderAuctionRecruitmentMessage(snapshot, context.config.webOrigin);
+	await interaction.editReply(botEditReply(...rendered.components));
 }
 
 function parsePreferredLanes(values: readonly string[]): PreferredLane[] | null {
@@ -278,25 +273,26 @@ function parseAuctionLane(values: readonly string[]): AuctionLane | null {
 
 export function interactionErrorContent(error: unknown, interactionId: string): string {
 	const reference = botErrorReference(error, interactionId);
-	return [
-		'요청을 처리하지 못했습니다.',
-		reasonWithErrorReference(`사유: ${reference.reason}`, reference)
-	].join('\n');
+	return reasonWithErrorReference(`사유: ${reference.reason}`, reference);
 }
 
 async function reportInteractionError(interaction: Interaction, error: unknown): Promise<void> {
 	if (!interaction.isRepliable()) return;
+	const notice = botNotice({
+		tone: 'error',
+		title: '요청을 처리하지 못했습니다.',
+		details: interactionErrorContent(error, interaction.id)
+	});
 	const reply = {
-		content: interactionErrorContent(error, interaction.id),
-		allowedMentions: { parse: [] },
-		flags: MessageFlags.Ephemeral
+		...botEphemeralReply(notice),
+		allowedMentions: { parse: [] }
 	} as const;
 
 	try {
 		if (interaction.isChatInputCommand() && interaction.deferred && !interaction.replied) {
 			if (interaction.ephemeral === true) {
 				await interaction.editReply({
-					content: reply.content,
+					...botEditReply(notice),
 					allowedMentions: reply.allowedMentions
 				});
 			} else {
@@ -311,4 +307,15 @@ async function reportInteractionError(interaction: Interaction, error: unknown):
 	} catch {
 		// The interaction token may already be expired; the original error is logged above.
 	}
+}
+
+function validationReply(reason: string, interactionId: string) {
+	return botEphemeralReply(
+		botNotice({
+			tone: 'warning',
+			title: '요청을 처리할 수 없습니다.',
+			body: reason,
+			details: `상호작용 ID: \`Discord:${interactionId}\``
+		})
+	);
 }

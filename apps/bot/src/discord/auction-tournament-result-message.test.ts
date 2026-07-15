@@ -1,3 +1,4 @@
+import { MessageFlags } from 'discord.js';
 import { describe, expect, it } from 'vitest';
 import {
 	auctionTournamentResultDeleteNotificationPayloadSchema,
@@ -81,17 +82,18 @@ function json(value: unknown): Record<string, unknown> {
 }
 
 describe('renderAuctionTournamentResultMessage', () => {
-	it('renders a compact embed with the champion, rule snapshot, completed bracket, and result link', () => {
+	it('renders a V2 result card with the champion, rule snapshot, completed bracket, and result link', () => {
 		const rendered = json(renderAuctionTournamentResultMessage(payload(), webOrigin));
 		const serialized = JSON.stringify(rendered);
 
+		expect(rendered.flags).toBe(MessageFlags.IsComponentsV2);
 		expect(serialized).toContain('경매 내전 완료 #42');
 		expect(serialized).toContain('블루팀');
 		expect(serialized).toContain('4강 BO1 · 결승 BO3 · 하드 피어리스');
 		expect(serialized).toContain('준결승 A');
 		expect(serialized).toContain('결승');
 		expect(serialized).toContain('결과 보기');
-		expect(rendered.embeds).toHaveLength(1);
+		expect(rendered).not.toHaveProperty('embeds');
 		expect(JSON.stringify(rendered.components)).toContain(
 			`https://dev.monkeybot.lol/g/${guildId}/auction/tournaments/${tournamentId}/result`
 		);

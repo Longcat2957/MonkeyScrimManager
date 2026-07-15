@@ -1,4 +1,4 @@
-import type { Interaction } from 'discord.js';
+import { MessageFlags, type Interaction } from 'discord.js';
 import type { Logger } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -129,12 +129,15 @@ describe('auction recruitment interaction dispatch', () => {
 			},
 			{ idempotencyKey: interactionId }
 		);
-		expect(current.editReply).toHaveBeenCalledWith(
+		const reply = current.editReply.mock.calls[0]?.[0];
+		expect(reply).toEqual(
 			expect.objectContaining({
-				embeds: expect.any(Array),
+				flags: MessageFlags.IsComponentsV2,
 				components: expect.any(Array)
 			})
 		);
+		expect(reply).not.toHaveProperty('embeds');
+		expect(reply).not.toHaveProperty('content');
 		expect(leaveAuctionRecruitment).not.toHaveBeenCalled();
 	});
 
@@ -155,7 +158,13 @@ describe('auction recruitment interaction dispatch', () => {
 			expect.objectContaining({ declaredLane: 'JUNGLE' }),
 			{ idempotencyKey: interactionId }
 		);
-		expect(current.editReply).toHaveBeenCalledOnce();
+		const reply = current.editReply.mock.calls[0]?.[0];
+		expect(reply).toEqual(
+			expect.objectContaining({
+				flags: MessageFlags.IsComponentsV2,
+				components: expect.any(Array)
+			})
+		);
 	});
 
 	it('leaves through the auction member route with the current actor as the target user', async () => {

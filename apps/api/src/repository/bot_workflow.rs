@@ -9717,6 +9717,10 @@ async fn auction_tournament_result_snapshot(
         })
         .collect::<Result<Vec<_>, AttemptError>>()?;
 
+    // Bracket recovery keeps replaced match rows as CANCELLED history. They are not part of an
+    // active or completed tournament's current bracket, but remain visible in a cancelled
+    // tournament archive.
+    let include_cancelled_match_history = tournament.status == AuctionTournamentStatus::Cancelled;
     let match_rows = sqlx::query_as::<_, AuctionTournamentResultMatchRow>(
         "SELECT auction_match.id,
                 auction_match.match_key,
@@ -9743,6 +9747,7 @@ async fn auction_tournament_result_snapshot(
          WHERE auction_match.guild_id = $1
            AND auction_match.tournament_id = $2
            AND auction_match.deleted_at IS NULL
+           AND ($3::boolean OR auction_match.status <> 'CANCELLED')
          GROUP BY auction_match.id, auction_match.match_key, auction_match.best_of,
                   auction_match.hard_fearless, auction_match.status,
                   auction_match.left_team_id, auction_match.right_team_id,
@@ -9757,6 +9762,7 @@ async fn auction_tournament_result_snapshot(
     )
     .bind(guild_id)
     .bind(tournament_id.as_uuid())
+    .bind(include_cancelled_match_history)
     .fetch_all(&mut **transaction)
     .await?;
     let expected_match_keys: &[&str] = match format {

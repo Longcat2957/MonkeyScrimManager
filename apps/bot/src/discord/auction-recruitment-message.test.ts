@@ -1,3 +1,4 @@
+import { MessageFlags } from 'discord.js';
 import { describe, expect, it } from 'vitest';
 
 import type { AuctionRecruitmentSnapshot } from '../api/contracts.js';
@@ -55,6 +56,8 @@ describe('renderAuctionRecruitmentMessage', () => {
 		const rendered = json(renderAuctionRecruitmentMessage(snapshot('OPEN', 1), webOrigin));
 		const serialized = JSON.stringify(rendered);
 
+		expect(rendered.flags).toBe(MessageFlags.IsComponentsV2);
+		expect(rendered).not.toHaveProperty('embeds');
 		expect(serialized).toContain('경매 내전 모집 #214');
 		expect(serialized).toContain(`auction-recruit:join:${recruitmentId}`);
 		expect(serialized).toContain(`auction-recruit:leave:${recruitmentId}`);
@@ -88,24 +91,26 @@ describe('renderAuctionRecruitmentMessage', () => {
 		expect(serialized).not.toContain('auction-recruit:');
 	});
 
-	it('splits a legal 20-person, 100-character-name roster into valid embed fields', () => {
+	it('splits a legal 20-person, 100-character-name roster into readable text displays', () => {
 		const current = snapshot('OPEN', 20, 'TWENTY_PERSON');
 		const names = current.participants.map((participant, index) => {
 			const name = `P${String(index + 1).padStart(2, '0')}${'x'.repeat(97)}`;
 			participant.displayName = name;
 			return name;
 		});
-		const rendered = json(renderAuctionRecruitmentMessage(current, webOrigin));
-		const embed = (
-			rendered.embeds as Array<{ fields: Array<{ name: string; value: string }> }>
-		)[0]!;
-		const rosterFields = embed.fields.filter((field) => field.name.startsWith('참가자'));
+		const rendered = renderAuctionRecruitmentMessage(current, webOrigin);
+		const firstComponent = rendered.components[0]?.toJSON() as {
+			components?: Array<{ content?: string }>;
+		};
+		const rosterDisplays = (firstComponent.components ?? []).filter((component) =>
+			component.content?.startsWith('`')
+		);
 
-		expect(rosterFields).toHaveLength(3);
-		for (const field of rosterFields) {
-			expect(field.value.length).toBeLessThanOrEqual(1_024);
+		expect(rosterDisplays).toHaveLength(3);
+		for (const display of rosterDisplays) {
+			expect(display.content?.length).toBeLessThanOrEqual(1_024);
 		}
-		const rosterText = rosterFields.map((field) => field.value).join('\n');
+		const rosterText = rosterDisplays.map((display) => display.content).join('\n');
 		for (const name of names) {
 			expect(rosterText).toContain(name);
 		}

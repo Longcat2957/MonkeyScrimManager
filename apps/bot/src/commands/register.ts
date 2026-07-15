@@ -3,17 +3,21 @@ import {
 	ApplicationIntegrationType,
 	ButtonBuilder,
 	ButtonStyle,
-	Colors,
-	EmbedBuilder,
+	escapeMarkdown,
 	InteractionContextType,
-	MessageFlags,
 	SlashCommandBuilder
 } from 'discord.js';
 
 import { MonkeyBotApiError, MonkeyBotApiTransportError } from '../api/client.js';
 import type { RegisterGuildMemberData } from '../api/contracts.js';
 import { actorFromInteraction } from '../discord/actor.js';
-import { botErrorReference, reasonWithErrorReference } from '../interactions/error-format.js';
+import {
+	botDeferOptions,
+	botEditReply,
+	botEphemeralReply,
+	botNotice
+} from '../discord/message-v2.js';
+import { botErrorReference } from '../interactions/error-format.js';
 import { guildInteractionError } from '../interactions/guild-context.js';
 import type { BotCommand } from './types.js';
 
@@ -38,21 +42,30 @@ export const registerCommand: BotCommand = {
 	async execute(interaction, { api, config, logger }) {
 		const guildError = guildInteractionError(interaction);
 		if (guildError) {
-			await interaction.reply({ content: guildError, flags: MessageFlags.Ephemeral });
+			await interaction.reply(
+				botEphemeralReply(
+					botNotice({ tone: 'error', title: '명령어를 사용할 수 없습니다', body: guildError })
+				)
+			);
 			return;
 		}
 		if (!interaction.inCachedGuild()) return;
 
 		const riotId = parseRiotId(interaction.options.getString(RIOT_ID_OPTION, true));
 		if (!riotId) {
-			await interaction.reply({
-				content: INVALID_RIOT_ID_MESSAGE,
-				flags: MessageFlags.Ephemeral
-			});
+			await interaction.reply(
+				botEphemeralReply(
+					botNotice({
+						tone: 'warning',
+						title: 'Riot ID를 확인해 주세요',
+						body: INVALID_RIOT_ID_MESSAGE
+					})
+				)
+			);
 			return;
 		}
 
-		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+		await interaction.deferReply(botDeferOptions(true));
 		try {
 			const result = await api.registerGuildMember(
 				interaction.guildId,
@@ -102,25 +115,35 @@ export function parseRiotId(value: string): { gameName: string; tagLine: string 
 function registrationReply(result: RegisterGuildMemberData, webOrigin: URL) {
 	const riotId = `${result.riotAccount.gameName}#${result.riotAccount.tagLine}`;
 	const alreadyRegistered = result.accountLink === 'EXISTING' && result.registration === 'EXISTING';
-	const embed = new EmbedBuilder()
-		.setColor(alreadyRegistered ? Colors.Greyple : Colors.Green)
-		.setTitle(alreadyRegistered ? '이미 등록된 계정입니다' : '계정 등록 완료')
-		.addFields(
-			{ name: 'Riot ID', value: riotId, inline: true },
-			{ name: '길드 소속', value: '등록 완료', inline: true }
-		);
 	const actions = new ActionRowBuilder<ButtonBuilder>().addComponents(
 		new ButtonBuilder()
 			.setStyle(ButtonStyle.Link)
 			.setLabel('내 정보')
 			.setURL(new URL('/me', webOrigin).toString())
 	);
-	return { embeds: [embed], components: [actions] };
+	return botEditReply(
+		botNotice({
+			tone: alreadyRegistered ? 'neutral' : 'success',
+			title: alreadyRegistered ? '이미 등록된 계정입니다' : '계정 등록 완료',
+			body: alreadyRegistered
+				? '현재 Riot 계정과 길드 소속이 이미 유지되고 있습니다.'
+				: 'Riot 계정과 현재 길드 소속을 등록했습니다.',
+			details: [`**Riot ID** ${escapeMarkdown(riotId)}`, '**길드 소속** 등록 완료']
+		}),
+		actions
+	);
 }
 
-function registrationErrorMessage(error: unknown, interactionId: string): string {
+function registrationErrorMessage(error: unknown, interactionId: string) {
 	const reference = botErrorReference(error, interactionId);
-	return reasonWithErrorReference(registrationErrorReason(error, reference.reason), reference);
+	return botEditReply(
+		botNotice({
+			tone: 'error',
+			title: '계정을 등록할 수 없습니다',
+			body: registrationErrorReason(error, reference.reason),
+			details: [`**오류 코드** \`${reference.code}\``, `**요청 ID** \`${reference.requestId}\``]
+		})
+	);
 }
 
 function registrationErrorReason(error: unknown, fallback: string): string {

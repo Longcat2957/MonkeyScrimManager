@@ -2,6 +2,7 @@ import {
 	ApplicationCommandOptionType,
 	ApplicationIntegrationType,
 	InteractionContextType,
+	MessageFlags,
 	type ChatInputCommandInteraction
 } from 'discord.js';
 import type { Logger } from 'pino';
@@ -51,10 +52,14 @@ function context(
 }
 
 function interaction(bestOf: number | null, hardFearless: boolean | null) {
-	const editReply = vi.fn(async () => ({
-		channelId: '500000000000000001',
-		id: '600000000000000001'
-	}));
+	const editReply = vi.fn<(options: unknown) => Promise<{ channelId: string; id: string }>>(
+		async () => ({
+			channelId: '500000000000000001',
+			id: '600000000000000001'
+		})
+	);
+	const deferReply = vi.fn<(options: unknown) => Promise<void>>(async () => undefined);
+	const reply = vi.fn<(options: unknown) => Promise<void>>(async () => undefined);
 	return {
 		value: {
 			id: interactionId,
@@ -72,11 +77,13 @@ function interaction(bestOf: number | null, hardFearless: boolean | null) {
 				getBoolean: () => hardFearless
 			},
 			inCachedGuild: () => true,
-			deferReply: vi.fn(async () => undefined),
+			deferReply,
 			editReply,
-			reply: vi.fn(async () => undefined)
+			reply
 		} as unknown as ChatInputCommandInteraction,
-		editReply
+		editReply,
+		deferReply,
+		reply
 	};
 }
 
@@ -118,6 +125,13 @@ describe('/내전모집', () => {
 
 		await recruitCommand.execute(current.value, context(createRecruitment, bindRecruitmentMessage));
 
+		expect(current.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.IsComponentsV2 });
+		expect(current.editReply).toHaveBeenCalledWith(
+			expect.objectContaining({ flags: MessageFlags.IsComponentsV2 })
+		);
+		const rendered = current.editReply.mock.calls[0]?.[0] as Record<string, unknown>;
+		expect(rendered).not.toHaveProperty('embeds');
+		expect(rendered).not.toHaveProperty('content');
 		expect(createRecruitment).toHaveBeenCalledWith(
 			guildId,
 			{
@@ -142,5 +156,25 @@ describe('/내전모집', () => {
 			}),
 			{ idempotencyKey: interactionId }
 		);
+	});
+
+	it('returns the guild-context reason in an ephemeral V2 notice', async () => {
+		const createRecruitment = vi.fn(async () => snapshot);
+		const bindRecruitmentMessage = vi.fn(async () => snapshot);
+		const current = interaction(null, null);
+		(current.value as unknown as { guildId: string | null }).guildId = null;
+
+		await recruitCommand.execute(current.value, context(createRecruitment, bindRecruitmentMessage));
+
+		expect(current.reply).toHaveBeenCalledWith(
+			expect.objectContaining({
+				flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+			})
+		);
+		const reply = current.reply.mock.calls[0]?.[0] as Record<string, unknown>;
+		expect(JSON.stringify(reply)).toContain('Discord 서버에서만 사용할 수 있습니다.');
+		expect(reply).not.toHaveProperty('content');
+		expect(reply).not.toHaveProperty('embeds');
+		expect(createRecruitment).not.toHaveBeenCalled();
 	});
 });

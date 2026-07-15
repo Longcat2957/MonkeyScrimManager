@@ -63,6 +63,9 @@ const ACTIVE_TOURNAMENT: &str = "01900000-0000-7000-8000-000000000601";
 const COMPLETED_TOURNAMENT: &str = "01900000-0000-7000-8000-000000000602";
 const CANCELLED_TOURNAMENT: &str = "01900000-0000-7000-8000-000000000603";
 const ACTIVE_MATCH: &str = "01900000-0000-7000-8000-000000000801";
+const ACTIVE_SEMIFINAL_B_MATCH: &str = "01900000-0000-7000-8000-000000000802";
+const ACTIVE_FINAL_MATCH: &str = "01900000-0000-7000-8000-000000000803";
+const CANCELLED_SEMIFINAL_A_HISTORY_MATCH: &str = "01900000-0000-7000-8000-000000000804";
 
 const ACTIVE_TEAM_1: &str = "01900000-0000-7000-8000-000000000701";
 const ACTIVE_TEAM_2: &str = "01900000-0000-7000-8000-000000000702";
@@ -132,6 +135,13 @@ async fn run_workflow_read_flow() -> TestResult {
     assert_auction_tournament_cancel_preview(&app).await?;
     assert_twenty_person_semifinal_game_requires_both_lineups(&app, &pool).await?;
     assert_legacy_auction_match_lock_exemption(&pool).await?;
+    assert_active_auction_tournament_result_ignores_cancelled_match_history(
+        &app,
+        &pool,
+        season_a,
+        &member_cookie,
+    )
+    .await?;
 
     pool.close().await;
     drop(server);
@@ -399,6 +409,77 @@ async fn assert_cancelled_auction_tournament_archive(app: &Router, cookie: &str)
     assert_eq!(body["data"]["players"].as_array().map(Vec::len), Some(0));
     assert_eq!(body["data"]["permissions"]["canRevertResults"], false);
     assert_eq!(body["data"]["permissions"]["canRecoverBracket"], false);
+    Ok(())
+}
+
+async fn assert_active_auction_tournament_result_ignores_cancelled_match_history(
+    app: &Router,
+    pool: &PgPool,
+    season_id: Uuid,
+    cookie: &str,
+) -> TestResult {
+    sqlx::query(
+        "UPDATE auction_matches
+         SET status = 'LINEUP_PENDING',
+             lineups_locked_at = NULL,
+             lineups_locked_by = NULL
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_A)
+    .bind(id(ACTIVE_MATCH))
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO auction_matches (
+            guild_id, tournament_id, id, season_id, match_key, best_of,
+            left_team_id, right_team_id, status, revision,
+            ended_at, updated_by, updated_at
+         ) VALUES
+           ($1, $2, $3, $4, 'SEMIFINAL_B', 3,
+            $5, $6, 'LINEUP_PENDING', 2,
+            NULL, $7, '2026-07-10T12:30:00Z'),
+           ($1, $2, $8, $4, 'FINAL', 3,
+            NULL, NULL, 'LINEUP_PENDING', 0,
+            NULL, $7, '2026-07-10T12:30:00Z'),
+           ($1, $2, $9, $4, 'SEMIFINAL_A', 3,
+            $10, $11, 'CANCELLED', 1,
+            '2026-07-10T12:10:00Z', $7, '2026-07-10T12:10:00Z')",
+    )
+    .bind(GUILD_A)
+    .bind(id(ACTIVE_TOURNAMENT))
+    .bind(id(ACTIVE_SEMIFINAL_B_MATCH))
+    .bind(season_id)
+    .bind(id(ACTIVE_TEAM_3))
+    .bind(id(ACTIVE_TEAM_4))
+    .bind(USER_ID)
+    .bind(id(ACTIVE_FINAL_MATCH))
+    .bind(id(CANCELLED_SEMIFINAL_A_HISTORY_MATCH))
+    .bind(id(ACTIVE_TEAM_1))
+    .bind(id(ACTIVE_TEAM_2))
+    .execute(pool)
+    .await?;
+
+    let path = format!("/api/guilds/{GUILD_A}/auction-tournaments/{ACTIVE_TOURNAMENT}/result");
+    let response = get(app, &path, Some(cookie)).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await?;
+
+    assert_eq!(body["data"]["tournament"]["id"], ACTIVE_TOURNAMENT);
+    assert_eq!(body["data"]["tournament"]["status"], "IN_GAME");
+    let matches = body["data"]["matches"]
+        .as_array()
+        .ok_or("auction tournament result matches was not an array")?;
+    assert_eq!(matches.len(), 3, "{body}");
+    assert_eq!(matches[0]["id"], ACTIVE_MATCH);
+    assert_eq!(matches[0]["matchKey"], "SEMIFINAL_A");
+    assert_eq!(matches[1]["id"], ACTIVE_SEMIFINAL_B_MATCH);
+    assert_eq!(matches[1]["matchKey"], "SEMIFINAL_B");
+    assert_eq!(matches[2]["id"], ACTIVE_FINAL_MATCH);
+    assert_eq!(matches[2]["matchKey"], "FINAL");
+    assert!(matches.iter().all(|row| {
+        row["id"] != CANCELLED_SEMIFINAL_A_HISTORY_MATCH && row["status"] != "CANCELLED"
+    }));
     Ok(())
 }
 

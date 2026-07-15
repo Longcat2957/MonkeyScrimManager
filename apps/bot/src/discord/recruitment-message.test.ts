@@ -1,3 +1,4 @@
+import { MessageFlags } from 'discord.js';
 import { describe, expect, it } from 'vitest';
 
 import type { RecruitmentSnapshot } from '../api/contracts.js';
@@ -44,6 +45,8 @@ describe('renderRecruitmentMessage', () => {
 		const rendered = json(renderRecruitmentMessage(snapshot('OPEN', 1), webOrigin));
 		const serialized = JSON.stringify(rendered);
 
+		expect(rendered.flags).toBe(MessageFlags.IsComponentsV2);
+		expect(rendered).not.toHaveProperty('embeds');
 		expect(serialized).toContain('5v5 내전 모집 #214');
 		expect(serialized).toContain('참가자 1');
 		expect(serialized).toContain('미드 / 정글');
@@ -109,6 +112,7 @@ describe('renderRecruitmentMessage', () => {
 
 	it('does not render controls for a cancelled recruitment', () => {
 		const rendered = json(renderRecruitmentMessage(snapshot('CANCELLED', 2), webOrigin));
-		expect(rendered.components).toEqual([]);
+		expect(rendered.components).toHaveLength(1);
+		expect(JSON.stringify(rendered)).toContain('모집 취소');
 	});
 });

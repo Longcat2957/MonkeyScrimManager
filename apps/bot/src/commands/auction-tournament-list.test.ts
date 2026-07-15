@@ -129,14 +129,24 @@ describe('/경매목록', () => {
 
 		await auctionTournamentListCommand.execute(current.value, context(listAuctionTournaments));
 
-		expect(current.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+		expect(current.deferReply).toHaveBeenCalledWith({
+			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		});
 		expect(listAuctionTournaments).toHaveBeenCalledWith(guildId, {
 			state: 'active',
 			seasonId,
 			limit: 5
 		});
-		expect(current.editReply).toHaveBeenCalledWith(
-			`진행 중 경매 내전\n- #216 20인 금요 경매 내전 · 경기 진행 · http://localhost:5173/g/${guildId}/auction/matches/01900000-0000-7000-8000-000000000104\n전체 보기: http://localhost:5173/g/${guildId}/auction`
+		expect(serializedReply(current.editReply).flags).toBe(MessageFlags.IsComponentsV2);
+		expect(renderedReply(current.editReply)).toContain('진행 중 경매 내전');
+		expect(renderedReply(current.editReply)).toContain('#216 20인 금요 경매 내전');
+		expect(renderedReply(current.editReply)).toContain('경기 진행');
+		expect(renderedReply(current.editReply)).toContain('작업 열기');
+		expect(renderedReply(current.editReply)).toContain(
+			`http://localhost:5173/g/${guildId}/auction/matches/01900000-0000-7000-8000-000000000104`
+		);
+		expect(renderedReply(current.editReply)).toContain(
+			`http://localhost:5173/g/${guildId}/auction`
 		);
 	});
 
@@ -148,9 +158,23 @@ describe('/경매목록', () => {
 
 		expect(current.deferReply).not.toHaveBeenCalled();
 		expect(listAuctionTournaments).not.toHaveBeenCalled();
-		expect(current.reply).toHaveBeenCalledWith({
-			content: '시즌 ID는 UUID 형식이어야 합니다.',
-			flags: MessageFlags.Ephemeral
-		});
+		expect(serializedReply(current.reply).flags).toBe(
+			MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		);
+		expect(renderedReply(current.reply)).toContain('시즌 ID는 UUID 형식이어야 합니다.');
 	});
 });
+
+function serializedReply(reply: ReturnType<typeof vi.fn>): {
+	flags: number;
+	components: unknown[];
+} {
+	return JSON.parse(JSON.stringify(reply.mock.calls[0]?.[0])) as {
+		flags: number;
+		components: unknown[];
+	};
+}
+
+function renderedReply(reply: ReturnType<typeof vi.fn>): string {
+	return JSON.stringify(serializedReply(reply));
+}

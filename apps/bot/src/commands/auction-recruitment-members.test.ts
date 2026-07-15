@@ -150,7 +150,9 @@ describe('/경매인원추가', () => {
 		);
 
 		expect(current.fetch).toHaveBeenCalledWith(targetId);
-		expect(current.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+		expect(current.deferReply).toHaveBeenCalledWith({
+			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		});
 		expect(forceAddAuctionRecruitmentMember).toHaveBeenCalledWith(
 			guildId,
 			recruitmentId,
@@ -173,9 +175,13 @@ describe('/경매인원추가', () => {
 			},
 			{ idempotencyKey: interactionId }
 		);
-		expect(current.editReply).toHaveBeenCalledWith(
-			'Target Player (MSM)님을 경매 모집에 추가했습니다. 현재 1명 참여 중입니다.'
+		expect(serializedReply(current.editReply).flags).toBe(MessageFlags.IsComponentsV2);
+		expect(renderedReply(current.editReply)).toContain('경매 모집 참가자 추가');
+		expect(renderedReply(current.editReply)).toContain(
+			'Target Player (MSM)님을 경매 모집에 추가했습니다.'
 		);
+		expect(renderedReply(current.editReply)).toContain('현재 참가 인원');
+		expect(renderedReply(current.editReply)).toContain('1명');
 	});
 
 	it('rejects a malformed recruitment ID before loading the target member', async () => {
@@ -190,10 +196,12 @@ describe('/경매인원추가', () => {
 
 		expect(current.fetch).not.toHaveBeenCalled();
 		expect(forceAddAuctionRecruitmentMember).not.toHaveBeenCalled();
-		expect(current.reply).toHaveBeenCalledWith({
-			content: '모집 ID는 경매 모집 페이지 URL에 있는 UUID 형식이어야 합니다.',
-			flags: MessageFlags.Ephemeral
-		});
+		expect(serializedReply(current.reply).flags).toBe(
+			MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+		);
+		expect(renderedReply(current.reply)).toContain(
+			'모집 ID는 경매 모집 페이지 URL에 있는 UUID 형식이어야 합니다.'
+		);
 	});
 });
 
@@ -223,5 +231,24 @@ describe('/경매인원삭제', () => {
 			},
 			{ idempotencyKey: interactionId }
 		);
+		expect(serializedReply(current.editReply).flags).toBe(MessageFlags.IsComponentsV2);
+		expect(renderedReply(current.editReply)).toContain('경매 모집 참가자 제거');
+		expect(renderedReply(current.editReply)).toContain(
+			'Target Player님을 경매 모집에서 제거했습니다.'
+		);
 	});
 });
+
+function serializedReply(reply: ReturnType<typeof vi.fn>): {
+	flags: number;
+	components: unknown[];
+} {
+	return JSON.parse(JSON.stringify(reply.mock.calls[0]?.[0])) as {
+		flags: number;
+		components: unknown[];
+	};
+}
+
+function renderedReply(reply: ReturnType<typeof vi.fn>): string {
+	return JSON.stringify(serializedReply(reply));
+}

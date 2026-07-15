@@ -23,6 +23,8 @@
 - backend가 길드 소속, operator 역할, lifecycle, revision을 최종 검증한다.
 - 성공하지 못한 interaction은 사람이 읽을 수 있는 사유와 요청 참조 정보를 함께 ephemeral 응답으로 표시한다.
 - Bot은 PostgreSQL을 직접 쓰지 않는다. 모든 mutation은 Bot service-principal API 호출을 통해 확정한다.
+- 사용자에게 보이는 command 응답과 일반/경매 모집 카드는 Discord Components V2 container를 사용한다. `##` 제목, 짧은 상태 요약, 구분선, 세부 정보 또는 참가자 목록, 별도 action row 순서를 유지한다.
+- accent color는 모집 상태와 성공/경고/오류만 구분하는 표현이다. Discord 메시지는 API aggregate의 source of truth가 아니며, 갱신 시 같은 V2 구조로 교체한다.
 
 ## 현재 등록 Command
 
@@ -56,7 +58,7 @@
 - Discord user의 전역 사용자 record와 현재 guild의 membership을 upsert하고, 확인된 PUUID Riot 계정을 연결한다.
 - 같은 사용자가 다른 guild에서 실행하면 전역 사용자/Riot 계정은 재사용하고 해당 guild 소속만 추가한다.
 - 비활성 guild member, 이미 다른 Discord 사용자에게 연결된 Riot 계정, Riot 조회 실패는 backend 사유를 사용자에게 노출한다.
-- 성공 embed는 canonical Riot ID와 길드 소속 상태를 보여 주고 `/me` 링크를 제공한다. 선호 챔피언, 대표 guild, privacy 설정은 Web의 `/me`에서 관리한다.
+- 성공 응답은 canonical Riot ID와 길드 소속 상태를 보여 주고 `/me` 링크를 제공한다. 선호 챔피언, 대표 guild, privacy 설정은 Web의 `/me`에서 관리한다.
 
 ## 일반 내전 모집
 
