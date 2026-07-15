@@ -1,24 +1,22 @@
 # Realtime Collaboration
 
-작성일: 2026-07-12
+작성일: 2026-07-15
 
 ## 목적
 
 이 문서는 MonkeyBot의 동시 편집과 WebSocket 동기화에 대한 단일 기준이다.
 
-다음 화면은 여러 운영자가 동시에 열 수 있다.
-
-- 일반 내전 엔트리 편성
-- 일반 내전 픽밴과 결과 입력
-- 경매 모집 roster
-- 경매 팀장/포인트 설정, draw, 낙찰, 유찰, 복구, 수동 배치
-- 경매 match 라인업과 결과 입력
+여러 운영자가 동시에 다룰 수 있는 화면 중 WebSocket을 실제로 연결하는 범위는 일반 엔트리 편성, 일반
+픽밴, 경매 모집 roster, `BIDDING` 상태의 경매 입찰이다. 경매 setup, bracket, lineup, match 결과 입력은
+동시 접근해도 HTTP snapshot과 revision conflict refetch만 사용한다.
 
 경매 모집 roster와 `BIDDING` 상태의 경매 입찰은 active operator의 invalidate 구독을 사용한다. 입찰 command는
 HTTP snapshot, expected revision, `409` refetch로 충돌을 처리하고, WebSocket은 최신 snapshot 재조회 신호만
-전달한다. 그 외 경매 작업대는 tournament/match topic을 구독하지 않는다.
+전달한다.
 
-구현 중 판단이 충돌하면 현재 frontend 동작을 먼저 따르고 이 문서를 수정한다. DB 구조는 `05-db-schema.md`, HTTP route와 topic은 `routing/backend.md`, 상세 구현 순서는 `09-backend-development-plan.md`를 따른다.
+구현과 문서가 충돌하면 실제 route/API/Bot 동작을 먼저 따르고 이 문서를 수정한다. 현재 운영 범위는
+[Current Operating Contract](12-current-operating-contract.md), DB 구조는 `05-db-schema.md`, HTTP route와 topic은
+`routing/backend.md`를 따른다.
 
 ## 결정 사항
 
@@ -26,7 +24,7 @@ HTTP snapshot, expected revision, `409` refetch로 충돌을 처리하고, WebSo
 PostgreSQL             = 영속 상태와 revision의 source of truth
 HTTP API               = 모든 상태 변경과 권한 검증
 WebSocket              = invalidate 전달
-Valkey                 = API instance 간 Pub/Sub, presence, rate limit, cache
+Valkey                 = API instance 간 Pub/Sub과 rate limit
 Transactional outbox   = commit된 invalidate의 전달 backlog
 Frontend local state   = 아직 저장되지 않은 사용자 입력
 ```
@@ -338,19 +336,16 @@ offline      -> 연결 끊김 + 재연결 액션
 conflict     -> 변경 충돌 + 최신 상태 반영/로컬 입력 유지
 ```
 
-## Autosave 규칙
+## 현재 저장 방식
 
-Draft autosave는 다음 규칙을 따른다.
+엔트리 이동과 일반 픽/밴 cell 변경은 사용자의 action마다 작은 HTTP mutation으로 저장한다. 현재 운영
+route는 400~800ms debounce나 background autosave queue를 계약으로 두지 않는다.
 
-- 사용자 입력 후 400~800ms debounce한다.
-- aggregate별 in-flight mutation은 최대 1개다.
-- 저장 중 추가 입력은 local state에 유지하고 현재 요청 성공 후 다음 mutation으로 보낸다.
-- 이전 HTTP 요청이 진행 중이라고 새 요청을 병렬 전송하지 않는다.
-- 성공 응답의 revision을 즉시 현재 revision으로 갱신한다.
-- `409 Conflict`가 오면 자동 재시도하지 않는다.
-- 페이지 이탈 전 dirty 상태가 있으면 저장 완료를 기다리거나 이탈 경고를 표시한다.
-
-전체 JSON autosave가 필요한 legacy endpoint는 신규 화면에서 사용하지 않는다. migration 기간에만 adapter 내부에서 허용하고 제거 계획을 기록한다.
+- aggregate별 in-flight mutation은 최대 1개로 유지한다.
+- 성공 응답의 authoritative snapshot/revision으로 화면을 교체한다.
+- `409 Conflict`가 오면 자동 재시도하지 않고 최신 snapshot을 읽는다.
+- 경매 입찰, lineup lock, game submit 같은 위험 command는 명시 action으로만 실행한다.
+- 전체 JSON draft replace와 client-side merge는 사용하지 않는다.
 
 ## Invalidate와 로컬 입력
 
@@ -410,9 +405,7 @@ Valkey에 저장 가능한 것:
 
 ```txt
 monkeybot:{env}:pubsub:{topic}                 # instance 간 Pub/Sub
-monkeybot:{env}:presence:{topic}:{connection} # 접속자 표시, 짧은 TTL
 monkeybot:{env}:ratelimit:{principal}:{route}  # 보조 rate limit
-monkeybot:{env}:cache:{...}                    # 재생성 가능한 cache
 ```
 
 Valkey에만 저장하면 안 되는 것:
@@ -484,15 +477,8 @@ tournament revision 증가
 - locked lineup의 revision을 기준으로만 game result를 입력한다.
 - game 생성, MMR 변경, series/match score 변경은 하나의 transaction으로 처리한다.
 
-## Presence 규칙
-
-Presence는 협업 편의를 위한 정보이며 권한이나 lock이 아니다.
-
-- 짧은 TTL을 사용한다.
-- heartbeat가 끊기면 자동 만료한다.
-- 같은 사용자의 여러 tab은 별도 connection으로 계산할 수 있다.
-- presence가 비어 있어도 다른 사용자가 수정하지 않는다고 가정하지 않는다.
-- 화면에는 최대 몇 명의 이름만 표시하고 나머지는 count로 표시한다.
+현재 API는 browser editor presence를 발행하거나 화면에 표시하지 않는다. `RealtimeEditStateBar`는
+연결/저장 상태만 보여 주며, 접속자 수나 이름을 권한 판단과 편집 lock에 사용하지 않는다.
 
 ## 관측 가능성
 

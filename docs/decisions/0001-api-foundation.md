@@ -46,5 +46,5 @@ Phase 1 Axum foundation에서 문서에 수치가 없던 설정을 다음처럼 
 ## Valkey And Locks
 
 Phase 1에는 Valkey client나 분산 lock을 추가하지 않는다. 정합성은 PostgreSQL row lock, revision,
-state condition, unique constraint로 보장하며 Valkey 연결은 Pub/Sub, presence, rate limit, cache가
+state condition, unique constraint로 보장하며 Valkey 연결은 Pub/Sub과 rate limit이
 필요해지는 후속 phase에서 추가한다.

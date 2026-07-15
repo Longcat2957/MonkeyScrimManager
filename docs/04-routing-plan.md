@@ -1,10 +1,10 @@
 # MonkeyBot Routing Plan
 
-작성일: 2026-07-11
+작성일: 2026-07-15
 
 ## 목적
 
-라우팅 계획을 프론트엔드, 백엔드, Bot 책임으로 완전히 분리한다.
+현재 운영 중인 라우팅을 프론트엔드, 백엔드, Bot 책임으로 분리해 기록한다.
 
 기존 `../mookbot_v3`는 SvelteKit web route, Fastify API route, Discord bot command/component handler가 함께 맞물려 동작한다. 새 프로젝트에서는 SvelteKit frontend-only, Axum API, Discord bot의 책임을 문서 단위로 분리한다.
 
@@ -14,9 +14,11 @@
 - [Backend Routing](routing/backend.md): Axum HTTP API, OAuth/session, WebSocket topic, internal bot notify endpoint.
 - [Backend Development Plan](09-backend-development-plan.md): PostgreSQL schema, transaction, 단계별 구현과 완료 기준.
 - [Bot Routing](routing/bot.md): Discord slash command, button/select interaction, 웹 딥링크 생성 규칙.
-- [Expected Workflows](06-expected-workflows.md): bot 설치부터 일반 내전, 경매, 전적 검색, 관리자 작업까지의 예상 사용 흐름.
+- [Operating Workflows](06-expected-workflows.md): bot 설치부터 일반 내전, 경매, 전적 검색, 관리자 작업까지의 현재 사용 흐름.
 - [Realtime Collaboration](07-realtime-collaboration.md): 동시 편집, revision, WebSocket invalidate, Valkey, 충돌 복구 기준.
 - [Component Entrypoints](08-component-entrypoints.md): 재사용 UI의 import 위치, route 배치, props와 목업 상태.
+- [Current Operating Contract](12-current-operating-contract.md): 구현 기준의 현재 운영 흐름과 제공 범위.
+- [Code Review Plan](13-code-review-plan.md): 현재 구현 기준의 검토 순서, 범위, 검증 게이트.
 
 ## 전체 원칙
 
@@ -38,22 +40,14 @@
 - `../mookbot_v3/docs/v2-feature-inventory.md`
 - `../mookbot_v3/docs/v3-roadmap.md`
 
-## 우선순위 요약
+## 현재 운영 Surface
 
-### P0
+- Frontend: 공개 `/landing`, guild dashboard, 일반 내전 모집/엔트리/픽밴/결과, 경매 모집/입찰/브래킷/라인업/match/결과,
+  records, leaderboard, `/me`, guild admin, static documents가 실제 route로 배치되어 있다.
+- Backend: Discord OAuth/session, guild-scoped workflow, Riot account/records, admin, notification outbox,
+  제한적 WebSocket invalidate를 Axum이 소유한다.
+- Bot: 현재 command registry에는 `/초기설정`, `/등록`, `/내전모집`과 경매 모집/운영 명령만 등록되어 있다.
+  정확한 목록은 [Current Operating Contract](12-current-operating-contract.md)를 따른다.
 
-- Frontend: `/`, `/g/[guildId]`, `/oauth/[...path]`, `/api/[...path]`, `/dd/[...path]`, `/g/[guildId]/recruitments/[id]/entry`, `/g/[guildId]/series/[id]/pick-ban`, `/g/[guildId]/series/[id]/result`
-- Backend: auth/session, recruitment, series, games, champions, healthz, WebSocket
-- Bot: `/내전모집`, 일반 모집 button/select, 엔트리/픽밴/결과 웹 링크
-
-### P1
-
-- Frontend: `/g/[guildId]/series`, `/g/[guildId]/auction/**`, `/users/[discordId]`, `/g/[guildId]/leaderboard`, `/me`
-- Backend: auction recruitment/tournament/match, users/profile, leaderboard, riot accounts
-- Bot: 경매 모집/진행 command, 사용자 조회 command, Riot 조회 command
-
-### P2
-
-- Frontend: `/g/[guildId]/admin`, `/g/[guildId]/admin/seasons`, `/admin/status`
-- Backend: logs, deep health/admin status, guild member/settings/revert endpoints
-- Bot: 관리자 command, audit log link, maintenance command
+새 route 또는 command는 기존 P0/P1/P2 표를 선행 계약으로 삼지 않는다. 먼저 실제 workflow와
+`apps/*` 구현을 정하고, 이 문서와 route별 문서를 같은 변경에서 갱신한다.

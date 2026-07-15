@@ -12,7 +12,7 @@ Axum API의 PostgreSQL 기반과 Phase 2 이후 repository가 따라야 할 저�
 
 - PostgreSQL은 Docker Official Image의 exact tag `18.4-alpine3.23`으로 고정한다.
 - PostgreSQL만 영속 상태와 revision의 source of truth다.
-- Valkey는 cache, presence, rate limit, Pub/Sub 용도이며 원장으로 사용하지 않는다.
+- Valkey는 Pub/Sub과 rate limit 용도이며 원장으로 사용하지 않는다.
 - UUID domain ID는 application에서 UUIDv7으로 생성한다. Discord snowflake는 canonical unsigned
   decimal string으로 검증해 저장한다.
 - status와 lane은 PostgreSQL enum 대신 `text + CHECK`를 사용하고 application boundary에서는 typed

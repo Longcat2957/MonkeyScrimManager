@@ -1,12 +1,16 @@
 # Backend Routing
 
-작성일: 2026-07-12
+작성일: 2026-07-15
 
 ## 범위
 
 이 문서는 Rust/Axum API의 HTTP, OAuth/session, WebSocket, internal route를
 정의한다. 상세 module, PostgreSQL transaction, test, phase는
 [Backend Development Plan](../09-backend-development-plan.md)을 따른다.
+
+현재 endpoint와 DTO는 `apps/api/src/http/mod.rs`, handler/service, contract code와
+[Current Operating Contract](../12-current-operating-contract.md)를 우선한다. 이 문서의 계획성 서술은
+runtime과 충돌할 때 현재 구현을 덮어쓰지 않는다.
 
 Backend 책임:
 

@@ -1,10 +1,14 @@
 # Frontend Routing
 
-작성일: 2026-07-12
+작성일: 2026-07-15
 
 ## 범위
 
 이 문서는 `apps/web`의 SvelteKit route만 다룬다.
+
+현재 동작은 `apps/web/src/routes`, `apps/web/src/lib/api`와
+[Current Operating Contract](../12-current-operating-contract.md)를 우선한다. 이 문서의 과거
+계획 표현이 runtime과 다르면 runtime을 기준으로 문서를 고친다.
 
 SvelteKit은 `src/routes` 디렉토리 기반의 파일 시스템 라우팅을 사용한다. 따라서 이 문서의 URL은 구현 시 `apps/web/src/routes/**/+page.svelte` 또는 `+server.ts` 구조로 대응한다.
 
@@ -74,6 +78,36 @@ Workflow root는 API의 UUID `id`와 사람용 `displayNumber`를 구분한다. 
 
 ## App Shell
 
+### `/landing`
+
+파일:
+
+- `apps/web/src/routes/landing/+page.svelte`
+
+목적:
+
+- 비로그인 첫 방문자에게 MonkeyBot이 Discord 내전의 모집, 편성, 픽밴, 결과 기록을 연결하는 서비스임을 짧게 소개한다.
+- 일반 내전과 경매 내전의 흐름을 선택해 볼 수 있는 UI와 `/install` 설치 안내를 제공한다.
+- 내전 작업대 데모는 기존 `EntryDraftBoard`, `ScrimPickBanResultInputBoard`, `AuctionTournamentBidDraftWorkbench`를 local mock state로 구동한다. 이 데모의 조작은 API 요청이나 실제 guild 데이터 변경을 만들지 않는다.
+- `Discord로 시작` CTA는 `/oauth/discord/start?next=/`로 이동해 인증 뒤 기존 root의 대표 guild 분기를 사용한다.
+- 이 route는 공개 소개 shell을 사용하며 AppShell의 guild selector, 검색, 사용자 메뉴를 렌더링하지 않는다.
+
+Backend 데이터: 없음.
+
+### `/install`
+
+파일:
+
+- `apps/web/src/routes/install/+page.svelte`
+
+목적:
+
+- 운영자가 Discord 서버에 Bot을 추가한 뒤 `/초기설정`, 참가자의 `/등록 GameName#TagLine`까지 필요한 순서를 안내한다.
+- `/초기설정`의 필수·선택 입력과 현재 등록된 Discord command만 설명한다. 이 route는 Bot 초대 URL이나 구현 세부를 임의로 만들지 않는다.
+- 이 route는 공개 소개 shell을 사용하며 AppShell의 guild selector, 검색, 사용자 메뉴를 렌더링하지 않는다.
+
+Backend 데이터: 없음.
+
 ### `/`
 
 파일:
@@ -82,13 +116,13 @@ Workflow root는 API의 UUID `id`와 사람용 `displayNumber`를 구분한다. 
 
 목적:
 
+- 비로그인 첫 방문자를 `/landing`으로 redirect한다.
 - 로그인 사용자의 대표 guild를 확인해 `/g/[guildId]`로 redirect한다.
 - 대표 guild가 없으면 `/me?tab=guild`의 설정 흐름으로 보낸다.
 
 Backend 데이터:
 
 - `GET /api/me`
-- `GET /api/me/guilds`
 
 ### `/g/[guildId]`
 
@@ -121,6 +155,7 @@ WebSocket: 사용하지 않는다.
 - 모집 마감 상태는 `내전` 메뉴에 포함하고, `전적`, `랭킹`, `관리`는 현재 guild 기준 route를 사용한다.
 - `관리`는 현재 guild의 operator에게만 노출하고 `/g/[guildId]/admin`으로 이동한다.
 - `QuickActionFab`을 전역 배치해 미니게임과 타이머를 연다.
+- `/landing`과 `/install`은 공개 페이지이므로 AppShell 대신 독립 header/footer를 렌더링한다.
 
 주의:
 

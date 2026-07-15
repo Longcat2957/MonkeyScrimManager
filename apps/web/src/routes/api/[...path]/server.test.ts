@@ -75,6 +75,42 @@ describe('API proxy', () => {
 		expect(proxyFetch).not.toHaveBeenCalled();
 	});
 
+	it('preserves both logout cookie-clearing headers from the API response', async () => {
+		const upstreamResponse = Response.json(
+			{ data: { loggedOut: true }, meta: { requestId: crypto.randomUUID() } },
+			{ status: 200 }
+		);
+		upstreamResponse.headers.append(
+			'set-cookie',
+			'monkeybot_session=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax'
+		);
+		upstreamResponse.headers.append(
+			'set-cookie',
+			'monkeybot_csrf=; Path=/; Max-Age=0; SameSite=Lax'
+		);
+		const proxyFetch = vi.fn(async () => upstreamResponse);
+		const request = new Request('http://localhost:5173/api/logout', {
+			method: 'POST',
+			headers: {
+				cookie: 'monkeybot_session=opaque-session; monkeybot_csrf=csrf-token',
+				origin: 'http://localhost:5173',
+				'X-CSRF-Token': 'csrf-token'
+			}
+		});
+
+		const response = await fallback({
+			request,
+			params: { path: 'logout' },
+			url: new URL(request.url),
+			fetch: proxyFetch
+		} as never);
+
+		expect(response).toBe(upstreamResponse);
+		const cookies = response.headers.get('set-cookie');
+		expect(cookies).toContain('monkeybot_session=;');
+		expect(cookies).toContain('monkeybot_csrf=;');
+	});
+
 	it('forwards localhost Riot mutations to the configured API port with body and CSRF headers', async () => {
 		runtimeEnv.API_BASE_URL = 'http://localhost:30020/api/';
 		let forwardedUrl = '';

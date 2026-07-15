@@ -1,12 +1,12 @@
 # MonkeyBot PostgreSQL Schema Plan
 
-작성일: 2026-07-12
+작성일: 2026-07-15
 
 ## 문서 지위
 
-이 문서는 MonkeyBot PostgreSQL schema와 SQLx migration의 기준서다. 단순 관계도가
-아니라 실제 migration을 작성할 때 따라야 하는 table, key, constraint, index,
-transaction, delete, legacy import 정책을 정의한다.
+이 문서는 MonkeyBot PostgreSQL schema의 설명서다. 실제 schema의 최종 기준은
+`apps/api/migrations`와 이를 사용하는 repository query이며, 이 문서는 그 구현과 같은
+business rule을 설명해야 한다.
 
 판단 우선순위는 다음과 같다.
 
@@ -14,7 +14,7 @@ transaction, delete, legacy import 정책을 정의한다.
 2. 이 저장소의 business workflow 문서
 3. `../mookbot_v3`의 검증된 MMR과 운영 데이터
 
-충돌 시 frontend를 기준으로 이 문서를 수정한다. 기존
+충돌 시 현재 구현을 기준으로 이 문서를 수정한다. 기존
 `apps/web/src/lib/server/db/schema.ts`는 SQLite/Drizzle 초기 흔적이므로 PostgreSQL 설계
 근거로 사용하지 않는다.
 
@@ -29,14 +29,16 @@ transaction, delete, legacy import 정책을 정의한다.
 - 영속 DB는 VPS 내부 PostgreSQL 하나다.
 - PostgreSQL에는 Axum backend와 별도 migration job만 접근한다.
 - SvelteKit은 frontend-only이며 DB에 직접 접근하지 않는다.
-- Valkey는 Pub/Sub, presence, rate limit만 담당한다. Riot 전적 snapshot과 recent page cache는
+- Valkey는 Pub/Sub과 rate limit만 담당한다. Riot 전적 snapshot과 recent page cache는
   PostgreSQL에 영속화한다.
 - Discord guild가 tenant 경계다. 모든 운영 데이터는 `guild_id`로 격리한다.
 - Discord snowflake는 `text`, 신규 domain ID는 application이 생성한 UUIDv7 `uuid`다.
 - timestamp는 전부 UTC `timestamptz`다.
 - canonical lane은 `TOP | JUNGLE | MID | BOTTOM | SUPPORT`다.
 - `best_of` storage는 `1 | 3 | 5`를 허용한다. 일반 내전은 모집 생성 시 BO1/BO3/BO5를 선택하고,
-  선택값을 series에 immutable snapshot으로 복사한다. 경매 match는 별도 workflow이며 현재 BO3로 고정한다.
+  선택값을 series에 immutable snapshot으로 복사한다. 경매는 모집 생성 시 결승 BO1/BO3/BO5와 하드
+  피어리스를 저장하고, 20인은 준결승 BO1/BO3/BO5도 별도로 저장해 tournament/match rule snapshot으로
+  복사한다.
 - MMR은 v3의 소수 ELO를 보존하기 위해 `double precision`이다. 반올림은 UI에서만 한다.
 - 경매 point와 count는 `integer`, revision과 순번은 `bigint`다.
 - 상태값은 초기에는 PostgreSQL enum 대신 `text + CHECK`를 사용한다.
@@ -673,9 +675,10 @@ FK (guild_id, created_by) -> guild_members (guild_id, user_id) RESTRICT
 FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 ```
 
-현재 production route, records DTO, MMR workflow는 5v5 일반 내전만 지원한다. 재사용 component의
-가변 `targetCount` prop은 제품 계약이 아니다. 다른 인원 모드는 records와 MMR 계약까지 실제로
-추가할 때 별도 migration으로 확장한다.
+현재 production route, records DTO, MMR workflow는 5v5 일반 내전과 10인/20인 경매 내전의 각 5v5
+match를 지원한다. 일반 모집은 10명, 경매 모집은 10명 또는 20명이라는 workflow 규칙을 사용한다.
+재사용 component의 가변 `targetCount` prop은 임의 인원 모드를 뜻하는 제품 계약이 아니다. 다른 인원 모드는
+records와 MMR 계약까지 실제로 추가할 때 별도 migration으로 확장한다.
 
 모집 생성 command가 `best_of`와 `hard_fearless`를 함께 기록한다. `CLOSED -> CONVERTED` 전환은 이 값을
 새 `series` row에 복사하며, 이후 모집이나 픽밴 workspace에서 값을 수정하지 않는다. 모집과 series에
@@ -944,9 +947,9 @@ FK (guild_id, recruitment_id) -> auction_recruitments (guild_id, id) RESTRICT
 FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 ```
 
-현재 `/auction/recruitments/{id}/draft`는 CLOSED 모집의 실제 확정 명단을 읽는 stage-gate다. 팀장과
-시작 point를 저장하는 mutation과 tournament 생성은 별도 vertical slice로 남아 있으며, 그 전에는 fixture
-route나 임시 Valkey 상태를 사용하지 않는다.
+`/auction/recruitments/{id}/draft`는 CLOSED 모집의 실제 확정 명단을 읽고 captain과 팀별 시작 point를
+저장한 뒤 tournament를 생성하는 setup stage다. 이 stage의 데이터는 setup draft revision과 PostgreSQL
+transaction으로 관리하며 fixture route나 임시 Valkey 상태를 사용하지 않는다.
 
 ### `auction_setup_teams`
 
@@ -965,7 +968,7 @@ FK (guild_id, recruitment_id, captain_user_id)
   -> auction_recruitment_participants (guild_id, recruitment_id, user_id) RESTRICT
 ```
 
-향후 setup mutation의 APP invariant:
+setup mutation의 APP invariant:
 
 - TEN_PERSON은 정확히 2팀, TWENTY_PERSON은 정확히 4팀이다.
 - 모든 captain은 JOINED participant이며 서로 달라야 한다.
@@ -1997,7 +2000,7 @@ Frontend 협업 계약과 DB revision owner는 다음과 같다.
 - records의 series/tournament 총 MMR 증감, champion 승패, 상대 이름
 - synergy와 head-to-head summary
 - guild member count와 현재 사용자의 role label
-- `lastSavedAt`, 접속 중 editor 목록, presence
+- `lastSavedAt`, 접속 중 editor 목록
 - 모든 상대 시간과 한국어 enum label
 
 조회는 confirmed/non-voided games와 append-only ledger를 기준으로 계산한다. 실제 query가

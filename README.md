@@ -5,11 +5,11 @@ SvelteKit frontend와 독립 API 서비스로 새로 작성하는 multi-guild �
 ## 먼저 볼 것
 
 ```txt
-1. IMPLEMENTATION_ROADMAP.md
-2. docs/09-backend-development-plan.md
-3. docs/01-purpose.md
+1. docs/12-current-operating-contract.md
+2. docs/routing/frontend.md, docs/routing/backend.md, docs/routing/bot.md
+3. docs/05-db-schema.md
 4. docs/06-expected-workflows.md
-5. docs/05-db-schema.md
+5. docs/09-backend-development-plan.md
 ```
 
 ## 현재 결정된 것
@@ -22,7 +22,7 @@ API: Rust + Axum 별도 backend service
 디자인: Tailwind CSS + Bits UI + lucide-svelte
 배포: VPS
 DB: VPS 내부 PostgreSQL
-실시간 전달/cache: Valkey
+실시간 전달/rate limit: Valkey
 GitHub: repo/history 관리
 CI/CD: 기본 제외, 로컬에서 Docker build/push/deploy
 범위: 여러 Discord guild를 독립 운영하는 구조
@@ -32,9 +32,10 @@ CI/CD: 기본 제외, 로컬에서 Docker build/push/deploy
 ## 핵심 운영 흐름
 
 ```txt
-bot 설치
-  -> /초기설정
-  -> /g/{guildId} dashboard
+비로그인 웹 방문
+  -> /landing
+  -> Discord OAuth2
+  -> 대표 guild 또는 대표 guild 설정
   -> 모집 / 편성 / 픽밴 / 결과 / 경매 / 전적 검색
 ```
 
@@ -63,6 +64,8 @@ docs/07-realtime-collaboration.md 동시 편집과 WebSocket 계약
 docs/08-component-entrypoints.md UI 컴포넌트 진입점과 호출 계약
 docs/09-backend-development-plan.md Axum/PostgreSQL 상세 실행계획
 docs/11-dummy-users.md          개발용 더미 사용자 신원, 관리, 기능 연결 계약
+docs/12-current-operating-contract.md 현재 구현 기준의 운영 계약
+docs/13-code-review-plan.md     현재 구현 기준의 코드 리뷰 계획
 docs/routing/frontend.md        Frontend route
 docs/routing/backend.md         Backend API route
 docs/routing/bot.md             Bot command/component route
@@ -71,7 +74,7 @@ docs/routing/bot.md             Bot command/component route
 ## 작업할 때 기준
 
 ```txt
-세부 구현 전에는 IMPLEMENTATION_ROADMAP.md부터 수정
+현재 동작 판단은 docs/12-current-operating-contract.md와 source code를 우선
 Backend 계약/단계 변경은 docs/09-backend-development-plan.md에 반영
 구조/흐름 변경은 docs/06-expected-workflows.md 또는 docs/05-db-schema.md에 반영
 라우팅 변경은 docs/routing/*에 반영

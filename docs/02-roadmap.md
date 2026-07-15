@@ -1,6 +1,6 @@
 # MonkeyBot Product Roadmap
 
-작성일: 2026-07-11
+작성일: 2026-07-15
 
 ## 방향
 
@@ -20,6 +20,20 @@ MonkeyBot은 mookbot_v3를 복사하는 프로젝트가 아니다. 현재 Svelte
 
 상세 task와 exit criteria는 [Backend Development Plan](09-backend-development-plan.md)을
 따른다.
+
+## 현재 상태와 문서 사용법
+
+이 문서는 과거 구현 순서와 남은 운영 hardening을 기록하는 roadmap이다. 현재 제공 기능의 판단 기준은
+[Current Operating Contract](12-current-operating-contract.md)와 실제 route/API/Bot 구현이다. 완료된 phase의
+과거 task 문구를 현재 누락으로 해석하지 않는다.
+
+| 영역 | 현재 상태 |
+| --- | --- |
+| Foundation, OAuth, guild tenant, PostgreSQL | 구현됨 |
+| 일반 내전, 결과/MMR, 제한적 realtime | 구현됨 |
+| 경매 10/20인 모집부터 match 결과까지 | 구현됨 |
+| records, Riot account, self-service, guild admin | 구현됨 |
+| migration rehearsal, production hardening, 미등록 Bot parity | 후속 운영 작업 |
 
 ## 목표 구조
 
@@ -45,7 +59,7 @@ HTTP/WS adapter
   -> PostgreSQL
 ```
 
-Valkey는 Pub/Sub, presence, rate limit, cache만 담당한다. draft, bid, point,
+Valkey는 Pub/Sub과 rate limit만 담당한다. draft, bid, point,
 lineup, game, MMR 원장은 PostgreSQL에만 둔다.
 
 ## 확정 제품 규칙
@@ -162,11 +176,13 @@ WS route:
 /g/{guildId}/recruitments/{id}/entry
 /g/{guildId}/series/{id}/pick-ban
 /g/{guildId}/auction/recruitments/{id}
+/g/{guildId}/auction/tournaments/{id}/draft
 ```
 
-HTTP가 mutation을 수행하고 WS는 outbox/Valkey를 통해 invalidate와 presence만
-전달한다. 경매 준비, 입찰, 브래킷, match 작업대는 saved snapshot, expected revision, `409` refetch를
-사용하며 tournament/match topic을 구독하지 않는다.
+HTTP가 mutation을 수행하고 WS는 outbox/Valkey를 통해 invalidate만
+전달한다. 경매 입찰은 `BIDDING` 상태의 active operator만 tournament topic을 구독한다. 경매 준비,
+브래킷, lineup, match, 결과 작업대는 saved snapshot, expected revision, `409` refetch를 사용하며 socket을
+열지 않는다.
 
 완료 기준:
 
@@ -215,7 +231,6 @@ guild records는 내부 game 원장이 기준이며 /records는 Riot 외부 전�
 - manual MMR adjustment ledger
 - display/recruitment/entry/log channel/operator role/public 설정
 - 현재/종료 시즌 집계 조회와 새 시즌 전환
-- recent checkpoint revert
 - audit logs
 - API/PostgreSQL/Bot/Valkey status
 
@@ -243,9 +258,9 @@ notification에 집중한다. PostgreSQL에 직접 접근하지 않고 Axum API/
 service를 사용한다.
 
 - Phase 2.5의 일반 모집 interaction/idempotency 기반을 재사용한다.
-- 경매 모집과 운영 command.
-- 사용자 조회와 web과 같은 admin/domain command.
-- heartbeat와 season rotate mapping.
+- 현재 등록된 경매 모집/참가자/목록/취소 command.
+- notification outbox relay와 heartbeat.
+- 사용자 조회, 일반 내전 운영, admin command는 command registry에 추가된 뒤 별도 범위로 진행한다.
 
 완료 기준:
 

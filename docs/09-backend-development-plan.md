@@ -1,20 +1,20 @@
 # MonkeyBot Backend Development Plan
 
-작성일: 2026-07-12
+작성일: 2026-07-15
 
 ## 1. 문서의 지위
 
-이 문서는 MonkeyBot 백엔드 구현의 상세 실행 기준이다.
+이 문서는 백엔드 구현 이력과 남은 hardening 작업을 기록한다. 현재 제공 기능의 실행 기준은 runtime
+구현과 [Current Operating Contract](12-current-operating-contract.md)다.
 
 판단 우선순위:
 
-1. 현재 구현된 SvelteKit route, component 동작, props, command type, fixture 의미
-2. 이 문서와 docs의 business workflow
-3. mookbot_v3의 검증된 MMR 및 운영 로직
+1. 현재 route/API/Bot/runtime 동작
+2. [Current Operating Contract](12-current-operating-contract.md)와 route별 계약 문서
+3. 이 문서의 아직 남은 hardening 항목과 `mookbot_v3` 참고 구현
 
-프론트와 기존 문서가 충돌하면 프론트를 따른다. 프론트에 없는 규칙은 docs를
-따르고, docs에도 없는 세부는 이 문서의 보수적인 기본안을 따른다. API 연결
-중에도 현재 route와 시각 구조는 유지한다.
+구현과 기존 문서가 충돌하면 구현을 따른다. 완료된 phase의 과거 task를 현재 누락이나 제품 요구사항으로
+해석하지 않는다.
 
 ## 2. 확정 기술
 
@@ -39,7 +39,7 @@
 - Fastify/Node API
 - DB와 Valkey의 원장 이중 저장
 
-Valkey는 Pub/Sub, presence, rate limit, 재생성 가능한 cache만 담당한다.
+Valkey는 현재 Pub/Sub과 rate limit만 담당한다.
 
 ## 3. Frontend 표준
 
@@ -75,9 +75,11 @@ Valkey는 Pub/Sub, presence, rate limit, 재생성 가능한 cache만 담당한�
 | /g/{guildId}/series/{id}/pick-ban             | series draft/game command     | 사용 |
 | /g/{guildId}/series/{id}/result               | series ledger                 | 없음 |
 | /g/{guildId}/auction                          | auction projection            | 없음 |
-| /g/{guildId}/auction/recruitments/{id}/draft  | auction setup                 | 사용 |
+| /g/{guildId}/auction/recruitments/{id}        | auction recruitment roster    | 사용 |
+| /g/{guildId}/auction/recruitments/{id}/draft  | auction setup                 | 없음 |
 | /g/{guildId}/auction/tournaments/{id}/draft   | auction tournament            | 사용 |
-| /g/{guildId}/auction/tournaments/{id}/bracket | bracket/match                 | 사용 |
+| /g/{guildId}/auction/tournaments/{id}/bracket | bracket/match                 | 없음 |
+| /g/{guildId}/auction/matches/{matchId}        | lineup/game command           | 없음 |
 | /g/{guildId}/auction/tournaments/{id}/result  | tournament ledger/revert      | 없음 |
 | /g/{guildId}/records                          | guild records                 | 없음 |
 | /records                                      | Riot records                  | 없음 |
@@ -87,21 +89,20 @@ Valkey는 Pub/Sub, presence, rate limit, 재생성 가능한 cache만 담당한�
 | /g/{guildId}/admin                            | guild admin                   | 없음 |
 | /admin/status                                 | service status                | 없음 |
 
-WS는 위 다섯 편집 workspace에만 사용한다.
+WS는 일반 entry, 일반 pick-ban, 경매 모집 roster, `BIDDING` 경매 draft 네 workspace에만 사용한다.
 
-### 3.3 API 연결 때 보완할 component
+### 3.3 현재 adapter 상태
 
-| Component                               | 보완                                                    |
+| Component                               | 현재 contract                                           |
 | --------------------------------------- | ------------------------------------------------------- |
-| EntryDraftBoard                         | controlled snapshot, reset/reopen/createSeries callback |
-| ScrimPickBanResultInputBoard            | cell/submit/deleteLast/revert callback                  |
-| SeriesResultLedgerBoard                 | nullable `durationSeconds`, `-` 표시 adapter            |
-| AuctionTournamentCaptainPointSetupBoard | create tournament callback                              |
-| AuctionMatchStartingLineupInputBoard    | match ID/revision, role/lock callback                   |
-| GuildMemberManagementPanel              | nullable `mainLane`, `미설정` adapter                   |
-| OperationsQueueBoard                    | `RESULT` 작업을 pick-ban 입력 route로 연결              |
-| Admin page handler                      | silent return 대신 typed 409                            |
-| /records load                           | Riot ID를 gameName/tagLine으로 분리해 platform과 전달   |
+| EntryDraftBoard                         | controlled API snapshot, reset/reopen/createSeries callback |
+| ScrimPickBanResultInputBoard            | draft/game submit/last-game revert/series recovery callback |
+| SeriesResultLedgerBoard                 | nullable `durationSeconds` adapter와 result snapshot   |
+| AuctionTournamentCaptainPointSetupBoard | setup save와 tournament create callback                 |
+| AuctionMatchStartingLineupInputBoard    | match revision, role assign/lock/unlock callback        |
+| GuildMemberManagementPanel              | authoritative member snapshot과 MMR/status command      |
+| OperationsQueueBoard                    | actionable workflow href만 렌더링                       |
+| `/records` load                         | GameName/TagLine API adapter와 refresh                 |
 
 `apps/web/src/lib/contracts/dashboard.ts`의 lowercase kind/3단계 priority schema는 현재 어느 route도
 사용하지 않는 초기 흔적이다. OpenAPI 근거로 사용하지 않고 실사용 `OperationsQueueItem` 계약으로
@@ -119,7 +120,7 @@ HTTP 성공 전 local 상태를 server 원장으로 확정하지 않는다.
 - records, leaderboard, minimal profile
 - Riot accounts, champion preferences, privacy, default guild
 - guild members/settings/seasons/audit/revert/status
-- 제한적 WS invalidate/presence
+- 제한적 WS invalidate
 - Bot용 동일 application service/API
 
 제외:
@@ -543,10 +544,9 @@ EXPLAIN ANALYZE로 실제 query를 검증한 index만 유지한다.
 
 ## 10. 상태와 transaction
 
-아래 일반 내전 상태 그래프와 cascade 규칙은 제품이 충족해야 하는 **필수 목표 계약**이다. 이 계획에
-적힌 전이만으로 현재 Axum router가 converted/series/game rollback endpoint를 이미 제공한다는 뜻은
-아니다. 구현된 route는 OpenAPI와 route registration을 기준으로 확인하고, 아직 없는 lifecycle action은
-별도 vertical slice로 추가해야 한다.
+아래 상태 그래프와 cascade 규칙은 과거 확장 설계 기록이다. 현재 공개 lifecycle은 route registration,
+snapshot capability, [Current Operating Contract](12-current-operating-contract.md)를 기준으로 한다. 이 그래프의
+전이가 현재 API/UI/Bot에 모두 제공된다고 해석하지 않는다.
 
 ```text
 Recruitment
@@ -792,7 +792,6 @@ Valkey key:
 
 ```text
 monkeybot:{env}:pubsub:{topic}
-monkeybot:{env}:presence:{topic}:{connectionId}
 monkeybot:{env}:ratelimit:{principal}:{route}
 ```
 
@@ -1305,7 +1304,7 @@ Task:
 - BE-601 topic authorization.
 - BE-602 outbox -> Valkey.
 - BE-603 Valkey -> local hub.
-- BE-604 presence TTL.
+- BE-604 presence TTL은 현재 scope에서 제외.
 - BE-605 queue/frame/heartbeat.
 - FE-600 connection/save state adapter.
 - FE-601 invalidate/refetch/conflict.

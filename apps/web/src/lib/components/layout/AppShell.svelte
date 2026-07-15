@@ -15,7 +15,8 @@
 		Swords,
 		Trophy,
 		UserCircle,
-		UsersRound
+		UsersRound,
+		X
 	} from 'lucide-svelte';
 	import { Avatar, DropdownMenu, Tabs } from 'bits-ui';
 	import { cubicOut } from 'svelte/easing';
@@ -64,6 +65,8 @@
 	let searchSuggestions = $state<SearchSuggestion[]>([]);
 	let searchSuggestionsLoading = $state(false);
 	let highlightedSuggestion = $state(-1);
+	let loggingOut = $state(false);
+	let logoutError = $state<string | null>(null);
 	const searchSuggestionsId = $props.id();
 
 	afterNavigate(() => {
@@ -234,15 +237,60 @@
 		return value ? decodeURIComponent(value.slice(prefix.length)) : null;
 	}
 
+	async function logoutErrorMessage(response: Response): Promise<string> {
+		const fallback =
+			response.status === 403
+				? '로그아웃 요청을 확인할 수 없습니다. 새로고침 후 다시 시도해 주세요.'
+				: '로그아웃 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+
+		try {
+			const payload: unknown = await response.json();
+			if (!payload || typeof payload !== 'object' || !('error' in payload)) return fallback;
+
+			const error = payload.error;
+			if (!error || typeof error !== 'object') return fallback;
+
+			const message =
+				'message' in error && typeof error.message === 'string' ? error.message : fallback;
+			const requestId =
+				'requestId' in error && typeof error.requestId === 'string' ? error.requestId : null;
+
+			return requestId ? `${message} (요청 ID: ${requestId})` : message;
+		} catch {
+			return fallback;
+		}
+	}
+
 	async function logout() {
+		if (loggingOut) return;
+
+		loggingOut = true;
+		logoutError = null;
 		const csrfToken = readCookie('monkeybot_csrf');
-		const response = await globalThis.fetch(resolve('/api/[...path]', { path: 'logout' }), {
-			method: 'POST',
-			headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined
-		});
-		if (!response.ok) return;
-		globalThis.document.cookie = 'monkeybot_default_guild=; Path=/; Max-Age=0; SameSite=Lax';
-		await goto(resolve('/'));
+
+		try {
+			const response = await globalThis.fetch(resolve('/api/[...path]', { path: 'logout' }), {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined
+			});
+
+			if (response.status === 401) {
+				await goto(resolve('/landing'));
+				return;
+			}
+
+			if (!response.ok) {
+				logoutError = await logoutErrorMessage(response);
+				return;
+			}
+
+			await goto(resolve('/landing'));
+		} catch {
+			logoutError = '로그아웃 요청을 전송하지 못했습니다. 네트워크 연결을 확인해 주세요.';
+		} finally {
+			loggingOut = false;
+		}
 	}
 
 	function isActive(match: string): boolean {
@@ -400,17 +448,43 @@
 							{/if}
 							<DropdownMenu.Separator class="my-1 h-px bg-[var(--color-app-border-muted)]" />
 							<DropdownMenu.Item
-								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold text-red-100 outline-none data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-50"
+								class="flex h-9 cursor-default items-center gap-2 px-3 text-xs font-semibold text-red-100 outline-none data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-50 aria-disabled:opacity-45"
+								aria-disabled={loggingOut}
 								onclick={logout}
 							>
-								<LogOut size={15} />
-								나가기
+								{#if loggingOut}
+									<LoaderCircle size={15} class="animate-spin" aria-hidden="true" />
+									나가는 중
+								{:else}
+									<LogOut size={15} aria-hidden="true" />
+									나가기
+								{/if}
 							</DropdownMenu.Item>
 						</DropdownMenu.Content>
 					</DropdownMenu.Portal>
 				</DropdownMenu.Root>
 			</div>
 		</div>
+
+		{#if logoutError}
+			<div class="border-t border-red-400/20 bg-red-500/10">
+				<div class="mx-auto flex max-w-[1680px] items-center gap-3 px-4 py-2 lg:px-5">
+					<p role="alert" class="min-w-0 flex-1 text-xs font-medium text-red-100">
+						{logoutError}
+					</p>
+					<button
+						type="button"
+						aria-label="로그아웃 오류 닫기"
+						class="grid size-6 shrink-0 place-items-center text-red-200 outline-none hover:bg-red-500/15 hover:text-red-50"
+						onclick={() => {
+							logoutError = null;
+						}}
+					>
+						<X size={14} aria-hidden="true" />
+					</button>
+				</div>
+			</div>
+		{/if}
 
 		{#if searchOpen}
 			<div

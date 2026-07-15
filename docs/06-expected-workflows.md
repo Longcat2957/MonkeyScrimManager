@@ -1,12 +1,12 @@
-# MonkeyBot Expected Workflows
+# MonkeyBot Operating Workflows
 
-작성일: 2026-07-12
+작성일: 2026-07-15
 
 ## 목적
 
-이 문서는 새 프로젝트에서 예상되는 실제 사용 흐름을 정리한다.
+이 문서는 현재 구현된 실제 운영 흐름을 정리한다.
 
-구현 세부 설명이 아니라 Discord bot, Web console, Axum application service, PostgreSQL이 어떤 순서로 맞물리는지 한눈에 보기 위한 문서다.
+구현 세부 설명이 아니라 Discord bot, Web console, Axum application service, PostgreSQL이 어떤 순서로 맞물리는지 한눈에 보기 위한 문서다. 현재 제공 범위의 요약은 [Current Operating Contract](12-current-operating-contract.md)를 따른다.
 
 핵심 전제:
 
@@ -53,29 +53,16 @@ Discord command
   -> 관련 화면 invalidate
 ```
 
-되돌리기의 우선순위:
+현재 recovery:
 
-```txt
-1. game result / MMR 변경 되돌리기
-2. 경매 입찰 / 수동 배치 / 라인업 확정 되돌리기
-3. 모집 취소 / series 생성 / bracket 생성 되돌리기
-4. 관리자 destructive action 복구
-```
+일반 내전은 모집 취소/재개, entry reset, series 복귀/삭제, 마지막 세트 되돌리기와 조기 종료를 사용한다.
+경매는 최근 입찰 action 되돌리기, 브래킷 확정 해제, 입찰 단계 복귀, lineup unlock, 마지막 game 되돌리기와
+권한·상태가 허용하는 Web 또는 Bot 취소/조기 종료를 사용한다.
 
 원칙:
 
-- 주요 작업 화면에는 최근 작업과 되돌리기 진입점이 있어야 한다.
 - 범용 undo/redo를 만들지 않는다.
-- 엔트리 편성, 마지막 게임, 경매 입찰 단계, 라인업 확정 취소처럼 정해진 지점만 되돌린다.
-- audit log는 추적용이고, 실제 복구 기준은 revert checkpoint다.
-- series/tournament/bracket 생성 되돌리기는 기존 row를 CANCELLED로 보존한다. 다시 생성할 때는
-  새 domain ID를 발급한다.
-- 일반 내전은 어느 lifecycle 상태에서도 운영자가 현재 작업을 수정하고, 직전 단계로 복구하고,
-  삭제 요청을 수행할 수 있어야 한다. 이는 임의 시점 복원이 아니라 각 단계의 명시 lifecycle
-  command이며, 종속 game/MMR은 역순 `VOIDED`/reversal 뒤에만 상위 aggregate를 취소한다.
-- 위 일반 내전 복구성은 **필수 목표 계약**이다. 현재 entry-draft API가 존재한다는 사실만으로
-  `CONVERTED` 이후 series/game cascade rollback까지 구현되었다고 해석하지 않는다. 해당 command가
-  OpenAPI와 router에 추가되기 전에는 그 상태의 수정/복구/삭제 기능을 제공한다고 표시하지 않는다.
+- audit log는 추적 원장이고, 실제 실행 가능 여부는 backend lifecycle과 capability가 결정한다.
 
 ## 1. 길드 설치 / 초기 설정
 
@@ -236,14 +223,10 @@ Web 모집 취소 (생성자 또는 운영자)
 
 - 일반 내전은 MMR에 반영한다.
 - `games.guild_id`가 전적과 MMR 변경의 경계다.
-- 게임 결과와 MMR 변경은 반드시 되돌릴 수 있어야 한다.
+- 마지막 확정 game은 backend가 ledger tail 안전성을 확인한 경우에만 되돌릴 수 있다.
 - 되돌리기/강제 취소/조기 종료는 checkpoint 또는 audit log를 남긴다.
-- 일반 내전은 `OPEN`, `CLOSED`, `CONVERTED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` 어느
-  시점에서도 active operator가 수정, 직전 운영 단계 복귀, 삭제를 요청할 수 있어야 한다.
-  완료된 결과는 덮어쓰거나 물리 삭제하지 않고 마지막 game부터 ledger tail을 검증해 void/reversal한
-  뒤에만 series와 source recruitment를 복구한다.
-- 이는 일반 내전 lifecycle의 필수 완성 기준이며 현재 공개된 route 목록이 아니다. 구현되지 않은
-  converted/series/game cascade action은 UI와 Bot에서 실행 가능하다고 노출하지 않는다.
+- 모집과 series recovery는 현재 snapshot이 반환한 capability와 명시 endpoint로만 실행한다. 결과를
+  덮어쓰거나 물리 삭제하지 않으며, 후속 ledger가 있으면 API가 복구를 거부한다.
 
 ## 4. 경매 내전 운영
 
@@ -334,7 +317,8 @@ Web 현재 active operator의 참가자 관리
 - 경매 match는 게임 시작 전에 양 팀 라인업을 반드시 확정해야 한다.
 - 라인업이 비어 있거나 중복 role이 있으면 결과 입력으로 넘어갈 수 없다.
 - 경매 진행 상태는 UI local state가 아니라 DB 원장을 기준으로 복구 가능해야 한다.
-- 입찰, 수동 배치, 라인업 확정, 결과 입력은 이전 단계로 되돌릴 수 있어야 한다.
+- 입찰/수동 배치, 브래킷, lineup, 마지막 결과의 recovery는 현재 snapshot capability가 허용한 고정 command로
+  처리한다. 범용 이전 상태 복원은 제공하지 않는다.
 - 입찰 되돌리기/취소/강제 종료는 checkpoint 또는 audit log를 남긴다.
 - Web과 Discord는 모집 생성 주체만 다르며, format, season, display number, participant capacity,
   setup draft와 Discord 모집 메시지의 canonical state를 별도로 만들지 않는다.
@@ -503,8 +487,7 @@ guild 상태와 권한 문제를 빨리 발견하는 화면
 
 - 엔트리 편성
 - 픽밴 입력
-- 경매 드래프트와 입찰
-- 경매 match 라인업과 결과 입력
+- 경매 모집 roster와 `BIDDING` 입찰
 
 흐름:
 
@@ -522,6 +505,8 @@ HTTP GET snapshot + revision
 - 전체 draft 덮어쓰기와 last-write-wins를 사용하지 않는다.
 - 연결 복구 후 현재 aggregate를 다시 조회한다.
 - 경매 낙찰과 결과 입력은 하나의 DB transaction에서 확정한다.
+- WebSocket은 일반 엔트리, 일반 픽밴, 경매 모집 roster, `BIDDING` 입찰에만 연결한다. setup, bracket,
+  lineup, match 결과는 HTTP snapshot과 revision conflict refetch만 사용한다.
 
 전체 계약과 필수 장애 테스트는 [Realtime Collaboration](07-realtime-collaboration.md)을 따른다.
 
@@ -535,11 +520,10 @@ HTTP GET snapshot + revision
 흐름:
 
 ```txt
-운영자 명령 또는 admin screen
+운영자 admin screen 또는 workflow 화면
   -> 권한 확인
-  -> 되돌릴 수 있는 작업인지 판정
-  -> 필요 시 revert checkpoint 기록
-  -> destructive action 실행
+  -> 해당 route의 capability와 revision 확인
+  -> 상태 변경 또는 조회
   -> admin_audit_log 기록
   -> 변경한 domain aggregate에 허용된 topic이 있을 때만 관련 편집 화면 invalidate
   -> dashboard/admin은 다음 HTTP 조회에서 반영
@@ -550,21 +534,18 @@ HTTP GET snapshot + revision
 ```txt
 MMR 수동 수정
 현재 시즌 종료와 새 시즌 생성
-오래된 내전 CANCELLED 정리
-모집 / 시리즈 / 경매 강제 취소
-취소 모집 복구
-게임 결과 되돌리기
-권한 진단
+길드 멤버 ACTIVE/INACTIVE 변경
+운영 role 및 Discord 채널 설정
 audit log 조회
 ```
 
 원칙:
 
-- destructive action은 audit log 없이 실행하지 않는다.
-- destructive action에 무리한 undo/redo를 붙이지 않는다.
-- 되돌리기 불가능한 작업은 UI와 Bot에서 명시적으로 표시한다.
+- 현재 admin 화면은 members, settings, seasons, audit logs만 제공한다. operations/revert 전용 탭,
+  web 일괄 등록, 시즌 초기화는 노출하지 않는다.
+- workflow recovery와 Bot 경매 취소는 해당 workflow의 lifecycle/API를 사용하며 admin 탭에서 범용 undo/redo로
+  처리하지 않는다.
 - admin action도 guild target이 있으면 반드시 `guild_id`를 기록한다.
-- 실제 삭제보다 soft-delete 또는 상태 전이를 우선한다.
 - 시즌 전환은 기존 시즌을 CLOSED로 보존하고 새 ACTIVE 시즌을 만든다. 전적/MMR 원장을
   초기화하거나 삭제하지 않는다.
 

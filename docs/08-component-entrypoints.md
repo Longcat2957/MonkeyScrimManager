@@ -1,6 +1,6 @@
 # MonkeyBot Component Entrypoints
 
-작성일: 2026-07-11
+작성일: 2026-07-15
 
 ## 목적
 
@@ -22,8 +22,9 @@
 | Mock data | route 배치는 완료했지만 API 대신 fixture를 사용함  |
 | Internal  | 상위 컴포넌트 안에서만 사용하는 구현 조각          |
 
-현재 상위 workflow 컴포넌트는 모두 운영 route에 배치되어 있다. Route별로 API 연결 시점이 다르므로 route
-배치 완료, Backend 연동 완료, fixture-only 상태를 구분한다.
+현재 상위 workflow 컴포넌트는 운영 route의 authoritative API snapshot 또는 parent-controlled local draft를
+사용한다. 이 문서는 실제 import와 route 배치를 기록하며, 구현과 충돌하면
+[Current Operating Contract](12-current-operating-contract.md)와 route 코드를 기준으로 갱신한다.
 
 ## Import 원칙
 
@@ -128,11 +129,11 @@ canonical match route에서만 수행한다.
 | ------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------- |
 | `LeaderboardBoard`              | `/g/[guildId]/leaderboard`            | `catalog`, API `snapshot`, 선택 `loadError`; 탭·검색·표시 제한은 local state     |
 | `RiotAccountManager`            | `/me` Riot 계정 탭                    | `initialAccounts`; Riot ID 연결과 snapshot mutation은 `/api/me/riot-accounts/**` |
-| `UserChampionPreferencesEditor` | `/me` 선호 챔피언 탭                  | `catalog`, 선택 `maxPreferences`; 선호 목록과 저장은 내부 목업                   |
+| `UserChampionPreferencesEditor` | `/me` 선호 챔피언 탭                  | `catalog`, API `initialPreferences`, 선택 `maxPreferences`; lane별 저장은 `/api/me/champion-preferences/{lane}` |
 | `UserPrivacySettingsPanel`      | `/me` 개인정보 탭                     | 외부 프로필, Discord↔Riot 연결 관계, 길드 밖 내전 전적 접근 설정                 |
 | `UserDefaultGuildSettingsPanel` | `/me` 대표 길드 탭                    | `initialGuildId`, `onSave`; 루트 접속 시 이동할 기본 guild 선택                  |
 | `OperationsQueueBoard`          | `/g/[guildId]`                        | `items: OperationsQueueItem[]`; 작업 링크는 같은 guild의 운영 route를 가리킨다.  |
-| `RealtimeEditStateBar`          | 편성, 픽밴, 향후 동시 편집 경매 route | resource, 연결/저장 상태, 편집자, 충돌 처리 callback                             |
+| `RealtimeEditStateBar`          | 일반 엔트리/픽밴, 경매 모집/입찰 route | resource, 연결/저장 상태, 충돌 처리 callback                                     |
 | `QuickActionFab`                | `AppShell` 전역                       | 선택 `label`; 미니게임과 타이머 modal을 소유                                     |
 | `StaticMarkdownDocument`        | `/docs`, `/terms`, `/privacy`         | 정적 Markdown 본문, 목차, 문서 메타데이터                                        |
 | `AppFooter`                     | `AppShell` 전역                       | 공통 브랜드 Footer와 문서·이용약관·개인정보 처리방침 진입 링크                   |
