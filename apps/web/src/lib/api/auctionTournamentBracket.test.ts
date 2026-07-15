@@ -52,7 +52,12 @@ function snapshot() {
 			],
 			matches: []
 		},
-		permissions: { canManageBracket: true, canManageMatches: true, canRecoverBracket: false }
+		permissions: {
+			canManageBracket: true,
+			canManageMatches: true,
+			canRecoverBracket: false,
+			canRevertDraft: false
+		}
 	};
 }
 

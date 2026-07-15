@@ -47,7 +47,12 @@ function snapshot(status: 'BRACKET_SETUP' | 'IN_GAME' | 'COMPLETED' | 'CANCELLED
 			],
 			matches: []
 		},
-		permissions: { canManageBracket: true, canManageMatches: true, canRecoverBracket: false }
+		permissions: {
+			canManageBracket: true,
+			canManageMatches: true,
+			canRecoverBracket: false,
+			canRevertDraft: false
+		}
 	};
 }
 

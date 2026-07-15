@@ -4,6 +4,7 @@
 	import type { ChampionCatalog } from '$lib/datadragon';
 	import {
 		auctionMatchResultTeams,
+		type AuctionMatchConfirmedGame,
 		type AuctionMatchGameResultRevertCommand,
 		type AuctionMatchGameResultSnapshot,
 		type AuctionMatchGameResultSubmitCommand,
@@ -16,6 +17,7 @@
 		ScrimPickBanResultInputTeam
 	} from '$lib/fixtures/scrimPickBanResultInputFixtures';
 	import ScrimPickBanResultInputBoard from './ScrimPickBanResultInputBoard.svelte';
+	import ScrimPickBanResultSetSummaryCard from './ScrimPickBanResultSetSummaryCard.svelte';
 
 	type Side = ScrimPickBanResultInputSide;
 
@@ -34,6 +36,7 @@
 	let reverting = $state(false);
 	let revertDialogOpen = $state(false);
 	let operationError = $state('');
+	let selectedCompletedGameId = $state<string | null>(null);
 
 	const resultTeams = $derived(
 		auctionMatchResultTeams(snapshot).map((team) => ({
@@ -84,6 +87,20 @@
 			Object.values(game.picks).filter((championId): championId is string => championId !== null)
 		)
 	);
+	const confirmedGames = $derived(
+		[...snapshot.games].sort((left, right) => left.setNumber - right.setNumber)
+	);
+	const completedSetNumbers = $derived(
+		Array.from({ length: snapshot.match.bestOf }, (_, index) => index + 1)
+	);
+	const confirmedGamesBySetNumber = $derived(
+		new Map(confirmedGames.map((game) => [game.setNumber, game]))
+	);
+	const selectedCompletedGame = $derived(
+		confirmedGames.find((game) => game.id === selectedCompletedGameId) ??
+			confirmedGames.at(-1) ??
+			null
+	);
 
 	function emptyBans(): Record<Side, Array<string | null>> {
 		return { BLUE: [null, null, null, null, null], RED: [null, null, null, null, null] };
@@ -102,6 +119,14 @@
 				preferredChampions: [],
 				frequentChampions: []
 			}))
+		};
+	}
+
+	function teamsForConfirmedGame(game: AuctionMatchConfirmedGame): Record<Side, ScrimPickBanResultInputTeam> {
+		const leftSide: Side = game.sidePreset === 'DEFAULT' ? 'BLUE' : 'RED';
+		return {
+			BLUE: toBoardTeam('BLUE', leftSide === 'BLUE' ? resultTeams[0] : resultTeams[1]),
+			RED: toBoardTeam('RED', leftSide === 'RED' ? resultTeams[0] : resultTeams[1])
 		};
 	}
 
@@ -156,7 +181,8 @@
 			class="flex min-h-10 flex-wrap items-center justify-between gap-2 border border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] px-3 py-1.5"
 		>
 			<p class="text-xs font-semibold text-slate-300">
-				현재 점수 <span class="text-slate-100">{snapshot.match.leftScore}:{snapshot.match.rightScore}</span>
+				{snapshot.match.status === 'COMPLETED' ? '최종 점수' : '현재 점수'}
+				<span class="text-slate-100">{snapshot.match.leftScore}:{snapshot.match.rightScore}</span>
 			</p>
 			<button
 				type="button"
@@ -198,6 +224,7 @@
 				hardFearless={snapshot.match.hardFearless}
 				{previousPickChampionIds}
 				validateDraft
+				allowLocalBulkInput
 				readOnly={!canEnterResults}
 				busy={editingLocked}
 				initialGame={currentGame}
@@ -217,15 +244,61 @@
 		</p>
 	{/if}
 
-	{#if snapshot.games.length > 0}
+	{#if snapshot.match.status === 'COMPLETED' && selectedCompletedGame && resultTeams.length === 2}
+		{@const gameTeams = teamsForConfirmedGame(selectedCompletedGame)}
+		<section class="overflow-hidden border border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)]">
+			<header
+				class="flex min-h-11 items-center justify-between gap-3 border-b border-[var(--color-app-border-muted)] px-3"
+			>
+				<h2 class="text-xs font-semibold text-slate-200">확정 세트 결과</h2>
+				<span class="text-[11px] font-medium text-slate-500">{confirmedGames.length}세트 확정</span>
+			</header>
+			<div
+				class="grid gap-1 border-b border-[var(--color-app-border-muted)] bg-[var(--color-app-bg-soft)] p-2"
+				style={`grid-template-columns: repeat(${snapshot.match.bestOf}, minmax(0, 1fr));`}
+			>
+				{#each completedSetNumbers as setNumber (setNumber)}
+					{@const game = confirmedGamesBySetNumber.get(setNumber)}
+					<button
+						type="button"
+						disabled={!game}
+						aria-label={game ? `${setNumber}세트 결과 보기` : `${setNumber}세트 미진행`}
+						title={game ? undefined : '진행되지 않은 세트'}
+						class={`grid min-h-14 place-items-center border px-2 text-center ${
+							!game
+								? 'cursor-not-allowed border-[var(--color-app-border-muted)] bg-slate-950/20 text-slate-700'
+								: selectedCompletedGame.id === game.id
+									? 'border-cyan-400/50 bg-cyan-400/8 text-slate-100'
+									: 'border-[var(--color-app-border)] bg-[var(--color-app-control)] text-slate-300 hover:bg-[var(--color-app-hover)]'
+						}`}
+						onclick={() => {
+							if (game) selectedCompletedGameId = game.id;
+						}}
+					>
+						<strong class="text-base font-semibold">{setNumber}세트</strong>
+					</button>
+				{/each}
+			</div>
+			<ScrimPickBanResultSetSummaryCard
+				label={`${selectedCompletedGame.setNumber}세트`}
+				blueTeam={gameTeams.BLUE}
+				redTeam={gameTeams.RED}
+				winner={selectedCompletedGame.winner}
+				bans={selectedCompletedGame.bans}
+				picks={selectedCompletedGame.picks}
+				champions={catalog.champions}
+				version={selectedCompletedGame.patchVersion ?? catalog.version}
+			/>
+		</section>
+	{:else if confirmedGames.length > 0 && resultTeams.length === 2}
 		<details class="border border-[var(--color-app-border-muted)] bg-slate-950/15">
 			<summary class="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-300">
-				입력된 세트 결과 {snapshot.games.length}개
+				입력된 세트 결과 {confirmedGames.length}개
 			</summary>
 			<div
 				class="grid gap-px border-t border-[var(--color-app-border-muted)] bg-[var(--color-app-border-muted)]"
 			>
-				{#each snapshot.games as game (game.id)}
+				{#each confirmedGames as game (game.id)}
 					<div
 						class="flex items-center justify-between gap-3 bg-[var(--color-app-surface)] px-3 py-2"
 					>

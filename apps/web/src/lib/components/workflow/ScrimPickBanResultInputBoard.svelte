@@ -36,6 +36,7 @@
 		hardFearless?: boolean;
 		previousPickChampionIds?: readonly string[];
 		validateDraft?: boolean;
+		allowLocalBulkInput?: boolean;
 		readOnly?: boolean;
 		busy?: boolean;
 		onDraftOperation?: (operation: SeriesPickBanDraftOperation) => void | Promise<void>;
@@ -52,6 +53,7 @@
 		hardFearless = false,
 		previousPickChampionIds = [],
 		validateDraft = false,
+		allowLocalBulkInput = false,
 		readOnly = false,
 		busy = false,
 		onDraftOperation,
@@ -98,7 +100,7 @@
 
 	const allBansFilled = $derived([...bans.BLUE, ...bans.RED].every(Boolean));
 	const allPicksFilled = $derived(Object.values(picks).every(Boolean));
-	const sideDone = $derived(true);
+	const sideDone = $derived(sideSelected);
 	const pickBanDone = $derived(allBansFilled && allPicksFilled);
 	const draftConflicts = $derived(
 		findDraftConflicts(picks, bans, hardFearless, previousPickChampionIds)
@@ -112,6 +114,9 @@
 	);
 	const ready = $derived(sideDone && canLeavePickBan && winner !== null);
 	const serverDraft = $derived(onDraftOperation !== undefined);
+	const canUseBulkInput = $derived(
+		inputStep === 'PICKBAN' && sideSelected && (serverDraft || allowLocalBulkInput)
+	);
 	const canEditDraft = $derived(!readOnly && !busy);
 	const canRecordResult = $derived(!readOnly && !busy && onSubmit !== undefined);
 	const canSubmit = $derived(ready && canRecordResult);
@@ -296,8 +301,26 @@
 	}
 
 	async function applyBulkInput(items: SeriesPickBanBulkItem[]) {
-		if (!canEditDraft || !sideSelected || items.length === 0 || !onDraftOperation) return;
-		await onDraftOperation({ type: 'APPLY_BULK', items });
+		if (!canUseBulkInput || !canEditDraft || items.length === 0) return;
+		if (onDraftOperation) {
+			await onDraftOperation({ type: 'APPLY_BULK', items });
+			return;
+		}
+
+		recordHistory();
+		const nextPicks = { ...picks };
+		const nextBans = { BLUE: [...bans.BLUE], RED: [...bans.RED] };
+		for (const item of items) {
+			if (item.type === 'SET_PICK') {
+				nextPicks[item.playerId] = item.championId;
+			} else {
+				nextBans[item.side][item.slot - 1] = item.championId;
+			}
+		}
+		picks = nextPicks;
+		bans = nextBans;
+		saved = false;
+		submissionError = '';
 	}
 
 	async function selectSide(preset: ScrimPickBanResultInputSidePreset) {
@@ -389,6 +412,7 @@
 	}
 
 	function goToPickBan() {
+		if (!sideDone) return;
 		inputStep = 'PICKBAN';
 	}
 
@@ -454,7 +478,7 @@
 				/>
 			</span>
 		</button>
-		{#if serverDraft && sideSelected}
+		{#if canUseBulkInput}
 			<button
 				type="button"
 				disabled={!canEditDraft}
@@ -494,7 +518,7 @@
 							<button
 								type="button"
 								class={`inline-flex h-8 w-full items-center justify-center px-2.5 text-xs font-semibold transition ${
-									sidePreset === preset
+									sideSelected && sidePreset === preset
 										? 'rounded-md bg-cyan-400/12 text-cyan-100'
 										: 'rounded-sm bg-slate-950/25 text-slate-300 hover:bg-slate-900/55'
 								}`}
@@ -503,11 +527,11 @@
 							>
 								{preset === 'DEFAULT' ? '왼쪽 팀 블루' : '오른쪽 팀 블루'}
 							</button>
-						{/each}
+					{/each}
 					</div>
 
 					{#each sidePresets as preset (preset)}
-						{#if sidePreset === preset}
+						{#if (!sideSelected && preset === 'DEFAULT') || (sideSelected && sidePreset === preset)}
 							<div
 								class="grid min-w-[34rem] grid-cols-2 gap-1 overflow-x-auto bg-[var(--color-app-surface)]"
 							>
@@ -518,7 +542,7 @@
 										: column === 'LEFT'
 											? teams.BLUE
 											: teams.RED}
-									<section class={sidePanelClass(side)}>
+									<section class={sideSelected ? sidePanelClass(side) : 'bg-slate-950/20'}>
 										<div class="flex h-11 items-center justify-between px-2">
 											<div>
 												<p class="text-sm font-semibold text-slate-100">
@@ -526,7 +550,9 @@
 												</p>
 											</div>
 											<span
-												class={`bg-slate-950/35 px-2 py-1 text-[11px] font-semibold ${sideClass(side)}`}
+												class={`inline-flex h-6 w-12 shrink-0 items-center justify-center bg-slate-950/35 text-[11px] font-semibold ${
+													sideSelected ? sideClass(side) : 'invisible'
+												}`}
 											>
 												{sideLabel(side)}
 											</span>
@@ -710,7 +736,8 @@
 				{#if inputStep === 'SIDE'}
 					<button
 						type="button"
-						class="inline-flex h-9 items-center justify-center rounded-sm bg-cyan-400/12 px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/18"
+						class="inline-flex h-9 items-center justify-center rounded-sm bg-cyan-400/12 px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/18 disabled:cursor-not-allowed disabled:opacity-35"
+						disabled={!sideDone}
 						onclick={goToPickBan}
 					>
 						다음
@@ -768,10 +795,10 @@
 			{/if}
 		</div>
 
-		{#if serverDraft && sideSelected}
+		{#if canUseBulkInput}
 			<ScrimPickBanBulkInput
 				bind:open={bulkInputOpen}
-				{teams}
+				teams={pickBanTeams}
 				{picks}
 				{bans}
 				{champions}

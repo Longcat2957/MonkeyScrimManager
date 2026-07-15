@@ -52,7 +52,12 @@ const lockedSnapshot: AuctionTournamentBracketSnapshot = {
 		],
 		matches: []
 	},
-	permissions: { canManageBracket: true, canManageMatches: true, canRecoverBracket: true }
+	permissions: {
+		canManageBracket: true,
+		canManageMatches: true,
+		canRecoverBracket: true,
+		canRevertDraft: false
+	}
 };
 
 describe('AuctionTournamentBracketMatchSetupBoard', () => {

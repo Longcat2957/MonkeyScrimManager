@@ -98,7 +98,12 @@ function bracketSnapshot(format: 'TEN_PERSON' | 'TWENTY_PERSON' = 'TWENTY_PERSON
 				}
 			]
 		},
-		permissions: { canManageBracket: true, canManageMatches: true, canRecoverBracket: false }
+		permissions: {
+			canManageBracket: true,
+			canManageMatches: true,
+			canRecoverBracket: false,
+			canRevertDraft: false
+		}
 	};
 }
 

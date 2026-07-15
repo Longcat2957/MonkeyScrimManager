@@ -174,9 +174,10 @@ export const auctionTournamentDraftSnapshotSchema = z
 		permissions: z
 			.object({
 				canManageDraft: z.boolean(),
-				canManageBracket: z.boolean().optional()
+				canManageBracket: z.boolean(),
+				canRevertLast: z.boolean()
 			})
-			.passthrough()
+			.strict()
 	})
 	.strict()
 	.superRefine((snapshot, context) => {

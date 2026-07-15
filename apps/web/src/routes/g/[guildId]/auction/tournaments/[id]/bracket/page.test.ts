@@ -10,4 +10,11 @@ describe('auction tournament bracket page', () => {
 		expect(source).toContain('대진 확정 해제');
 		expect(source).toContain('입력이나 결과가 하나라도 있으면');
 	});
+
+	it('returns an unlocked bracket to bidding only when the server grants draft recovery', () => {
+		expect(source).toContain('snapshot.permissions.canRevertDraft');
+		expect(source).toContain("kind: 'REVERT_LAST'");
+		expect(source).toContain('입찰 단계로 되돌리기');
+		expect(source).toContain('auction-tournament-revert-last-draft');
+	});
 });

@@ -127,7 +127,7 @@ const snapshot: AuctionTournamentDraftSnapshot = {
 		unsold: [],
 		recentAction: null
 	},
-	permissions: { canManageDraft: true, canManageBracket: false }
+	permissions: { canManageDraft: true, canManageBracket: false, canRevertLast: false }
 };
 
 function envelope(data: AuctionTournamentDraftSnapshot = snapshot): Response {

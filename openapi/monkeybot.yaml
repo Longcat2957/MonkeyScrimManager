@@ -2606,7 +2606,10 @@ paths:
       description: >-
         Returns the authoritative teams, candidate queue, active target, unsold candidates, most
         recent revertable action, and viewer draft permissions. Any active guild member can read
-        the aggregate; only an active operator receives canManageDraft=true.
+        the aggregate; only an active operator in BIDDING receives canManageDraft=true.
+        canRevertLast is an explicit server capability when the most recent action is a directly
+        reversible draft action in BIDDING or an unlocked BRACKET_SETUP with no active bracket
+        artifacts.
       security:
         - SessionCookie: []
       parameters:
@@ -2638,7 +2641,9 @@ paths:
         Browser-only active-operator command endpoint. Every command requires a browser
         Idempotency-Key and expectedRevision. It appends the action history, applies normalized
         team/candidate/lot/point state, records audit/outbox, and returns the canonical aggregate.
-        A BRACKET_SETUP tournament permits only REVERT_LAST before bracket lock and match artifacts.
+        A BRACKET_SETUP tournament permits only REVERT_LAST before it is locked or has match
+        artifacts; it clears unlocked slots and returns the tournament to BIDDING without reopening
+        recruitment.
       security:
         - SessionCookie: []
           CsrfHeader: []
@@ -10064,12 +10069,19 @@ components:
     AuctionTournamentDraftPermissions:
       type: object
       additionalProperties: false
-      required: [canManageDraft, canManageBracket]
+      required: [canManageDraft, canManageBracket, canRevertLast]
       properties:
         canManageDraft:
           type: boolean
         canManageBracket:
           type: boolean
+        canRevertLast:
+          type: boolean
+          description: >-
+            True only when the viewer is an active operator and the most recent action is a direct
+            draft action that can safely be reversed. This can include an unlocked BRACKET_SETUP
+            without active bracket artifacts; clients must use this capability instead of inferring
+            eligibility.
     AuctionTournamentDraftSnapshot:
       type: object
       additionalProperties: false
@@ -10362,7 +10374,7 @@ components:
     AuctionTournamentBracketPermissions:
       type: object
       additionalProperties: false
-      required: [canManageBracket, canManageMatches, canRecoverBracket]
+      required: [canManageBracket, canManageMatches, canRecoverBracket, canRevertDraft]
       properties:
         canManageBracket:
           type: boolean
@@ -10370,6 +10382,13 @@ components:
           type: boolean
         canRecoverBracket:
           type: boolean
+        canRevertDraft:
+          type: boolean
+          description: >-
+            True only when the viewer is an active operator in an unlocked BRACKET_SETUP with no
+            active matches and the server permits the final draft action to be reversed. Use the
+            existing draft REVERT_LAST command; it returns the tournament to BIDDING and does not
+            reopen recruitment.
     AuctionTournamentBracketSnapshot:
       type: object
       additionalProperties: false
@@ -10620,6 +10639,10 @@ components:
           type: boolean
         canRevertLastGame:
           type: boolean
+          description: >-
+            True only when the final confirmed game can be safely reverted. A completed
+            TWENTY_PERSON semifinal returns false once downstream final lineup, game, lock, or
+            non-LINEUP_PENDING work exists.
     AuctionMatchSnapshot:
       type: object
       additionalProperties: false

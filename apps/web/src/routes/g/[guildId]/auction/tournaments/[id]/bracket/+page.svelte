@@ -2,13 +2,18 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
-	import { LoaderCircle, RotateCcw, X } from 'lucide-svelte';
+	import { LoaderCircle, RotateCcw, Undo2, X } from 'lucide-svelte';
 	import {
 		auctionTournamentBracketErrorText,
 		executeAuctionTournamentBracketCommand,
 		fetchAuctionTournamentBracket,
 		isAuctionTournamentBracketRevisionConflict
 	} from '$lib/api/auctionTournamentBracket';
+	import {
+		auctionTournamentDraftErrorText,
+		executeAuctionTournamentDraftCommand,
+		isAuctionTournamentDraftRevisionConflict
+	} from '$lib/api/auctionTournamentDraft';
 	import { createOperationIdempotencyKeys } from '$lib/api/operationIdempotency';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import AuctionTournamentBracketMatchSetupBoard from '$lib/components/workflow/AuctionTournamentBracketMatchSetupBoard.svelte';
@@ -28,6 +33,9 @@
 	let mutationError = $state('');
 	let recoveryDialogOpen = $state(false);
 	let recoveryError = $state('');
+	let draftRecoveryDialogOpen = $state(false);
+	let draftRecoveryError = $state('');
+	let revertingDraft = $state(false);
 	let idempotencyKeys = createOperationIdempotencyKeys();
 
 	const incomingSnapshotKey = $derived(
@@ -41,7 +49,9 @@
 	const tournament = $derived(snapshot.tournament);
 	const formatLabel = $derived(tournament.format === 'TEN_PERSON' ? '10인 경매' : '20인 경매');
 	const rulesLabel = $derived(formatAuctionRules(tournament.format, tournament.rules));
-	const canRecoverBracket = $derived(snapshot.permissions.canRecoverBracket && !submitting);
+	const isMutating = $derived(submitting || revertingDraft);
+	const canRecoverBracket = $derived(snapshot.permissions.canRecoverBracket && !isMutating);
+	const canRevertDraft = $derived(snapshot.permissions.canRevertDraft && !isMutating);
 
 	function applySnapshot(nextSnapshot: AuctionTournamentBracketSnapshot) {
 		snapshotOverrideSourceKey = incomingSnapshotKey;
@@ -128,7 +138,7 @@
 			command.kind === 'UNLOCK_BRACKET'
 				? snapshot.permissions.canRecoverBracket
 				: snapshot.permissions.canManageBracket;
-		if (submitting || !allowed) return;
+		if (isMutating || !allowed) return;
 		if (command.expectedRevision !== snapshot.tournament.revision) {
 			await recoverAuthoritativeSnapshot('브래킷 버전이 변경되었습니다.', surfaceError);
 			throw new Error('stale_auction_tournament_bracket_command');
@@ -184,6 +194,43 @@
 			recoveryError = auctionTournamentBracketErrorText(cause);
 		}
 	}
+
+	function openDraftRecoveryDialog() {
+		if (!canRevertDraft) return;
+		draftRecoveryError = '';
+		draftRecoveryDialogOpen = true;
+	}
+
+	async function confirmDraftRecovery(): Promise<void> {
+		if (!canRevertDraft) return;
+
+		const command = { kind: 'REVERT_LAST', expectedRevision: tournament.revision } as const;
+		const idempotencyKey = idempotencyKeys.keyFor(
+			'auction-tournament-revert-last-draft',
+			command
+		);
+		revertingDraft = true;
+		draftRecoveryError = '';
+		try {
+			await executeAuctionTournamentDraftCommand(data.guildId, tournament.id, command, idempotencyKey);
+			idempotencyKeys.complete('auction-tournament-revert-last-draft');
+			draftRecoveryDialogOpen = false;
+			await goto(
+				resolve('/g/[guildId]/auction/tournaments/[id]/draft', {
+					guildId: data.guildId,
+					id: tournament.id
+				})
+			);
+		} catch (cause) {
+			if (isAuctionTournamentDraftRevisionConflict(cause)) {
+				idempotencyKeys.invalidate('auction-tournament-revert-last-draft');
+				await recoverAuthoritativeSnapshot(auctionTournamentDraftErrorText(cause), false);
+			}
+			draftRecoveryError = auctionTournamentDraftErrorText(cause);
+		} finally {
+			revertingDraft = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -204,6 +251,15 @@
 					class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-amber-300/30 px-3 text-xs font-semibold text-amber-100 hover:bg-amber-400/10"
 				>
 					<RotateCcw size={14} aria-hidden="true" /> 대진 확정 해제
+				</button>
+			{/if}
+			{#if canRevertDraft}
+				<button
+					type="button"
+					onclick={openDraftRecoveryDialog}
+					class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-amber-300/30 px-3 text-xs font-semibold text-amber-100 hover:bg-amber-400/10"
+				>
+					<Undo2 size={14} aria-hidden="true" /> 입찰 단계로 되돌리기
 				</button>
 			{/if}
 			<a
@@ -227,9 +283,10 @@
 		</div>
 	{/if}
 
-	{#if submitting}
+	{#if isMutating}
 		<div class="flex items-center gap-2 text-xs font-medium text-slate-400">
-			<LoaderCircle size={15} class="animate-spin" aria-hidden="true" /> 브래킷 반영 중
+			<LoaderCircle size={15} class="animate-spin" aria-hidden="true" />
+			{revertingDraft ? '입찰 단계로 되돌리는 중' : '브래킷 반영 중'}
 		</div>
 	{/if}
 
@@ -237,7 +294,7 @@
 		{snapshot}
 		onCommand={handleBracketCommand}
 		onOpenMatch={openMatch}
-		busy={submitting}
+		busy={isMutating}
 	/>
 </div>
 
@@ -250,7 +307,7 @@
 			<div class="flex items-center justify-between gap-3">
 				<Dialog.Title class="text-sm font-semibold text-slate-50">대진 확정 해제</Dialog.Title>
 				<Dialog.Close
-					disabled={submitting}
+					disabled={isMutating}
 					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
 					aria-label="대진 확정 해제 창 닫기"
 				>
@@ -271,7 +328,7 @@
 			{/if}
 			<div class="mt-4 flex justify-end gap-2">
 				<Dialog.Close
-					disabled={submitting}
+					disabled={isMutating}
 					class="h-8 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
 				>
 					취소
@@ -286,6 +343,58 @@
 						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 되돌리는 중
 					{:else}
 						<RotateCcw size={14} aria-hidden="true" /> 확정 해제
+					{/if}
+				</button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
+<Dialog.Root bind:open={draftRecoveryDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+		<Dialog.Content
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-4 shadow-2xl shadow-black/50 outline-none"
+		>
+			<div class="flex items-center justify-between gap-3">
+				<Dialog.Title class="text-sm font-semibold text-slate-50">입찰 단계로 되돌리기</Dialog.Title>
+				<Dialog.Close
+					disabled={isMutating}
+					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
+					aria-label="입찰 단계로 되돌리기 창 닫기"
+				>
+					<X size={16} aria-hidden="true" />
+				</Dialog.Close>
+			</div>
+			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
+				마지막 입찰 작업과 해당 선수 배치·포인트를 함께 되돌리고, 토너먼트를 입찰 단계로
+				복구합니다. 아직 확정되지 않은 대진 슬롯은 비워집니다.
+			</Dialog.Description>
+			{#if draftRecoveryError}
+				<p
+					role="alert"
+					class="mt-3 border border-rose-300/30 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-100"
+				>
+					{draftRecoveryError}
+				</p>
+			{/if}
+			<div class="mt-4 flex justify-end gap-2">
+				<Dialog.Close
+					disabled={isMutating}
+					class="h-8 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
+				>
+					취소
+				</Dialog.Close>
+				<button
+					type="button"
+					disabled={!canRevertDraft}
+					onclick={() => void confirmDraftRecovery()}
+					class="inline-flex h-8 items-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 enabled:hover:bg-amber-400/16 disabled:cursor-not-allowed disabled:opacity-35"
+				>
+					{#if revertingDraft}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 되돌리는 중
+					{:else}
+						<Undo2 size={14} aria-hidden="true" /> 입찰 단계로 되돌리기
 					{/if}
 				</button>
 			</div>

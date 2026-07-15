@@ -41,6 +41,18 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 		expect(source).toContain("RED: teamForSide('RED')");
 		expect(source).toContain('team={pickBanTeams.BLUE}');
 		expect(source).toContain('team={pickBanTeams.RED}');
+		expect(source).toContain('teams={pickBanTeams}');
+	});
+
+	it('keeps the default game-side value visually and functionally unselected until an operator chooses a side', () => {
+		expect(source).toContain('const sideDone = $derived(sideSelected);');
+		expect(source).toContain('sideSelected && sidePreset === preset');
+		expect(source).toContain("{#if (!sideSelected && preset === 'DEFAULT') || (sideSelected && sidePreset === preset)}");
+		expect(source).toContain("sideSelected ? sidePanelClass(side) : 'bg-slate-950/20'");
+		expect(source).toContain("sideSelected ? sideClass(side) : 'invisible'");
+		expect(source).toContain('h-6 w-12 shrink-0');
+		expect(source).toContain('if (!sideDone) return;');
+		expect(source).toContain('disabled={!sideDone}');
 	});
 
 	it('can opt into client-side duplicate and hard-fearless validation', () => {
@@ -50,16 +62,21 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 		expect(source).toContain('{#if validateDraft && hasDraftConflicts}');
 	});
 
-	it('only exposes bulk input after an explicit side selection', () => {
+	it('only exposes bulk input after an explicit side selection and supports an opted-in local draft', () => {
 		expect(source).toContain("import ScrimPickBanBulkInput from './ScrimPickBanBulkInput.svelte'");
 		expect(source).toContain('let bulkInputOpen = $state(false)');
 		expect(source).toContain('let sideSelected = $state');
-		expect(source).toContain('{#if serverDraft && sideSelected}');
+		expect(source).toContain('allowLocalBulkInput?: boolean');
+		expect(source).toContain('allowLocalBulkInput = false');
 		expect(source).toContain(
-			'if (!canEditDraft || !sideSelected || items.length === 0 || !onDraftOperation) return;'
+			"inputStep === 'PICKBAN' && sideSelected && (serverDraft || allowLocalBulkInput)"
 		);
+		expect(source).toContain('{#if canUseBulkInput}');
+		expect(source).toContain('if (!canUseBulkInput || !canEditDraft || items.length === 0) return;');
 		expect(source).toContain('bind:open={bulkInputOpen}');
 		expect(source).toContain("await onDraftOperation({ type: 'APPLY_BULK', items });");
+		expect(source).toContain('nextPicks[item.playerId] = item.championId;');
+		expect(source).toContain('nextBans[item.side][item.slot - 1] = item.championId;');
 		expect(source).toContain('hardFearless?: boolean');
 		expect(source).toContain('previousPickChampionIds?: readonly string[]');
 	});

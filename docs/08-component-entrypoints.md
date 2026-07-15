@@ -70,7 +70,7 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 | `SeriesCompletedEntryRosterBoard`     | `/g/[guildId]/recruitments/[id]/entry` 미리보기 탭 | `EntryDraftSnapshot`에서 변환한 `participants`, `assignments`, `champions`; 제목, 팀 이름, 포맷은 선택                                                                        | API snapshot         |
 | `ScrimPickBanResultInputBoard`        | `/g/[guildId]/series/[id]/pick-ban` 입력 영역      | controlled `SeriesPickBanSnapshot.currentGame`, frozen `teams`, champion catalog, draft cell mutation, game submit/revert callbacks                                           | API snapshot         |
 | `ScrimPickBanConfirmedSetsDisclosure` | `/g/[guildId]/series/[id]/pick-ban` 입력 위        | confirmed `SeriesPickBanSnapshot.games`, champion catalog; 기본 collapsed set history                                                                                         | API snapshot         |
-| `ScrimPickBanBulkInput`               | `/g/[guildId]/series/[id]/pick-ban` 입력 위        | current picks/bans, frozen teams, catalog, `hardFearless`, prior confirmed picks, single `APPLY_BULK` callback                                                                | API snapshot         |
+| `ScrimPickBanBulkInput`               | 일반 내전과 `/g/[guildId]/auction/matches/[matchId]`의 픽밴 입력 위 | current picks/bans, 게임 진영으로 매핑된 frozen teams, catalog, `hardFearless`, prior confirmed picks, 일괄 반영 callback | API snapshot/local game draft |
 | `SeriesResultLedgerBoard`             | `/g/[guildId]/series/[id]/result`                  | `SeriesResultSnapshot`의 frozen teams, confirmed games, score, MMR ledger, champion catalog; nullable `durationSeconds`는 `-` adapter                                         | API snapshot         |
 
 `/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태를 보여주고 하단에 완료 시리즈를 보여준다. 내전 모집은 BO1/BO3/BO5와 하드 피어리스를 선택하는 작은 dialog를 통해 생성한다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
@@ -89,7 +89,7 @@ OPEN 모집 상세 route에 이동한다. 팀장 설정/입찰/브래킷 board�
 | `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket`                                                   | `AuctionTournamentBracketSnapshot`, bracket command callback, canonical match 열기 callback                                    |
 | `AuctionTournamentBracketResultBoard`     | `/g/[guildId]/auction/tournaments/[id]/result`                                                    | `AuctionTournamentResultSnapshot`, read-only 대진과 canonical match 열기 callback                                               |
 | `AuctionMatchStartingLineupInputBoard`    | `/g/[guildId]/auction/matches/[matchId]`                                                        | canonical auction match snapshot, lineup assign/lock/unlock callback, busy 상태                                                |
-| `AuctionMatchGameResultInputBoard`        | `/g/[guildId]/auction/matches/[matchId]`                                                        | 같은 match snapshot, Data Dragon champion catalog, game submit/last-game revert callback, busy 상태                            |
+| `AuctionMatchGameResultInputBoard`        | `/g/[guildId]/auction/matches/[matchId]`                                                        | 같은 match snapshot, Data Dragon champion catalog, game submit/last-game revert callback, 확정 세트의 픽·밴 상세 disclosure, busy 상태 |
 
 `AuctionMatchStartingLineupInputBoard`는 `permissions.canUnlockLineup`가 true일 때만 recovery control을
 노출한다. parent는 `expectedRevision`을 포함해 `/lineup/unlock`을 호출하며, games와 game_inputs가 전혀 없어야
@@ -109,6 +109,10 @@ dummy 전용 UI를 두지 않는다. `canClose`/`canCancel`도 backend capabilit
 생성 때 저장한 format, 준결승/결승 BO, 하드 피어리스 규칙은 recruitment에서 tournament와 match로 복사된다.
 10인 경매는 결승 하나, 20인 경매는 준결승 A/B와 결승을 사용한다. 각 화면은 이를 새 BO 기본값이나 query
 parameter로 바꾸지 않고 authoritative snapshot의 saved rules로만 표시한다.
+
+`ScrimPickBanBulkInput`은 일반 내전에서는 `APPLY_BULK` draft mutation으로 저장한다. 경매 match에서는 아직
+확정되지 않은 현재 세트의 local draft에 한 번에 반영하고, 기존 게임 결과 기록 요청 한 번으로 제출한다. 양쪽 모두
+사용자가 선택한 실제 BLUE/RED 진영을 기준으로 lane 순서의 선수에게 픽을 매핑한다.
 
 입찰이 끝나면 `/auction/tournaments/[id]/bracket`은 팀 배치와 bracket lock만 담당한다. lock 뒤에는 가능한
 match의 `/g/[guildId]/auction/matches/[matchId]`로 이동한다. 라인업 확정과 게임별 pick/ban·승패 입력은 이

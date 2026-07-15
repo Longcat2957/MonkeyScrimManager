@@ -63,7 +63,7 @@ function snapshot() {
 			}
 		],
 		draft: { currentTarget: null, currentTargetProfile: null, unsold: [], recentAction: null },
-		permissions: { canManageDraft: true, canManageBracket: false }
+		permissions: { canManageDraft: true, canManageBracket: false, canRevertLast: false }
 	};
 }
 
@@ -90,7 +90,7 @@ describe('auction tournament draft page server load', () => {
 			guildId,
 			snapshot: {
 				tournament: { id: tournamentId, revision: 7 },
-				permissions: { canManageDraft: true }
+				permissions: { canManageDraft: true, canManageBracket: false, canRevertLast: false }
 			}
 		});
 	});

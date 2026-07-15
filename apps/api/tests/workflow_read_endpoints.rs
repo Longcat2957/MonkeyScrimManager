@@ -329,6 +329,20 @@ async fn assert_auction_tournaments(app: &Router, cookie: &str) -> TestResult {
         format!("/g/{GUILD_A}/auction/matches/{ACTIVE_MATCH}")
     );
 
+    let draft_path = format!("/api/guilds/{GUILD_A}/auction-tournaments/{ACTIVE_TOURNAMENT}");
+    let draft = get(app, &draft_path, Some(cookie)).await?;
+    assert_eq!(draft.status(), StatusCode::OK);
+    let draft = body_json(draft).await?;
+    assert!(draft["data"]["permissions"]["canManageDraft"].is_boolean());
+    assert!(draft["data"]["permissions"]["canRevertLast"].is_boolean());
+
+    let bracket_path =
+        format!("/api/guilds/{GUILD_A}/auction-tournaments/{ACTIVE_TOURNAMENT}/bracket");
+    let bracket = get(app, &bracket_path, Some(cookie)).await?;
+    assert_eq!(bracket.status(), StatusCode::OK);
+    let bracket = body_json(bracket).await?;
+    assert!(bracket["data"]["permissions"]["canRevertDraft"].is_boolean());
+
     let bot_active = bot_get(app, &active_path).await?;
     assert_eq!(bot_active.status(), StatusCode::OK);
     let bot_active = body_json(bot_active).await?;

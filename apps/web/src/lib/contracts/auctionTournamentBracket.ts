@@ -89,7 +89,8 @@ export const auctionTournamentBracketSnapshotSchema = z
 			.object({
 				canManageBracket: z.boolean(),
 				canManageMatches: z.boolean(),
-				canRecoverBracket: z.boolean()
+				canRecoverBracket: z.boolean(),
+				canRevertDraft: z.boolean()
 			})
 			.strict()
 	})

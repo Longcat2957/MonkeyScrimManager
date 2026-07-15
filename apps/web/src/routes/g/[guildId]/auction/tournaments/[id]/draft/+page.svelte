@@ -192,7 +192,11 @@
 	}
 
 	async function handleDraftCommand(command: AuctionTournamentDraftCommand): Promise<void> {
-		if (submitting || !snapshot.permissions.canManageDraft) return;
+		const allowed =
+			command.kind === 'REVERT_LAST'
+				? snapshot.permissions.canRevertLast
+				: snapshot.permissions.canManageDraft;
+		if (submitting || !allowed) return;
 		if (command.expectedRevision !== snapshot.tournament.revision) {
 			await recoverAuthoritativeSnapshot('경매 드래프트 버전이 변경되었습니다.');
 			throw new Error('stale_auction_tournament_draft_command');

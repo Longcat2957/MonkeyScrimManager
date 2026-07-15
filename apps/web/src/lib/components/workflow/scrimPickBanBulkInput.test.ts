@@ -47,6 +47,26 @@ describe('scrim pick-ban bulk input plan', () => {
 		]);
 	});
 
+	it('uses the selected game-side teams when an auction match swaps sides', () => {
+		const swappedGameSideTeams = {
+			BLUE: { ...mockScrimPickBanResultInputTeams.RED, side: 'BLUE' as const },
+			RED: { ...mockScrimPickBanResultInputTeams.BLUE, side: 'RED' as const }
+		};
+
+		const plan = buildPlan({ teams: swappedGameSideTeams });
+
+		expect(plan.canApply).toBe(true);
+		expect(plan.operations).toEqual(
+			expect.arrayContaining([
+				{ type: 'SET_PICK', playerId: 'red-top', championId: 'Gnar' },
+				{ type: 'SET_PICK', playerId: 'red-jungle', championId: 'Viego' },
+				{ type: 'SET_PICK', playerId: 'red-mid', championId: 'Ahri' },
+				{ type: 'SET_PICK', playerId: 'red-bottom', championId: 'Ezreal' },
+				{ type: 'SET_PICK', playerId: 'red-support', championId: 'Thresh' }
+			])
+		);
+	});
+
 	it('allows prior-set picks in a standard series but blocks them in hard fearless', () => {
 		expect(buildPlan({ previousPickChampionIds: ['Gnar'] }).canApply).toBe(true);
 

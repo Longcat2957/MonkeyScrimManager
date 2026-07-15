@@ -553,6 +553,10 @@ WebSocket: 사용하지 않는다. 저장과 생성 성공 뒤에는 response의
   발생시키지 않는다. 상세 조회값은 입찰 MMR을 대체하지 않는다.
 - 모든 팀 roster가 채워지면 server 상태가 `BRACKET_SETUP`으로 전환된다. Web은 local count로 다음 단계를
   추론하지 않고 다음 snapshot의 status와 permissions를 따른다.
+- `permissions.canRevertLast=true`일 때만 마지막 직접 입찰/배치 action의 되돌리기 control을 보인다.
+  `BIDDING`에서는 마지막 action만 되돌리고, 아직 확정하지 않은 `BRACKET_SETUP`에서는 `입찰 단계로
+  되돌리기`로 표시해 slot을 비운 뒤 `BIDDING`으로 돌아간다. 이 동작은 모집을 다시 열지 않으며, client가
+  action history나 roster count로 가능 여부를 추정하지 않는다.
 - `BIDDING` 동안에는 브래킷으로 이동하는 control을 노출하지 않는다. 직접
   `/g/[guildId]/auction/tournaments/[id]/bracket`에 접근해도 backend의 lifecycle `409`을 받아 draft로
   되돌린다.
@@ -586,6 +590,9 @@ reconnect, `resync_required`에서는 GET snapshot을 다시 적용한다. 일�
 - `permissions.canRecoverBracket=true`인 active operator에게만 `대진 확정 해제` 확인 control을 보인다.
   이 command는 결과/픽밴 artifact가 전혀 없을 때만 생성 match를 취소 이력으로 남기고 `BRACKET_SETUP`
   편집 상태로 되돌린다. client는 eligibility를 추정하거나 우회하지 않는다.
+- `permissions.canRevertDraft=true`인 아직 확정하지 않은 `BRACKET_SETUP`에서는 `입찰 단계로 되돌리기`
+  확인 control을 함께 보인다. 기존 draft command의 `REVERT_LAST`가 slot을 비우고 마지막 직접 draft
+  action을 되돌린 뒤 `BIDDING`으로 복구한다. source recruitment를 재개하는 control은 이 흐름에 없다.
 - `IN_GAME`, `COMPLETED`, `CANCELLED` 상태로 직접 접근하면 `/result`로 redirect한다. 이 route는
   `BRACKET_SETUP` 편집 단계에만 남긴다.
 
@@ -641,7 +648,8 @@ WebSocket: 사용하지 않는다. authoritative HTTP snapshot, match revision, 
   같은 세트의 pick/ban 중복은 막고, 하드 피어리스는 이전 확정 세트의 pick을 현재 pick으로 다시 선택하지
   못하게 한다. bans 자체는 과거 세트의 피어리스 금지 대상이 아니다.
 - 마지막 확정 게임은 capability가 있을 때만 되돌린다. 점수, match 상태, MMR은 client가 계산하지 않고
-  response snapshot으로 갱신한다.
+  response snapshot으로 갱신한다. 완료된 20인 준결승은 final의 후속 라인업·게임·lock이 없을 때만 이
+  capability를 받고, 후속 작업이 시작된 경우 control을 노출하지 않는다.
 
 Backend 데이터:
 

@@ -614,6 +614,7 @@ pub struct AuctionTournamentDraftStateSnapshot {
 pub struct AuctionTournamentDraftPermissions {
     pub can_manage_draft: bool,
     pub can_manage_bracket: bool,
+    pub can_revert_last: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -688,6 +689,7 @@ pub struct AuctionTournamentBracketPermissions {
     pub can_manage_bracket: bool,
     pub can_manage_matches: bool,
     pub can_recover_bracket: bool,
+    pub can_revert_draft: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -8413,7 +8415,8 @@ async fn auction_tournament_draft_snapshot(
     require_active_session_member_read(transaction, guild_id, viewer_id).await?;
     let tournament = sqlx::query_as::<_, AuctionTournamentDraftRow>(
         "SELECT id, season_id, source_recruitment_id, display_number, title, format,
-                semifinal_best_of, final_best_of, hard_fearless, status, revision
+                semifinal_best_of, final_best_of, hard_fearless, status, revision,
+                bracket_locked_at
          FROM auction_tournaments
          WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL",
     )
@@ -8527,29 +8530,15 @@ async fn auction_tournament_draft_snapshot(
     {
         return Err(AttemptError::InvariantViolation);
     }
-    let recent_action = sqlx::query_scalar::<_, String>(
-        "SELECT action.kind
-         FROM auction_actions AS action
-         WHERE action.guild_id = $1
-           AND action.tournament_id = $2
-           AND action.kind <> 'REVERT_LAST'
-           AND NOT EXISTS (
-               SELECT 1
-               FROM auction_actions AS reversal
-               WHERE reversal.guild_id = action.guild_id
-                 AND reversal.tournament_id = action.tournament_id
-                 AND reversal.kind = 'REVERT_LAST'
-                 AND reversal.reverses_action_id = action.id
-           )
-         ORDER BY action.sequence DESC
-         LIMIT 1",
-    )
-    .bind(guild_id)
-    .bind(tournament_id.as_uuid())
-    .fetch_optional(&mut **transaction)
-    .await?
-    .map(|kind| AuctionTournamentRecentActionSnapshot { kind });
+    let recent_action =
+        auction_tournament_recent_unreversed_draft_action(transaction, guild_id, tournament_id)
+            .await?;
     let is_operator = is_active_session_operator(transaction, guild_id, viewer_id).await?;
+    let has_bracket_artifacts =
+        auction_tournament_has_bracket_artifacts(transaction, guild_id, tournament_id).await?;
+    let has_latest_revertible_draft_action =
+        auction_tournament_has_latest_revertible_draft_action(transaction, guild_id, tournament_id)
+            .await?;
     let unsold = candidates
         .iter()
         .filter(|candidate| candidate.state == "UNSOLD")
@@ -8569,6 +8558,12 @@ async fn auction_tournament_draft_snapshot(
         None => None,
     };
     let tournament_status = tournament.status;
+    let can_revert_last = is_operator
+        && has_latest_revertible_draft_action
+        && !has_bracket_artifacts
+        && (tournament_status == AuctionTournamentStatus::Bidding
+            || (tournament_status == AuctionTournamentStatus::BracketSetup
+                && tournament.bracket_locked_at.is_none()));
 
     Ok(AuctionTournamentDraftSnapshot {
         tournament: AuctionTournamentDraftSummarySnapshot {
@@ -8608,8 +8603,11 @@ async fn auction_tournament_draft_snapshot(
             recent_action,
         },
         permissions: AuctionTournamentDraftPermissions {
-            can_manage_draft: is_operator,
+            can_manage_draft: is_operator
+                && tournament_status == AuctionTournamentStatus::Bidding
+                && !has_bracket_artifacts,
             can_manage_bracket: false,
+            can_revert_last,
         },
     })
 }
@@ -9124,6 +9122,9 @@ async fn auction_tournament_bracket_snapshot(
     let has_result_artifacts =
         auction_tournament_matches_have_result_artifacts(transaction, guild_id, tournament_id)
             .await?;
+    let has_latest_revertible_draft_action =
+        auction_tournament_has_latest_revertible_draft_action(transaction, guild_id, tournament_id)
+            .await?;
 
     Ok(AuctionTournamentBracketSnapshot {
         tournament: AuctionTournamentBracketSummarySnapshot {
@@ -9170,6 +9171,11 @@ async fn auction_tournament_bracket_snapshot(
                     AuctionTournamentStatus::BracketSetup | AuctionTournamentStatus::InGame
                 )
                 && !has_result_artifacts,
+            can_revert_draft: is_operator
+                && has_latest_revertible_draft_action
+                && tournament_status == AuctionTournamentStatus::BracketSetup
+                && !locked
+                && !has_match_artifacts,
         },
     })
 }
@@ -9392,6 +9398,21 @@ async fn auction_match_snapshot(
     let has_result_artifacts =
         auction_match_has_result_artifacts(transaction, guild_id, match_id).await?;
     let is_operator = is_active_session_operator(transaction, guild_id, viewer_id).await?;
+    let downstream_final_blocks_revert = if is_operator
+        && auction_match.status == "COMPLETED"
+        && is_auction_semifinal_match_key(&auction_match.match_key)
+    {
+        auction_completed_twenty_person_semifinal_revert_is_blocked(
+            transaction,
+            guild_id,
+            AuctionTournamentId::from_uuid(auction_match.tournament_id),
+            &auction_match.match_key,
+            auction_match.winner_team_id,
+        )
+        .await?
+    } else {
+        false
+    };
     let can_manage_lineup = is_operator
         && auction_match.status == "LINEUP_PENDING"
         && auction_match.lineups_locked_at.is_none();
@@ -9401,13 +9422,13 @@ async fn auction_match_snapshot(
         semifinal_lineups_ready,
         &auction_match.status,
     );
-    let can_revert_last_game = is_operator
-        && auction_match.lineups_locked_at.is_some()
-        && !games.is_empty()
-        && matches!(
-            auction_match.status.as_str(),
-            "READY" | "IN_PROGRESS" | "COMPLETED"
-        );
+    let can_revert_last_game = can_revert_auction_match_last_game(
+        is_operator,
+        auction_match.lineups_locked_at.is_some(),
+        !games.is_empty(),
+        &auction_match.status,
+        downstream_final_blocks_revert,
+    );
     let can_unlock_lineup = is_operator
         && auction_match.status == "READY"
         && auction_match.lineups_locked_at.is_some()
@@ -10059,6 +10080,66 @@ async fn auction_tournament_has_bracket_artifacts(
                AND match.tournament_id = $2
                AND match.deleted_at IS NULL
                AND match.status <> 'CANCELLED'
+         )",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+async fn auction_tournament_recent_unreversed_draft_action(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+) -> Result<Option<AuctionTournamentRecentActionSnapshot>, AttemptError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT action.kind
+         FROM auction_actions AS action
+         WHERE action.guild_id = $1
+           AND action.tournament_id = $2
+           AND action.kind <> 'REVERT_LAST'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM auction_actions AS reversal
+               WHERE reversal.guild_id = action.guild_id
+                 AND reversal.tournament_id = action.tournament_id
+                 AND reversal.kind = 'REVERT_LAST'
+                 AND reversal.reverses_action_id = action.id
+           )
+         ORDER BY action.sequence DESC
+         LIMIT 1",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .map(|kind| AuctionTournamentRecentActionSnapshot { kind }))
+}
+
+async fn auction_tournament_has_latest_revertible_draft_action(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+) -> Result<bool, AttemptError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM (
+                 SELECT kind
+                 FROM auction_actions
+                 WHERE guild_id = $1 AND tournament_id = $2
+                 ORDER BY sequence DESC, id DESC
+                 LIMIT 1
+             ) AS latest
+             WHERE latest.kind IN (
+                 'DRAW_NEXT',
+                 'MARK_UNSOLD',
+                 'AWARD_BID',
+                 'ASSIGN_CURRENT',
+                 'ASSIGN_UNSOLD',
+                 'RESTORE_UNSOLD'
+             )
          )",
     )
     .bind(guild_id)
@@ -11485,6 +11566,20 @@ fn can_enter_auction_match_results(
         && matches!(status, "READY" | "IN_PROGRESS")
 }
 
+fn can_revert_auction_match_last_game(
+    is_operator: bool,
+    lineups_locked: bool,
+    has_confirmed_games: bool,
+    status: &str,
+    downstream_final_blocks_revert: bool,
+) -> bool {
+    is_operator
+        && lineups_locked
+        && has_confirmed_games
+        && !downstream_final_blocks_revert
+        && matches!(status, "READY" | "IN_PROGRESS" | "COMPLETED")
+}
+
 fn is_auction_match_status(status: &str) -> bool {
     matches!(
         status,
@@ -11567,6 +11662,106 @@ async fn auction_match_has_result_artifacts(
     )
     .bind(guild_id)
     .bind(match_id.as_uuid())
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+async fn auction_completed_twenty_person_semifinal_revert_is_blocked(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+    semifinal_match_key: &str,
+    winner_team_id: Option<Uuid>,
+) -> Result<bool, AttemptError> {
+    if !is_auction_semifinal_match_key(semifinal_match_key) {
+        return Ok(false);
+    }
+    let Some(winner_team_id) = winner_team_id else {
+        return Ok(true);
+    };
+    let tournament_format = sqlx::query_scalar::<_, String>(
+        "SELECT format
+         FROM auction_tournaments
+         WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AttemptError::AuctionTournamentNotFound)?;
+    if parse_auction_format(&tournament_format)? != AuctionFormat::TwentyPerson {
+        return Ok(false);
+    }
+
+    let final_match = sqlx::query_as::<_, AuctionFinalMatchRevertRow>(
+        "SELECT id, status, left_team_id, right_team_id, lineups_locked_at
+         FROM auction_matches
+         WHERE guild_id = $1
+           AND tournament_id = $2
+           AND match_key = 'FINAL'
+           AND status <> 'CANCELLED'
+           AND deleted_at IS NULL",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(final_match) = final_match else {
+        return Ok(true);
+    };
+    let target_team_id = match semifinal_match_key {
+        "SEMIFINAL_A" => final_match.left_team_id,
+        "SEMIFINAL_B" => final_match.right_team_id,
+        _ => return Ok(true),
+    };
+    let Some(target_team_id) = target_team_id else {
+        return Ok(true);
+    };
+    if target_team_id != winner_team_id {
+        return Ok(true);
+    }
+
+    auction_final_has_downstream_work(
+        transaction,
+        guild_id,
+        tournament_id,
+        AuctionMatchId::from_uuid(final_match.id),
+        target_team_id,
+        final_match.lineups_locked_at,
+        &final_match.status,
+    )
+    .await
+}
+
+async fn auction_final_has_downstream_work(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+    final_match_id: AuctionMatchId,
+    target_team_id: Uuid,
+    final_lineups_locked_at: Option<OffsetDateTime>,
+    final_status: &str,
+) -> Result<bool, AttemptError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM auction_match_lineups
+             WHERE guild_id = $1 AND tournament_id = $2 AND match_id = $3
+               AND team_id <> $4
+         )
+         OR EXISTS (
+             SELECT 1 FROM games
+             WHERE guild_id = $1 AND auction_match_id = $3
+         )
+         OR $5 IS NOT NULL
+         OR $6 <> 'LINEUP_PENDING'",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .bind(final_match_id.as_uuid())
+    .bind(target_team_id)
+    .bind(final_lineups_locked_at)
+    .bind(final_status)
     .fetch_one(&mut **transaction)
     .await?)
 }
@@ -15396,29 +15591,17 @@ async fn clear_auction_semifinal_final_propagation(
     if target_team_id != winner_team_id {
         return Err(AttemptError::InvariantViolation);
     }
-    let has_downstream_work = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (
-             SELECT 1
-             FROM auction_match_lineups
-             WHERE guild_id = $1 AND tournament_id = $2 AND match_id = $3
-               AND team_id <> $4
-         )
-         OR EXISTS (
-             SELECT 1 FROM games
-             WHERE guild_id = $1 AND auction_match_id = $3
-         )
-         OR $5 IS NOT NULL
-         OR $6 <> 'LINEUP_PENDING'",
+    if auction_final_has_downstream_work(
+        transaction,
+        guild_id,
+        tournament_id,
+        final_match_id,
+        target_team_id,
+        final_match.lineups_locked_at,
+        &final_match.status,
     )
-    .bind(guild_id)
-    .bind(tournament_id.as_uuid())
-    .bind(final_match_id.as_uuid())
-    .bind(target_team_id)
-    .bind(final_match.lineups_locked_at)
-    .bind(&final_match.status)
-    .fetch_one(&mut **transaction)
-    .await?;
-    if has_downstream_work {
+    .await?
+    {
         return Err(AttemptError::AuctionMatchDownstreamWorkExists);
     }
     let deleted = sqlx::query(
@@ -19407,6 +19590,7 @@ struct AuctionTournamentDraftRow {
     hard_fearless: bool,
     status: AuctionTournamentStatus,
     revision: i64,
+    bracket_locked_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, FromRow)]
@@ -19497,6 +19681,15 @@ struct AuctionMatchSnapshotRow {
     lineups_locked_by: Option<UserId>,
     left_score: i64,
     right_score: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct AuctionFinalMatchRevertRow {
+    id: Uuid,
+    status: String,
+    left_team_id: Option<Uuid>,
+    right_team_id: Option<Uuid>,
+    lineups_locked_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, FromRow)]
@@ -21349,6 +21542,31 @@ mod tests {
             "COMPLETED"
         ));
         assert!(!can_enter_auction_match_results(false, true, true, "READY"));
+    }
+
+    #[test]
+    fn auction_match_game_revert_permission_honors_downstream_final_work() {
+        assert!(can_revert_auction_match_last_game(
+            true,
+            true,
+            true,
+            "COMPLETED",
+            false,
+        ));
+        assert!(!can_revert_auction_match_last_game(
+            true,
+            true,
+            true,
+            "COMPLETED",
+            true,
+        ));
+        assert!(!can_revert_auction_match_last_game(
+            true,
+            true,
+            false,
+            "COMPLETED",
+            false,
+        ));
     }
 
     #[test]

@@ -1161,7 +1161,9 @@ cached Riot 요약도 `currentTargetProfile`로 함께 반환한다. Riot cache�
 영역만 `null`이며 provider refresh를 발생시키지 않는다. 이 정보는 화면 조회용이며 입찰 판정은 항상 candidate의
 immutable `mmrAtStart`만 사용한다. `href`는
 `/g/{guildId}/auction/tournaments/{tournamentId}/draft`다. `canManageDraft`는
-현재 active operator에게만 true다.
+`BIDDING` 상태의 현재 active operator에게만 true다. `canRevertLast`는 가장 최근 action이 직접 draft action이고 server
+검증상 되돌릴 수 있고 active bracket artifact가 없을 때만 true다. 이 capability는 `BIDDING`과 아직 lock하지
+않은 `BRACKET_SETUP`에서만 반환되며, client는 action history나 화면 상태로 eligibility를 추정하지 않는다.
 
 ### POST /api/guilds/{guildId}/auction-tournaments/{id}/commands
 
@@ -1194,8 +1196,10 @@ action/audit/outbox와 snapshot을 같은 transaction에서 기록한다.
   point ledger를 함께 기록한다.
 
 대진 slot이 아직 unlock인 `BRACKET_SETUP`에서는 `REVERT_LAST`만 가능하며, transaction 안에서 모든
-`auction_bracket_slots.team_id`를 먼저 비운다. match, lineup, game artifact 또는 locked bracket이 있으면
-draft mutation은 `409 auction_tournament_draft_locked` 또는 state conflict로 거절된다.
+`auction_bracket_slots.team_id`를 먼저 비우고 tournament를 `BIDDING`으로 되돌린다. 이 rollback은 최근
+직접 draft action과 그 roster/point ledger만 되돌리며 source recruitment를 다시 열지 않는다. match, lineup,
+game artifact 또는 locked bracket이 있으면 draft mutation은 `409 auction_tournament_draft_locked` 또는 state
+conflict로 거절된다.
 
 ### GET /api/guilds/{guildId}/auction-tournaments/{id}/cancel-preview
 
@@ -1226,6 +1230,10 @@ non-empty reason, actor snapshot과 audit가 필요하다.
 
 - `BIDDING`에서는 `409 auction_tournament_bracket_unavailable`을 반환한다. `BRACKET_SETUP`, `IN_GAME`,
   `COMPLETED`, `CANCELLED`는 bracket history를 읽을 수 있다.
+- `permissions.canRevertDraft`는 active operator가 아직 unlock인 `BRACKET_SETUP`에 있고 active match가
+  없으며 server가 마지막 직접 draft action의 rollback을 허용할 때만 true다. true일 때 Web은 기존 draft
+  command route의 `REVERT_LAST`를 사용한다. 이 command는 slot을 비우고 `BIDDING`으로 돌아가지만 source
+  recruitment를 다시 열지는 않는다.
 
 ### POST /api/guilds/{guildId}/auction-tournaments/{id}/bracket/commands
 
@@ -1260,7 +1268,9 @@ snapshot을 같은 transaction에 기록한다. `BRACKET_SETUP`이면서 아직 
 `leftScore`/`rightScore`는 확정 game의 side preset과 winner에서만 계산한다.
 20인 `SEMIFINAL_A/B`는 두 준결승 lineup이 모두 lock되기 전까지 `permissions.canEnterResults=false`를
 반환한다. 이 projection은 화면 제어용이며 game submit endpoint도 같은 조건을 transaction 안에서 다시
-검증한다.
+검증한다. `canRevertLastGame`도 command와 같은 조건을 사용한다. 완료된 20인 준결승은 final의 다른 팀
+라인업, game, lineup lock 또는 `LINEUP_PENDING` 이외의 상태가 있으면 false이며, client가 보이는 control과
+실제 command 결과가 어긋나지 않는다.
 
 ### PATCH /api/guilds/{guildId}/auction-matches/{matchId}/lineup
 
