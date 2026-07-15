@@ -1,4 +1,4 @@
-use sqlx::Row;
+use sqlx::FromRow;
 use thiserror::Error;
 use time::OffsetDateTime;
 
@@ -38,48 +38,80 @@ pub async fn ensure_and_lock_mmr_rows(
     });
     keys.dedup();
 
-    for key in &keys {
-        sqlx::query(
-            "INSERT INTO user_lane_mmr (
-                guild_id, season_id, user_id, lane, mmr, games_played, wins, revision, updated_at
-             ) VALUES ($1, $2, $3, $4, 1500, 0, 0, 0, $5)
-             ON CONFLICT (guild_id, season_id, user_id, lane) DO NOTHING",
-        )
-        .bind(guild_id)
-        .bind(season_id)
-        .bind(&key.user_id)
-        .bind(key.lane)
-        .bind(now)
-        .execute(&mut **transaction)
-        .await?;
+    if keys.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let mut locked = Vec::with_capacity(keys.len());
-    for key in keys {
-        let row = sqlx::query(
-            "SELECT mmr, games_played, wins, revision
-             FROM user_lane_mmr
-             WHERE guild_id = $1 AND season_id = $2 AND user_id = $3 AND lane = $4
-             FOR UPDATE",
-        )
-        .bind(guild_id)
-        .bind(season_id)
-        .bind(&key.user_id)
-        .bind(key.lane)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(MmrRepositoryError::MissingInitializedRow)?;
+    let user_ids = keys
+        .iter()
+        .map(|key| key.user_id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let lanes = keys
+        .iter()
+        .map(|key| key.lane.as_str().to_owned())
+        .collect::<Vec<_>>();
 
-        locked.push(LockedMmrRow {
-            key,
-            mmr: row.try_get("mmr")?,
-            games_played: row.try_get("games_played")?,
-            wins: row.try_get("wins")?,
-            revision: row.try_get("revision")?,
-        });
+    sqlx::query(
+        "INSERT INTO user_lane_mmr (
+             guild_id, season_id, user_id, lane, mmr, games_played, wins, revision, updated_at
+         )
+         SELECT $1, $2, input.user_id, input.lane, 1500, 0, 0, 0, $3
+         FROM UNNEST($4::text[], $5::text[]) AS input(user_id, lane)
+         ON CONFLICT (guild_id, season_id, user_id, lane) DO NOTHING",
+    )
+    .bind(guild_id)
+    .bind(season_id)
+    .bind(now)
+    .bind(&user_ids)
+    .bind(&lanes)
+    .execute(&mut **transaction)
+    .await?;
+
+    let rows = sqlx::query_as::<_, StoredMmrRow>(
+        "SELECT user_id, lane, mmr, games_played, wins, revision
+         FROM user_lane_mmr
+         WHERE guild_id = $1
+           AND season_id = $2
+           AND (user_id, lane) IN (
+               SELECT input.user_id, input.lane
+               FROM UNNEST($3::text[], $4::text[]) AS input(user_id, lane)
+           )
+         ORDER BY user_id, lane
+         FOR UPDATE",
+    )
+    .bind(guild_id)
+    .bind(season_id)
+    .bind(&user_ids)
+    .bind(&lanes)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if rows.len() != keys.len() {
+        return Err(MmrRepositoryError::MissingInitializedRow);
     }
 
-    Ok(locked)
+    Ok(rows
+        .into_iter()
+        .map(|row| LockedMmrRow {
+            key: MmrLaneKey {
+                user_id: row.user_id,
+                lane: row.lane,
+            },
+            mmr: row.mmr,
+            games_played: row.games_played,
+            wins: row.wins,
+            revision: row.revision,
+        })
+        .collect())
+}
+
+#[derive(FromRow)]
+struct StoredMmrRow {
+    user_id: UserId,
+    lane: Lane,
+    mmr: f64,
+    games_played: i32,
+    wins: i32,
+    revision: i64,
 }
 
 #[derive(Debug, Error)]

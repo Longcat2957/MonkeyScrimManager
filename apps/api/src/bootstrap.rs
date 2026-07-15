@@ -7,10 +7,12 @@ use std::{
 use axum::Router;
 use reqwest::Url;
 use thiserror::Error;
+use time::OffsetDateTime;
 use tokio::{
     net::TcpListener,
     sync::watch,
-    time::{Instant, sleep_until, timeout, timeout_at},
+    task::JoinHandle,
+    time::{Instant, MissedTickBehavior, interval, sleep_until, timeout, timeout_at},
 };
 
 use crate::{
@@ -23,9 +25,11 @@ use crate::{
         riot::{ReqwestRiotClient, RiotClientError},
     },
     realtime::{RealtimeRuntime, RealtimeRuntimeError},
-    repository::auth::AuthRepository,
+    repository::{auth::AuthRepository, guild_data_transfer},
     state::{AppState, AuthRuntime},
 };
+
+const DATA_TRANSFER_RETENTION_INTERVAL: Duration = Duration::from_secs(60);
 
 pub async fn run(config: Config) -> Result<(), BootstrapError> {
     let bind_addr = config.bind_addr();
@@ -88,9 +92,36 @@ pub async fn run(config: Config) -> Result<(), BootstrapError> {
     let listener = TcpListener::bind(bind_addr)
         .await
         .map_err(BootstrapError::Bind)?;
+    let data_transfer_retention = state.postgres().cloned().map(start_data_transfer_retention);
 
     tracing::info!(%bind_addr, environment, "monkeybot-api listening");
-    serve_with_shutdown(listener, app, state, shutdown_signal()).await
+    let result = serve_with_shutdown(listener, app, state, shutdown_signal()).await;
+    if let Some(task) = data_transfer_retention {
+        task.abort();
+        let _ = task.await;
+    }
+    result
+}
+
+fn start_data_transfer_retention(pool: sqlx::PgPool) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = interval(DATA_TRANSFER_RETENTION_INTERVAL);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            match guild_data_transfer::cleanup_expired_previews(&pool, OffsetDateTime::now_utc())
+                .await
+            {
+                Ok(removed) if removed > 0 => {
+                    tracing::info!(removed, "removed expired guild data transfer previews");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to remove expired guild data transfer previews");
+                }
+            }
+        }
+    })
 }
 
 pub async fn serve_with_shutdown<F>(

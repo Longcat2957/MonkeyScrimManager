@@ -1283,7 +1283,12 @@ snapshot을 같은 transaction에 기록한다. `BRACKET_SETUP`이면서 아직 
 ### POST /api/guilds/{guildId}/auction-matches/{matchId}/lineup/lock
 
 양 팀 TOP/JUNGLE/MID/BOTTOM/SUPPORT가 정확히 한 명씩이고 team membership과
-중복이 유효해야 한다.
+중복이 유효해야 한다. `guild_config.entry_channel_id`가 설정되어 있으면 성공 transaction에
+`AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE` notification도 함께 적재한다. payload는 tournament/match rule,
+양 팀의 lane-ordered 5인 roster와 match deep link를 immutable snapshot으로 고정하고, Bot relay는 이를
+entry channel에 게시한 뒤 generic acknowledgement를 보낸다. entry channel이 `NULL`이면 lock은 정상
+성공하고 notification만 생략한다. lineup을 unlock해도 이미 게시한 카드를 삭제하거나 수정하지 않으며,
+변경 후 다시 lock하면 해당 match의 새 revision을 deduplication key에 사용해 새 confirmation 카드를 적재한다.
 
 ### POST /api/guilds/{guildId}/auction-matches/{matchId}/lineup/unlock
 
@@ -1526,8 +1531,9 @@ member의 설정 `main_lane`이 실제 플레이한 lane이면 이를 사용한�
 Riot ID 문자열이고 `profileIconId`와 함께 대상 사용자의 `show_riot_ids=true`일 때만 반환한다. 이 privacy
 설정은 guild 내부 MMR/승패를 숨기지 않는다.
 
-통합/라인 탭, player 검색, 표시 인원 제한, 순위와 승률은 frontend가 받은 snapshot에서 계산한다. 이
-endpoint는 pagination/filter query와 WS를 사용하지 않는다.
+통합/라인 탭, player 검색, 고정 25명 단위 local pagination, 순위와 승률은 frontend가 받은 snapshot에서
+계산한다. 순위는 page-relative가 아니라 전체 정렬 기준이다. 이 endpoint는 pagination/filter query와
+WS를 사용하지 않는다.
 
 ## Riot 외부 전적
 
@@ -1907,6 +1913,148 @@ DB를 변경하지 않는다. 별도 idempotency key나 WebSocket은 사용하�
 시즌 field는 strict payload에서 거부한다. 시즌 조회/전환은 settings aggregate와 분리한 아래 seasons
 query/command를 사용한다.
 
+### POST /api/guilds/{guildId}/data-export
+
+현재 guild의 ACTIVE OPERATOR browser session과 CSRF cookie/header, Origin 검증이 필요하다. Body와
+`Idempotency-Key`는 받지 않는다. Export는 실행 시점의 plain JSON snapshot을 만들고
+`DATA_TRANSFER_EXPORTED`/`MEMBER_SEASON_MMR_SEED` audit을 남기는 read command이므로 같은 요청을 replay하지
+않는다.
+
+성공 response:
+
+```text
+data
+  archive
+    format                 MONKEYBOT_DATA_TRANSFER
+    kind                   MEMBER_SEASON_MMR_SEED
+    schemaVersion          1
+    exportedAt             RFC 3339 timestamp
+    source
+      guildId
+      guildName
+      season
+        id                 UUID
+        name
+    members[]              최대 1,000 member
+      discordId
+      displayName
+      lanes[]              정확히 canonical 5개, { lane, mmr }
+  fileName
+meta
+```
+
+현재 ACTIVE season이 없으면 `409 no_active_season`이다. Export는 `REPEATABLE READ` snapshot에서 ACTIVE
+Discord member만 읽고, 아직 materialize되지 않은 lane도 1500으로 projection해 다섯 lane을 모두 낸다.
+`identity_kind=DUMMY`와 INACTIVE member는 제외한다. `gamesPlayed`, `wins`, Riot account/PUUID, privacy,
+champion preference, Discord role/channel/config, dummy profile, 모집/시리즈/경매/픽밴/game/ledger history,
+audit/outbox/idempotency row는 archive에 넣지 않는다.
+
+활성 Discord member가 1,000명을 초과하면 export는 `422 archive_member_limit_exceeded`로 거절하며 partial
+archive를 만들지 않는다.
+
+Web은 archive object를 indent 2의 readable JSON file로 내려받는다. archive는 암호화하거나 서명하지 않으며,
+운영자는 MMR 값과 source metadata를 검토하거나 편집한 뒤 preview에 올릴 수 있다. `mookbot_v3` D1/Valkey
+dump나 raw database export는 이 endpoint의 output이 아니며 이 API로 import할 수 없다.
+
+### POST /api/guilds/{guildId}/data-imports/preview
+
+현재 guild의 ACTIVE OPERATOR browser session과 CSRF cookie/header, Origin 검증이 필요하다.
+
+```text
+archive                 data-export response의 archive object
+```
+
+Request의 정상 JSON object는 위 field 하나만 받는다. Content-Type 누락, malformed JSON, outer object의
+unknown field는 공통 request normalizer의 `unsupported_media_type`/`bad_request`/`unprocessable_entity`로
+반환한다. 정상 outer object 안의 archive에 대해서 Server는 `MONKEYBOT_DATA_TRANSFER`, kind
+`MEMBER_SEASON_MMR_SEED`, schema version `1`, canonical five lane uniqueness/finite MMR와 payload size를
+검증한다. Archive format/shape 오류는 `400 invalid_archive`로 반환한다. Preview는 MMR, guild member, game,
+ledger를 변경하지 않는다.
+
+성공 response:
+
+```text
+data
+  importId               UUID
+  digest                 archive의 SHA-256 hex digest
+  expiresAt              RFC 3339 timestamp, preview 생성 후 15분
+  source
+    guildId
+    guildName
+    season
+      id                  UUID
+      name
+  summary
+    archiveMembers
+    matchedMembers
+    laneEntries
+    changes
+  conflicts[]
+    reason               member_not_active
+    message              사용자에게 안전하게 표시할 수 있는 구체적 이유
+    discordId
+    displayName
+  targetRevision         guild_admin_state[MEMBERS].revision
+meta
+```
+
+Archive source guild/season은 file-declared provenance metadata이며 authenticated origin이 아니다. 같은 guild만
+강제하지 않지만 archive의 모든 Discord ID가 target guild에 이미 존재하는 ACTIVE Discord member여야 한다.
+Import는 `users`, `guild_members`, Riot account,
+privacy, Discord role/channel 또는 dummy identity를 만들거나 복구하지 않는다. `conflicts`가 하나라도 있으면
+preview는 검토 결과로만 남고 apply할 수 없다.
+
+중복 Discord ID/lane, canonical five lane 불충족, finite 하지 않은 MMR 같은 archive 구조 오류는 preview
+conflict가 아니라 `400 invalid_archive`다. archive와 대상 MMR의 차가 finite ledger delta로 계산되지 않으면
+`422 invalid_mmr_transfer`로 거절한다. 검증을 통과한 archive payload와 digest, actor ID, target guild,
+target MEMBERS revision, target MMR snapshot digest, expiry, summary와 conflict count는 짧게 보존되는
+`guild_data_imports` preview row에 함께 기록한다. Full conflict list는 response에만 둔다. Preview 생성은
+`DATA_IMPORT_PREVIEWED`/`DATA_IMPORT` audit을 남긴다. Browser가 검토 뒤 변경한 archive object를 apply body에
+재전송하는 방식은 허용하지 않는다. Apply 성공 시 archive payload는 즉시 제거하며 API process의 60초 retention
+task가 만료된 `PREVIEWED` row를 삭제한다.
+
+### POST /api/guilds/{guildId}/data-imports/{importId}/apply
+
+현재 guild의 ACTIVE OPERATOR browser session, CSRF cookie/header, Origin 검증과 browser
+`Idempotency-Key`가 필요하다.
+
+```text
+expectedDigest           preview response의 digest
+expectedTargetRevision   preview response의 targetRevision
+```
+
+Server는 import row가 존재하고 같은 actor/guild에 속하는지, 만료되지 않았는지, digest와 MEMBERS revision,
+preview 당시 target lane MMR snapshot이 일치하는지, conflict가 없는지, 현재 ACTIVE season이 존재하는지와
+active workflow가 없는지를 transaction 안에서 다시 검증한다. `preview_not_found`, `preview_expired`,
+`preview_actor_mismatch`, `preview_digest_mismatch`, `preview_conflicts`, `revision_conflict`,
+`mmr_state_changed`, `active_workflow_conflict`, `invalid_mmr_transfer`는 각각 안전한 원인과 request ID를 포함해 반환하며
+MMR/audit/revision을 변경하지 않는다.
+
+Apply body의 malformed JSON, unknown field, type mismatch도 공통 request normalizer의 `bad_request` 또는
+`unprocessable_entity`를 반환한다. 정상 JSON body의 음수 revision 또는 digest 형식 오류는
+`422 invalid_import_apply_command`다.
+
+Apply는 member/season/lane MMR row를 Discord ID와 canonical lane 순으로 확보하고 lock한다. 실제 값이
+달라지는 lane마다 `DATA_IMPORT_SEED` ledger를 append하고 summary MMR을 같은 transaction에서 갱신한다.
+각 entry의 game/win delta는 0이며 기존 `games_played`, `wins`, game history와 series/auction history는
+그대로 유지한다. Import는 partial success가 없고, conflict가 있는 일부 member만 건너뛰어 적용하지 않는다.
+
+성공 response:
+
+```text
+data
+  importId
+  status                 APPLIED
+  appliedAt              RFC 3339 timestamp
+  summary                preview와 같은 shape
+  targetRevision         적용 후 guild_admin_state[MEMBERS].revision
+meta
+```
+
+Idempotency record, changed summary/ledger, `DATA_IMPORT_APPLIED`/`DATA_IMPORT` audit, MEMBERS revision과 import
+status는 하나의 transaction으로 commit한다. 이 operation은 generic checkpoint/revert나 database restore를
+만들지 않으며, 완료된 import의 archive를 다시 apply하지 않는다.
+
 ### GET /api/guilds/{guildId}/reverts/recent
 
 ```text
@@ -2108,9 +2256,10 @@ Bot service principal만 사용한다. request는 `{ "instanceId": "bot-1", "lim
 request는 `{ "instanceId", "notificationId", "leaseToken", "discordMessageId" }`다. owner+token이
 현재 lease와 일치할 때만 generic notification을 delivered로 전이한다. `RECRUITMENT_MESSAGE_UPDATE`와
 `RECRUITMENT_MESSAGE_DELETE`, `AUCTION_RECRUITMENT_MESSAGE_UPDATE`,
-`AUCTION_RECRUITMENT_MESSAGE_DELETE`, `ENTRY_CONFIRMATION_CREATE`는 Discord delivery 성공 뒤 이 route를
-사용한다. `RECRUITMENT_MESSAGE_CREATE` 또는 `AUCTION_RECRUITMENT_MESSAGE_CREATE`에는 이 route를 사용하지
-않으며 호출하면 typed ack required safe reason으로 거절한다.
+`AUCTION_RECRUITMENT_MESSAGE_DELETE`, `ENTRY_CONFIRMATION_CREATE`,
+`AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE`는 Discord delivery 성공 뒤 이 route를 사용한다.
+`RECRUITMENT_MESSAGE_CREATE` 또는 `AUCTION_RECRUITMENT_MESSAGE_CREATE`에는 이 route를 사용하지 않으며
+호출하면 typed ack required safe reason으로 거절한다.
 
 ### POST /internal/notifications/recruitment-message/ack
 

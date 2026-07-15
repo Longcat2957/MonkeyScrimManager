@@ -312,7 +312,7 @@ async fn assert_latest_schema(pool: &PgPool) -> TestResult {
     )
     .fetch_one(pool)
     .await?;
-    assert_eq!(table_count, 63, "unexpected public table count");
+    assert_eq!(table_count, 64, "unexpected public table count");
     Ok(())
 }
 

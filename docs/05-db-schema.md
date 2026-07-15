@@ -511,8 +511,9 @@ FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 - 현재 UI는 운영자 role 하나만 지원하므로 `guild_operator_roles` table을 만들지 않는다.
 - `current_season_id`를 두지 않는다. 현재 시즌의 source of truth는 `seasons.status=ACTIVE`다.
 - admin settings의 `settingsRevision`은 이 row의 `revision`이다.
-- `recruitment_channel_id`는 모집 메시지, `entry_channel_id`는 밸런스 결과와 확정 엔트리,
-  `result_channel_id`는 일반 시리즈 최종 결과, `log_channel_id`는 운영 알림의 목적지다.
+- `recruitment_channel_id`는 모집 메시지, `entry_channel_id`는 밸런스 결과, 일반 내전의 확정 엔트리와
+  경매 match의 확정 라인업, `result_channel_id`는 일반 시리즈 최종 결과, `log_channel_id`는 운영 알림의
+  목적지다.
   physical column은 legacy row 보존을 위해 nullable이다. 그러나 신규 `/초기설정`과 Browser settings PUT은
   `recruitment_channel_id`를 반드시 요구한다. legacy `NULL` row는 GET으로 읽어 복구할 수 있지만 다음 저장에는
   모집 채널을 선택해야 한다. `entry_channel_id`, `result_channel_id`, `log_channel_id`는 미설정을 허용한다.
@@ -585,6 +586,9 @@ FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
 ```
 
 - `/admin?tab=members`는 `scope=MEMBERS` row를 사용한다.
+- `/admin/data` import preview/apply도 `scope=MEMBERS` row를 사용한다. 수동 MMR 조정과 같은 revision을
+  공유해 preview 이후 member 변경을 `409 revision_conflict`로 막고, lane MMR 변경은 별도 snapshot digest로
+  `409 mmr_state_changed`로 막는다.
 - `scope=OPERATIONS`는 후속 롤백 기능용 예약 값이다. MVP 관리 화면과 route에서는 노출하지 않는다.
 - settings는 `guild_config.revision`을 사용한다.
 - 세 revision을 하나로 합치지 않으며 MEMBERS/OPERATIONS가 서로 row lock을 공유하지 않는다.
@@ -1668,7 +1672,7 @@ lane              text             NOT NULL CHECK canonical lane
 lane_revision     bigint           NOT NULL CHECK > 0
 source_type       text             NOT NULL CHECK
                   GAME_RESULT|GAME_REVERSAL|MANUAL_ADJUSTMENT|
-                  MANUAL_REVERSAL|MIGRATION_SEED
+                  MANUAL_REVERSAL|MIGRATION_SEED|DATA_IMPORT_SEED
 source_id         uuid             NOT NULL
 game_id           uuid             NULL
 opponent_user_id  text             NULL
@@ -1720,7 +1724,9 @@ CHECK ((source_type='GAME_RESULT' AND opponent_user_id IS NOT NULL AND
         games_played_delta=-1 AND wins_delta IN (-1,0)) OR
        (source_type IN ('MANUAL_ADJUSTMENT','MANUAL_REVERSAL') AND
         opponent_user_id IS NULL AND games_played_delta=0 AND wins_delta=0) OR
-       (source_type='MIGRATION_SEED' AND opponent_user_id IS NULL))
+       (source_type='MIGRATION_SEED' AND opponent_user_id IS NULL) OR
+       (source_type='DATA_IMPORT_SEED' AND opponent_user_id IS NULL AND
+        games_played_delta=0 AND wins_delta=0))
 ```
 
 Rules:
@@ -1734,7 +1740,10 @@ Rules:
 - `MANUAL_REVERSAL`: 같은 season/user/lane의 unreversed MANUAL_ADJUSTMENT tail을 참조한다.
 - 두 reversal은 composite FK가 보장한 원본 type 외에도 같은 game/source 의미와 정확히 반대인
   MMR/count delta, 뒤집힌 before/after를 transaction에서 검증한다.
-- `MIGRATION_SEED`: legacy summary reconciliation에만 쓴다.
+- `MIGRATION_SEED`: legacy `mookbot_v3` cutover summary reconciliation에만 쓴다.
+- `DATA_IMPORT_SEED`: plain `MEMBER_SEASON_MMR_SEED` guild operator archive가 현재 target season의
+  lane MMR summary를 바꿀 때만 쓴다. game/opponent는 NULL이고 game/win count delta는 항상 0이다.
+  같은 import가 같은 lane에 중복 append되지 않도록 `source_id`는 import run ID를 사용한다.
 - append 시 `lane_revision = locked user_lane_mmr.revision + 1`로 기록하고 summary revision도 같은
   값으로 갱신한다. row의 정확한 tail은 timestamp가 아니라 lane_revision으로 판정한다.
 - `mmr_after = mmr_before + delta`는 Rust domain calculation 결과를 그대로 저장한다. float
@@ -1744,9 +1753,52 @@ Rules:
 MMR revert는 마지막 confirmed game만 대상으로 한다. 모든 참가자 lane의 현재 summary가 대상 game의
 `mmr_after`/count를 그대로 가리키고, 이후 ledger가 있다면 이미 `GAME_REVERSAL`로 상쇄된 후속 game 결과만
 허용한다. 따라서 여러 confirmed set을 마지막 set부터 역순으로 void하는 series lifecycle cascade는
-가능하지만, 아직 상쇄되지 않은 후속 game, manual adjustment/reversal, migration seed가 하나라도 있으면
+가능하지만, 아직 상쇄되지 않은 후속 game, manual adjustment/reversal, migration seed 또는 data import seed가
+하나라도 있으면
 `series_game_reversal_not_safe`로 거부한다. 과거 중간 ELO를 단순 반대 delta로 보정하는 기능은 MVP에
 만들지 않는다.
+
+### `guild_data_imports`
+
+```text
+guild_id                text        NOT NULL
+id                      uuid        NOT NULL
+actor_id                text        NOT NULL
+status                  text        NOT NULL CHECK PREVIEWED|APPLIED
+archive_digest          bytea       NOT NULL CHECK octet_length=32
+archive_payload         jsonb       NULL for APPLIED, otherwise NOT NULL
+source_guild_id         text        NOT NULL CHECK Discord snowflake
+source_season_id        uuid        NOT NULL
+target_season_id        uuid        NOT NULL
+target_members_revision bigint      NOT NULL CHECK >= 0
+target_mmr_digest       bytea       NOT NULL CHECK octet_length=32
+summary                 jsonb       NOT NULL
+conflict_count          integer     NOT NULL CHECK >= 0
+request_id              text        NOT NULL CHECK length 1..128
+created_at              timestamptz NOT NULL
+expires_at              timestamptz NOT NULL CHECK > created_at
+applied_at              timestamptz NULL
+
+PK (guild_id, id)
+FK (guild_id) -> guilds.guild_id RESTRICT
+FK (guild_id, actor_id) -> guild_members(guild_id, user_id) RESTRICT
+FK (guild_id, target_season_id) -> seasons(guild_id, id) RESTRICT
+CHECK ((status='PREVIEWED' AND archive_payload IS NOT NULL AND applied_at IS NULL)
+    OR (status='APPLIED' AND archive_payload IS NULL AND applied_at IS NOT NULL))
+index (guild_id, actor_id, status, expires_at DESC)
+index (guild_id, target_season_id)
+partial index (expires_at) WHERE status='PREVIEWED'
+```
+
+이 table은 readable JSON archive preview를 apply와 묶는 짧게 보관하는 command record다. `archive_payload`는 V1
+`MONKEYBOT_DATA_TRANSFER` / `MEMBER_SEASON_MMR_SEED` object만 저장하며 global user identity, Riot
+account/PUUID, privacy, Discord role/channel, dummy profile, game/series/auction history를 넣지 않는다.
+`source_season_id`는 source guild가 target guild와 다를 수 있으므로 local season FK가 아니다.
+`target_members_revision`은 preview 시점의 `guild_admin_state[MEMBERS]` token이고,
+`target_mmr_digest`는 archive와 매칭된 target lane MMR의 canonical snapshot hash다. `summary`와
+`conflict_count`는 검토 결과를 재현하는 저장값이다. Applied import는 archive payload를 즉시 제거하고 다시
+실행할 수 없다. API process의 60초 retention task는 만료된 `PREVIEWED` row를 삭제한다. Preview/apply audit에는
+digest, source/target 식별자와 count만 넣고 archive payload를 넣지 않는다.
 
 ## Safety와 전달 원장
 
@@ -2337,6 +2389,18 @@ FK dependency가 성립하는 순서로 migration을 고정한다.
 
 0016_guild_result_channel.sql
   guild_config explicit series-result channel without entry-channel fallback
+
+0017_auction_series_rules.sql
+  auction recruitment/tournament BO1/BO3/BO5 and hard-fearless rule snapshots
+
+0018_auction_match_lineup_lock_invariant.sql
+  auction match lineup lock state invariant
+
+0019_auction_match_lineup_lock_legacy_exemption.sql
+  legacy lineup lock invariant remediation marker
+
+0020_guild_data_transfer.sql
+  DATA_IMPORT_SEED ledger source and short-lived guild data import previews
 ```
 
 `games.auction_match_id`가 참조할 table보다 먼저 games를 생성하지 않는다. migration file은
@@ -2358,6 +2422,10 @@ SQLx 운영 기준:
 - migration 전 backup, 실제 restore rehearsal
 
 ## mookbot_v3 migration
+
+이 절의 one-time platform cutover는 `/g/{guildId}/admin/data`의 guild operator data transfer와 완전히
+분리한다. `MEMBER_SEASON_MMR_SEED` archive는 현재 ACTIVE target member의 current-season MMR만 옮기며,
+아래 legacy staging/import support table이나 mookbot_v3 D1/Valkey dump를 사용하거나 대체하지 않는다.
 
 Source:
 

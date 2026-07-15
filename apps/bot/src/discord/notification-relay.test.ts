@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MonkeyBotApiTransportError, type MonkeyBotApiClient } from '../api/client.js';
 import type {
+	AuctionMatchLineupConfirmationSnapshot,
 	AuctionTournamentResultDeleteNotificationPayload,
 	AuctionTournamentResultNotificationPayload,
 	BotNotification,
@@ -16,6 +17,7 @@ import type {
 	SeriesResultNotificationV2Snapshot
 } from '../api/contracts.js';
 import { auctionRecruitmentMessageNotificationPayloadSchema } from '../api/contracts.js';
+import { renderAuctionMatchLineupConfirmationMessage } from './auction-match-lineup-confirmation-message.js';
 import { renderAuctionRecruitmentMessage } from './auction-recruitment-message.js';
 import { renderAuctionTournamentResultMessage } from './auction-tournament-result-message.js';
 import {
@@ -193,6 +195,49 @@ describe('Bot notification relay', () => {
 		expect(svg).toContain('&lt;Longcat &amp; Co&gt;');
 		expect(svg).not.toContain('<Longcat & Co>');
 		expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+	});
+
+	it('sends an auction match lineup confirmation with its stable nonce and generic acknowledgement', async () => {
+		const snapshot = auctionMatchLineupConfirmationSnapshot();
+		const sent = { id: messageId };
+		const send = vi.fn(async (options: unknown) => {
+			void options;
+			return sent;
+		});
+		const channel = {
+			isSendable: () => true,
+			isDMBased: () => false,
+			send
+		};
+		const current = createRelay([auctionMatchLineupConfirmationNotification(snapshot)], channel);
+
+		await current.relay.poll();
+
+		expect(send).toHaveBeenCalledTimes(1);
+		const sentOptions = send.mock.calls[0]?.[0];
+		expect(sentOptions).toMatchObject({ nonce: discordNonce, enforceNonce: true });
+		expect(messagePayload(sentOptions)).toEqual(
+			messagePayload(renderAuctionMatchLineupConfirmationMessage(snapshot, webOrigin))
+		);
+		const entryOptions = sentOptions as {
+			embeds?: unknown;
+			files?: Array<{ attachment: unknown; name: string | null }>;
+		};
+		expect(entryOptions.embeds).toBeUndefined();
+		expect(entryOptions.files).toHaveLength(1);
+		expect(entryOptions.files?.[0]).toMatchObject({ name: 'auction-42-final-lineup.png' });
+		expect(entryOptions.files?.[0]?.attachment).toBeInstanceOf(Buffer);
+		expect(current.acknowledgeNotification).toHaveBeenCalledWith(
+			{
+				instanceId,
+				notificationId,
+				leaseToken,
+				discordMessageId: messageId
+			},
+			expect.any(Object)
+		);
+		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
 	});
 
 	it('sends a full schema v2 series result card with its stable nonce and generic acknowledgement', async () => {
@@ -710,6 +755,60 @@ function entryConfirmationNotification(snapshot: EntryConfirmationSnapshot): Bot
 		payload: {
 			schemaVersion: 1,
 			seriesId: snapshot.series.id,
+			snapshot
+		},
+		discordNonce,
+		attempts: 1
+	};
+}
+
+function auctionMatchLineupConfirmationSnapshot(): AuctionMatchLineupConfirmationSnapshot {
+	const teams = entryConfirmationSnapshot().teams;
+	return {
+		tournament: {
+			id: '01900000-0000-7000-8000-000000000501',
+			displayNumber: 42,
+			title: '금요 경매 내전',
+			format: 'TWENTY_PERSON',
+			hardFearless: true
+		},
+		match: {
+			id: '01900000-0000-7000-8000-000000000601',
+			matchKey: 'FINAL',
+			label: '결승',
+			bestOf: 3
+		},
+		teams: [
+			{
+				teamId: '01900000-0000-7000-8000-000000000701',
+				name: '블루팀',
+				players: teams[0]!.players
+			},
+			{
+				teamId: '01900000-0000-7000-8000-000000000702',
+				name: '레드팀',
+				players: teams[1]!.players
+			}
+		],
+		links: {
+			pickBan: `/g/${guildId}/auction/matches/01900000-0000-7000-8000-000000000601`
+		}
+	};
+}
+
+function auctionMatchLineupConfirmationNotification(
+	snapshot: AuctionMatchLineupConfirmationSnapshot
+): BotNotification {
+	return {
+		id: notificationId,
+		guildId,
+		leaseToken,
+		leaseUntil: '2026-07-13T10:00:30Z',
+		channelId,
+		type: 'AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE',
+		payload: {
+			schemaVersion: 1,
+			matchId: snapshot.match.id,
 			snapshot
 		},
 		discordNonce,

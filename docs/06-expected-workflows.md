@@ -286,6 +286,7 @@ Web 현재 active operator의 참가자 관리
   -> /g/{guildId}/auction/matches/{matchId}에서 match 선택
   -> 양 팀 5명의 라인 입력
   -> TOP / JUNGLE / MID / BOTTOM / SUPPORT 모두 확정
+  -> 설정된 엔트리 채널에는 확정 라인업과 match 링크를 비동기 게시
   -> 라인업 확정 후 경기 시작 가능
 
 경매 경기 결과 입력
@@ -536,18 +537,66 @@ MMR 수동 수정
 현재 시즌 종료와 새 시즌 생성
 길드 멤버 ACTIVE/INACTIVE 변경
 운영 role 및 Discord 채널 설정
+현재 시즌 MMR archive 내보내기/가져오기
 audit log 조회
 ```
 
 원칙:
 
-- 현재 admin 화면은 members, settings, seasons, audit logs만 제공한다. operations/revert 전용 탭,
-  web 일괄 등록, 시즌 초기화는 노출하지 않는다.
+- 현재 admin 화면은 members, settings, seasons, data transfer, audit logs를 제공한다. operations/revert 전용
+  탭, web 일괄 등록, 시즌 초기화는 노출하지 않는다.
 - workflow recovery와 Bot 경매 취소는 해당 workflow의 lifecycle/API를 사용하며 admin 탭에서 범용 undo/redo로
   처리하지 않는다.
 - admin action도 guild target이 있으면 반드시 `guild_id`를 기록한다.
 - 시즌 전환은 기존 시즌을 CLOSED로 보존하고 새 ACTIVE 시즌을 만든다. 전적/MMR 원장을
   초기화하거나 삭제하지 않는다.
+
+### 현재 시즌 MMR data transfer
+
+사용자:
+
+- 현재 guild의 ACTIVE OPERATOR
+
+흐름:
+
+```txt
+운영자 /g/{guildId}/admin/data 접속
+  -> session, CSRF, 현재 ACTIVE OPERATOR 권한 확인
+
+내보내기
+  -> 현재 ACTIVE 시즌과 ACTIVE Discord guild member를 repeatable-read snapshot으로 읽음
+  -> 최대 1,000 member별 canonical 5 lane의 MMR 값만 archive에 넣음
+  -> MONKEYBOT_DATA_TRANSFER / MEMBER_SEASON_MMR_SEED / schemaVersion=1 readable JSON archive 생성
+  -> DATA_TRANSFER_EXPORTED audit 기록 후 다운로드
+
+가져오기 검토
+  -> format/kind/schema version, archive shape를 검증
+  -> archive Discord ID를 target guild의 기존 ACTIVE Discord member와만 매칭
+  -> 대상 ACTIVE 시즌, MEMBERS revision, target lane MMR snapshot을 읽고 preview digest/만료 시각/충돌 count를 저장
+  -> target guild에 없는/비활성 member는 명확한 conflict로 반환
+  -> 중복 member/lane, canonical lane 불충족, 유효하지 않은 MMR은 invalid archive로 거절
+
+가져오기 적용
+  -> preview digest, 만료 시각, MEMBERS revision, target MMR snapshot, 현재 ACTIVE OPERATOR 권한과 active workflow 부재를 다시 검증
+  -> member/season/lane MMR row를 정렬된 순서로 lock
+  -> 현재 MMR summary와 DATA_IMPORT_SEED ledger를 한 transaction으로 기록
+  -> gamesPlayed/wins와 game/series/auction history는 유지
+  -> DATA_IMPORT_APPLIED audit 기록 후 최신 결과를 반환
+```
+
+원칙:
+
+- archive의 source guild는 설명 metadata다. 다른 guild archive도 모든 Discord ID가 target의 기존 ACTIVE
+  member에 매칭될 때만 가져올 수 있으며, import가 user나 guild membership을 생성하지 않는다.
+- payload는 current-season lane `mmr` 값만 포함한다. lane game/win counters, Riot accounts/PUUID,
+  privacy, champion preferences, Discord roles/channels, dummy identities, 모집/엔트리/시리즈/경매/픽밴/game
+  history, audit/outbox/idempotency row는 archive 범위 밖이다.
+- preview를 거치지 않은 JSON, 만료되었거나 digest/revision이 달라진 preview는 적용하지 않는다. 파일의
+  MMR 값과 provenance metadata는 운영자가 preview 전에 읽고 편집할 수 있지만, Import는 기존 workflow의
+  generic restore나 전체 database overwrite가 아니다.
+- raw archive payload는 apply 성공 시 즉시 제거하고, 만료된 preview row는 API process의 60초 retention task가
+  삭제한다. 적용 후 audit-safe metadata와 ledger만 보존한다.
+- data transfer는 Bot command, WebSocket live edit, service-admin dummy user 기능을 사용하지 않는다.
 
 ## 10. Bot 제거 / 재설치
 

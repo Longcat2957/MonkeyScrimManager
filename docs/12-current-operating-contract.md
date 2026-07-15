@@ -111,8 +111,15 @@ WebSocket은 authoritative state patch가 아니라 invalidate 신호만 전달�
   snapshot으로 섞지 않는다.
 - guild records의 연결 Riot ID 표시는 사용자의 privacy projection을 따른다. 내부 guild 게임과 MMR은 개인
   privacy setting으로 숨기지 않는다.
-- guild admin은 members, settings, seasons, audit logs만 현재 운영 범위에 둔다. operations/revert 전용
-  admin 탭과 web bulk registration은 노출하지 않는다.
+- guild admin은 members, settings, seasons, data transfer, audit logs를 현재 운영 범위에 둔다.
+  operations/revert 전용 admin 탭과 web bulk registration은 노출하지 않는다.
+- `/g/{guildId}/admin/data`는 active operator가 현재 ACTIVE 시즌의 guild MMR summary를 readable plain JSON
+  `MEMBER_SEASON_MMR_SEED` archive로 내보내거나, preview를 통과한 archive를 가져오는 경로다. Import는
+  target guild에 이미 ACTIVE인 Discord member만 Discord ID로 매칭하며, global user identity, Riot account,
+  privacy, Discord role/channel config, dummy user, 모집/시리즈/경매/게임 history를 만들거나 변경하지 않는다.
+- data import는 preview가 고정한 archive digest, MEMBERS revision, target lane MMR snapshot을 다시 검증한 뒤
+  MMR summary와 `DATA_IMPORT_SEED` ledger를 한 transaction으로 기록한다. game/win counters와 기존 game history는
+  옮기지 않으며, generic restore나 mookbot_v3 dump import가 아니다.
 - dummy user 기능은 `MONKEYBOT_DUMMY_USERS_ENABLED=true`인 non-production service-admin 도구다. 더미
   사용자는 실제 DB entity이지만 로그인/Discord role/운영 principal이 될 수 없다.
 
@@ -142,3 +149,4 @@ command registry에 없으므로 제공 기능으로 안내하지 않는다.
 - CRDT, OT, offline mutation queue, 범용 undo/redo
 - WebSocket을 통한 full state patch 또는 client-side MMR/낙찰 계산
 - web bulk registration, 범용 maintenance dashboard, 일반 사용자용 dummy user 관리
+- 일반 guild operator의 mookbot_v3 D1/Valkey dump 또는 전체 내전/경매 history import

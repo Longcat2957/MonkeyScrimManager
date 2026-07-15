@@ -94,11 +94,13 @@
 	);
 	const staticDocumentRouteIds = ['/docs', '/terms', '/privacy'];
 	const viewportWorkspaceRouteIds = ['/g/[guildId]/recruitments/[id]'];
+	const viewportShellRouteIds = [...viewportWorkspaceRouteIds, '/g/[guildId]/leaderboard'];
 	const usesViewportWorkspace = $derived(
 		viewportWorkspaceRouteIds.includes(page.route.id ?? '')
 	);
 	const usesViewportShell = $derived(
-		usesViewportWorkspace || (page.route.id ?? '').startsWith('/g/[guildId]/admin')
+		viewportShellRouteIds.includes(page.route.id ?? '') ||
+			(page.route.id ?? '').startsWith('/g/[guildId]/admin')
 	);
 	const showQuickActionFab = $derived(
 		!staticDocumentRouteIds.includes(page.route.id ?? '') && !usesViewportWorkspace

@@ -8,6 +8,7 @@ mod extractors;
 mod guild_admin_member_routes;
 mod guild_admin_settings_routes;
 mod guild_audit_log_routes;
+mod guild_data_transfer_routes;
 mod guild_leaderboard_routes;
 mod guild_record_profile_routes;
 mod guild_season_routes;
@@ -94,6 +95,18 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             "/api/guilds/{guild_id}/settings",
             get(guild_admin_settings_routes::settings)
                 .put(guild_admin_settings_routes::update_settings),
+        )
+        .route(
+            "/api/guilds/{guild_id}/data-export",
+            post(guild_data_transfer_routes::export),
+        )
+        .route(
+            "/api/guilds/{guild_id}/data-imports/preview",
+            post(guild_data_transfer_routes::preview),
+        )
+        .route(
+            "/api/guilds/{guild_id}/data-imports/{import_id}/apply",
+            post(guild_data_transfer_routes::apply),
         )
         .route(
             "/api/guilds/{guild_id}/seasons",

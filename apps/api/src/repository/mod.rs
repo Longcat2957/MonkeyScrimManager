@@ -7,6 +7,7 @@ pub mod dummy_users;
 pub mod guild_admin_members;
 pub mod guild_admin_settings;
 pub mod guild_audit_logs;
+pub mod guild_data_transfer;
 pub mod guild_leaderboard;
 pub mod guild_record_profiles;
 pub mod guild_seasons;

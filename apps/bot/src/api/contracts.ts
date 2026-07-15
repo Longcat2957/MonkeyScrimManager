@@ -580,6 +580,75 @@ export const entryConfirmationNotificationPayloadSchema = z
 	})
 	.strict();
 
+const auctionMatchLineupConfirmationMatchKeySchema = z.enum([
+	'SEMIFINAL_A',
+	'SEMIFINAL_B',
+	'FINAL'
+]);
+
+const auctionMatchLineupConfirmationTournamentSchema = z
+	.object({
+		id: uuidSchema,
+		displayNumber: z.number().int().positive(),
+		title: z.string().min(1).max(200),
+		format: auctionRecruitmentFormatSchema,
+		hardFearless: z.boolean()
+	})
+	.strict();
+
+const auctionMatchLineupConfirmationMatchSchema = z
+	.object({
+		id: uuidSchema,
+		matchKey: auctionMatchLineupConfirmationMatchKeySchema,
+		label: z.string().min(1).max(100),
+		bestOf: auctionBestOfSchema
+	})
+	.strict();
+
+const auctionMatchLineupConfirmationTeamSchema = z
+	.object({
+		teamId: uuidSchema,
+		name: z.string().min(1).max(100),
+		players: z.array(entryConfirmationPlayerSchema).length(5)
+	})
+	.strict();
+
+export const auctionMatchLineupConfirmationSnapshotSchema = z
+	.object({
+		tournament: auctionMatchLineupConfirmationTournamentSchema,
+		match: auctionMatchLineupConfirmationMatchSchema,
+		teams: z.array(auctionMatchLineupConfirmationTeamSchema).length(2),
+		links: z.object({ pickBan: z.string().startsWith('/g/') }).strict()
+	})
+	.strict()
+	.superRefine((snapshot, context) => {
+		const teamIds = new Set(snapshot.teams.map((team) => team.teamId));
+		if (teamIds.size !== snapshot.teams.length) {
+			context.addIssue({
+				code: 'custom',
+				path: ['teams'],
+				message: 'auction match lineup confirmation teams must be distinct'
+			});
+		}
+	});
+
+export const auctionMatchLineupConfirmationNotificationPayloadSchema = z
+	.object({
+		schemaVersion: z.literal(1),
+		matchId: uuidSchema,
+		snapshot: auctionMatchLineupConfirmationSnapshotSchema
+	})
+	.strict()
+	.superRefine((payload, context) => {
+		if (payload.matchId !== payload.snapshot.match.id) {
+			context.addIssue({
+				code: 'custom',
+				path: ['matchId'],
+				message: 'matchId must match snapshot.match.id'
+			});
+		}
+	});
+
 const seriesResultTeamSchema = z.enum(['TEAM_1', 'TEAM_2']);
 const seriesResultSidePresetSchema = z.enum(['DEFAULT', 'SWAPPED']);
 const seriesResultTerminalReasonSchema = z.enum(['SCORE_REACHED', 'EARLY_WIN', 'EARLY_DRAW']);
@@ -1238,6 +1307,12 @@ export type RecruitmentMessageNotificationPayload = z.infer<
 export type EntryConfirmationSnapshot = z.infer<typeof entryConfirmationSnapshotSchema>;
 export type EntryConfirmationNotificationPayload = z.infer<
 	typeof entryConfirmationNotificationPayloadSchema
+>;
+export type AuctionMatchLineupConfirmationSnapshot = z.infer<
+	typeof auctionMatchLineupConfirmationSnapshotSchema
+>;
+export type AuctionMatchLineupConfirmationNotificationPayload = z.infer<
+	typeof auctionMatchLineupConfirmationNotificationPayloadSchema
 >;
 export type SeriesResultNotificationV1Snapshot = z.infer<
 	typeof seriesResultNotificationV1SnapshotSchema

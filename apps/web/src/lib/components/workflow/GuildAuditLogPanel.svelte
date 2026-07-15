@@ -4,7 +4,7 @@
 	import type { GuildAuditEntry } from '$lib/contracts/workflow';
 	import { formatRelativeTime } from '$lib/workflow/presentation';
 
-	type AuditCategory = '멤버' | 'MMR' | '내전' | '경매' | '설정' | '기타';
+	type AuditCategory = '멤버' | 'MMR' | '내전' | '경매' | '설정' | '데이터' | '기타';
 	type CategoryFilter = '전체' | AuditCategory;
 
 	interface Props {
@@ -48,11 +48,23 @@
 	let operatorFilter = $state('전체');
 	let expandedEntryId = $state<string | null>(null);
 
-	const categories: CategoryFilter[] = ['전체', '멤버', 'MMR', '내전', '경매', '설정', '기타'];
+	const categories: CategoryFilter[] = [
+		'전체',
+		'멤버',
+		'MMR',
+		'내전',
+		'경매',
+		'설정',
+		'데이터',
+		'기타'
+	];
 	const actionPresentations: Record<string, ActionPresentation> = {
 		GUILD_SETUP: { label: '길드 초기 설정', category: '설정' },
 		GUILD_SETTINGS_UPDATED: { label: '길드 설정 변경', category: '설정' },
 		SEASON_ROTATED: { label: '새 시즌 시작', category: '설정' },
+		DATA_TRANSFER_EXPORTED: { label: 'MMR 백업 내보내기', category: '데이터' },
+		DATA_IMPORT_PREVIEWED: { label: 'MMR 가져오기 검증', category: '데이터' },
+		DATA_IMPORT_APPLIED: { label: 'MMR 가져오기 적용', category: '데이터' },
 		MEMBER_MMR_ADJUSTED: { label: 'MMR 수동 조정', category: 'MMR' },
 		MEMBER_STATUS_CHANGED: { label: '멤버 상태 변경', category: '멤버' },
 		MEMBER_STATUS_RECOVERED: { label: '멤버 상태 복구', category: '멤버' },
@@ -71,6 +83,8 @@
 		GUILD_CONFIG: '길드 설정',
 		GUILD_MEMBER: '길드 멤버',
 		GUILD_MEMBER_MMR: '멤버 MMR',
+		MEMBER_SEASON_MMR_SEED: '멤버·시즌 MMR 백업',
+		DATA_IMPORT: '데이터 가져오기',
 		SEASON: '시즌',
 		RECRUITMENT: '모집',
 		SERIES: '시리즈',

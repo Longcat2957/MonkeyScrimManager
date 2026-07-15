@@ -9,6 +9,7 @@ import {
 import {
 	auctionTournamentResultDeleteNotificationPayloadSchema,
 	auctionTournamentResultNotificationPayloadSchema,
+	auctionMatchLineupConfirmationNotificationPayloadSchema,
 	auctionRecruitmentMessageNotificationPayloadSchema,
 	entryConfirmationNotificationPayloadSchema,
 	recruitmentMessageNotificationPayloadSchema,
@@ -17,6 +18,7 @@ import {
 	type NackNotificationRequest
 } from '../api/contracts.js';
 import { renderAuctionRecruitmentMessage } from './auction-recruitment-message.js';
+import { renderAuctionMatchLineupConfirmationMessage } from './auction-match-lineup-confirmation-message.js';
 import { renderAuctionTournamentResultMessage } from './auction-tournament-result-message.js';
 import { renderEntryConfirmationMessage } from './entry-confirmation-message.js';
 import { renderRecruitmentMessage } from './recruitment-message.js';
@@ -214,6 +216,21 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 					return;
 				}
 				await this.#createEntryConfirmation(notification, payload.data.snapshot);
+				return;
+			}
+			case 'AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE': {
+				const payload = auctionMatchLineupConfirmationNotificationPayloadSchema.safeParse(
+					notification.payload
+				);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message: 'Auction match lineup confirmation payload does not match schema version 1'
+					});
+					return;
+				}
+				await this.#createAuctionMatchLineupConfirmation(notification, payload.data.snapshot);
 				return;
 			}
 			case 'SERIES_RESULT_CREATE': {
@@ -420,6 +437,44 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 					messageId
 				},
 				'Entry confirmation Discord message created'
+			);
+		} catch (error) {
+			// The stable Discord nonce makes a delivery retry safe when the API acknowledgement is lost.
+			await this.#nack(notification, failureFor(error));
+		}
+	}
+
+	async #createAuctionMatchLineupConfirmation(
+		notification: BotNotification,
+		snapshot: ReturnType<
+			typeof auctionMatchLineupConfirmationNotificationPayloadSchema.parse
+		>['snapshot']
+	): Promise<void> {
+		let messageId: string;
+		try {
+			const channel = await this.#sendableGuildChannel(notification.channelId);
+			const message = await channel.send({
+				...renderAuctionMatchLineupConfirmationMessage(snapshot, this.#webOrigin),
+				nonce: notification.discordNonce,
+				enforceNonce: true
+			});
+			messageId = message.id;
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+			return;
+		}
+
+		try {
+			await this.#acknowledge(notification, messageId);
+			this.#logger.info(
+				{
+					notificationId: notification.id,
+					guildId: notification.guildId,
+					channelId: notification.channelId,
+					messageId,
+					matchId: snapshot.match.id
+				},
+				'Auction match lineup confirmation Discord message created'
 			);
 		} catch (error) {
 			// The stable Discord nonce makes a delivery retry safe when the API acknowledgement is lost.

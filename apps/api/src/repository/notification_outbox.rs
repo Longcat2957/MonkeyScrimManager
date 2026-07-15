@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AuctionRecruitmentId, DiscordChannelId, DiscordMessageId, GuildId, NotificationId,
-        RecruitmentStatus,
+        AuctionMatchId, AuctionRecruitmentId, DiscordChannelId, DiscordMessageId, GuildId,
+        NotificationId, RecruitmentStatus,
     },
     infrastructure::postgres::DatabaseTransaction,
 };
@@ -32,6 +32,9 @@ pub const AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION: u16 = 2;
 const LEGACY_AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION: u16 = 1;
 pub const ENTRY_CONFIRMATION_CREATE_TYPE: &str = "ENTRY_CONFIRMATION_CREATE";
 pub const ENTRY_CONFIRMATION_SCHEMA_VERSION: u16 = 1;
+pub const AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE_TYPE: &str =
+    "AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE";
+pub const AUCTION_MATCH_LINEUP_CONFIRMATION_SCHEMA_VERSION: u16 = 1;
 pub const SERIES_RESULT_CREATE_TYPE: &str = "SERIES_RESULT_CREATE";
 pub const SERIES_RESULT_SCHEMA_VERSION: u16 = 2;
 pub const AUCTION_TOURNAMENT_RESULT_CREATE_TYPE: &str = "AUCTION_TOURNAMENT_RESULT_CREATE";
@@ -90,6 +93,14 @@ pub struct AuctionRecruitmentMessageNotificationPayload {
 pub struct EntryConfirmationNotificationPayload {
     pub schema_version: u16,
     pub series_id: crate::domain::SeriesId,
+    pub snapshot: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuctionMatchLineupConfirmationNotificationPayload {
+    pub schema_version: u16,
+    pub match_id: AuctionMatchId,
     pub snapshot: Value,
 }
 

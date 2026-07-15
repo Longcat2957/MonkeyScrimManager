@@ -17,12 +17,14 @@ use super::{
     },
     mmr::{self, MmrLaneKey, MmrRepositoryError},
     notification_outbox::{
-        self, AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE, AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE,
-        AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION, AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE,
-        AUCTION_TOURNAMENT_RESULT_CREATE_TYPE, AUCTION_TOURNAMENT_RESULT_DELETE_SCHEMA_VERSION,
-        AUCTION_TOURNAMENT_RESULT_DELETE_TYPE, AUCTION_TOURNAMENT_RESULT_SCHEMA_VERSION,
-        ENTRY_CONFIRMATION_CREATE_TYPE, ENTRY_CONFIRMATION_SCHEMA_VERSION, EnqueueNotification,
-        NotificationOutboxError, RECRUITMENT_MESSAGE_CREATE_TYPE, RECRUITMENT_MESSAGE_DELETE_TYPE,
+        self, AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE_TYPE,
+        AUCTION_MATCH_LINEUP_CONFIRMATION_SCHEMA_VERSION, AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE,
+        AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE, AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION,
+        AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE, AUCTION_TOURNAMENT_RESULT_CREATE_TYPE,
+        AUCTION_TOURNAMENT_RESULT_DELETE_SCHEMA_VERSION, AUCTION_TOURNAMENT_RESULT_DELETE_TYPE,
+        AUCTION_TOURNAMENT_RESULT_SCHEMA_VERSION, ENTRY_CONFIRMATION_CREATE_TYPE,
+        ENTRY_CONFIRMATION_SCHEMA_VERSION, EnqueueNotification, NotificationOutboxError,
+        RECRUITMENT_MESSAGE_CREATE_TYPE, RECRUITMENT_MESSAGE_DELETE_TYPE,
         RECRUITMENT_MESSAGE_SCHEMA_VERSION, RECRUITMENT_MESSAGE_UPDATE_TYPE,
         SERIES_RESULT_CREATE_TYPE, SERIES_RESULT_SCHEMA_VERSION,
     },
@@ -1166,6 +1168,57 @@ struct EntryConfirmationPlayerSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EntryConfirmationLinksSnapshot {
+    pick_ban: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionMatchLineupConfirmationSnapshot {
+    tournament: AuctionMatchLineupConfirmationTournamentSnapshot,
+    #[serde(rename = "match")]
+    matchup: AuctionMatchLineupConfirmationMatchSnapshot,
+    teams: Vec<AuctionMatchLineupConfirmationTeamSnapshot>,
+    links: AuctionMatchLineupConfirmationLinksSnapshot,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionMatchLineupConfirmationTournamentSnapshot {
+    id: AuctionTournamentId,
+    display_number: i64,
+    title: String,
+    format: AuctionFormat,
+    hard_fearless: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionMatchLineupConfirmationMatchSnapshot {
+    id: AuctionMatchId,
+    match_key: String,
+    label: String,
+    best_of: i16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionMatchLineupConfirmationTeamSnapshot {
+    team_id: Uuid,
+    name: String,
+    players: Vec<AuctionMatchLineupConfirmationPlayerSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionMatchLineupConfirmationPlayerSnapshot {
+    id: UserId,
+    display_name: String,
+    lane: Lane,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionMatchLineupConfirmationLinksSnapshot {
     pick_ban: String,
 }
 
@@ -7655,6 +7708,22 @@ async fn execute_web_auction_match_lineup_mutation_attempt(
     if snapshot.r#match.revision != revision {
         return Err(AttemptError::InvariantViolation);
     }
+    if matches!(command, WebAuctionMatchLineupMutation::Lock(_)) {
+        if let Some(channel_id) = configured_entry_channel(transaction, guild_id).await? {
+            let confirmation_snapshot =
+                auction_match_lineup_confirmation_snapshot(guild_id, &tournament, &snapshot)?;
+            enqueue_auction_match_lineup_confirmation_notification(
+                transaction,
+                guild_id,
+                &channel_id,
+                &confirmation_snapshot,
+                revision,
+                prepared.lineup_confirmation_notification_id,
+                prepared.now,
+            )
+            .await?;
+        }
+    }
     let target_id = match_id.to_string();
     insert_audit(
         transaction,
@@ -13730,6 +13799,127 @@ async fn enqueue_entry_confirmation_notification(
     Ok(())
 }
 
+fn auction_match_lineup_confirmation_snapshot(
+    guild_id: &GuildId,
+    tournament: &AuctionTournamentLockRow,
+    snapshot: &AuctionMatchSnapshot,
+) -> Result<AuctionMatchLineupConfirmationSnapshot, AttemptError> {
+    let left_team_id = snapshot.r#match.left_team_id;
+    let right_team_id = snapshot.r#match.right_team_id;
+    if snapshot.teams.len() != 2
+        || snapshot
+            .teams
+            .iter()
+            .map(|team| team.id)
+            .collect::<HashSet<_>>()
+            != HashSet::from([left_team_id, right_team_id])
+        || !has_complete_auction_match_lineup(&snapshot.lineups, left_team_id, right_team_id)
+    {
+        return Err(AttemptError::InvariantViolation);
+    }
+
+    let mut teams = Vec::with_capacity(2);
+    for team_id in [left_team_id, right_team_id] {
+        let team = snapshot
+            .teams
+            .iter()
+            .find(|team| team.id == team_id)
+            .ok_or(AttemptError::InvariantViolation)?;
+        if team.members.len() != 5 {
+            return Err(AttemptError::InvariantViolation);
+        }
+
+        let mut players = Vec::with_capacity(5);
+        for lane in [
+            Lane::Top,
+            Lane::Jungle,
+            Lane::Mid,
+            Lane::Bottom,
+            Lane::Support,
+        ] {
+            let lineup = snapshot
+                .lineups
+                .iter()
+                .find(|lineup| lineup.team_id == team_id && lineup.lane == lane)
+                .ok_or(AttemptError::InvariantViolation)?;
+            let member = team
+                .members
+                .iter()
+                .find(|member| {
+                    member.team_member_id == lineup.team_member_id
+                        && member.user_id == lineup.user_id
+                })
+                .ok_or(AttemptError::InvariantViolation)?;
+            players.push(AuctionMatchLineupConfirmationPlayerSnapshot {
+                id: lineup.user_id.clone(),
+                display_name: member.display_name.clone(),
+                lane,
+            });
+        }
+        teams.push(AuctionMatchLineupConfirmationTeamSnapshot {
+            team_id,
+            name: team.team_name.clone(),
+            players,
+        });
+    }
+
+    Ok(AuctionMatchLineupConfirmationSnapshot {
+        tournament: AuctionMatchLineupConfirmationTournamentSnapshot {
+            id: snapshot.r#match.tournament_id.clone(),
+            display_number: tournament.display_number,
+            title: tournament.title.clone(),
+            format: parse_auction_format(&tournament.format)?,
+            hard_fearless: tournament.hard_fearless,
+        },
+        matchup: AuctionMatchLineupConfirmationMatchSnapshot {
+            id: snapshot.r#match.id.clone(),
+            match_key: snapshot.r#match.match_key.clone(),
+            label: snapshot.r#match.label.clone(),
+            best_of: snapshot.r#match.best_of,
+        },
+        teams,
+        links: AuctionMatchLineupConfirmationLinksSnapshot {
+            pick_ban: format!("/g/{guild_id}/auction/matches/{}", snapshot.r#match.id),
+        },
+    })
+}
+
+async fn enqueue_auction_match_lineup_confirmation_notification(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    channel_id: &DiscordChannelId,
+    snapshot: &AuctionMatchLineupConfirmationSnapshot,
+    match_revision: i64,
+    notification_id: NotificationId,
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    let payload = serde_json::to_value(
+        notification_outbox::AuctionMatchLineupConfirmationNotificationPayload {
+            schema_version: AUCTION_MATCH_LINEUP_CONFIRMATION_SCHEMA_VERSION,
+            match_id: snapshot.matchup.id.clone(),
+            snapshot: serde_json::to_value(snapshot)?,
+        },
+    )?;
+    let deduplication_key = format!(
+        "auction-match:{}:lineup-confirmation:{match_revision}",
+        snapshot.matchup.id
+    );
+    notification_outbox::enqueue(
+        transaction,
+        &EnqueueNotification {
+            id: notification_id,
+            guild_id,
+            deduplication_key: &deduplication_key,
+            channel_id,
+            notification_type: AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE_TYPE,
+            payload: &payload,
+            created_at: now,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
 async fn enqueue_series_result_notification_if_configured(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -14775,7 +14965,7 @@ async fn lock_auction_tournament(
     tournament_id: AuctionTournamentId,
 ) -> Result<AuctionTournamentLockRow, AttemptError> {
     sqlx::query_as::<_, AuctionTournamentLockRow>(
-        "SELECT format, status, revision, bracket_locked_at
+        "SELECT display_number, title, format, hard_fearless, status, revision, bracket_locked_at
          FROM auction_tournaments
          WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL
          FOR UPDATE",
@@ -18721,6 +18911,7 @@ struct WebAuctionMatchLineupPrepared {
     idempotency_record_id: IdempotencyRecordId,
     audit_id: Uuid,
     outbox_event_id: OutboxEventId,
+    lineup_confirmation_notification_id: NotificationId,
 }
 
 impl WebAuctionMatchLineupPrepared {
@@ -18730,6 +18921,7 @@ impl WebAuctionMatchLineupPrepared {
             idempotency_record_id: IdempotencyRecordId::new(),
             audit_id: Uuid::now_v7(),
             outbox_event_id: OutboxEventId::new(),
+            lineup_confirmation_notification_id: NotificationId::new(),
         }
     }
 }
@@ -19595,7 +19787,10 @@ struct AuctionTournamentDraftRow {
 
 #[derive(Debug, FromRow)]
 struct AuctionTournamentLockRow {
+    display_number: i64,
+    title: String,
     format: String,
+    hard_fearless: bool,
     status: AuctionTournamentStatus,
     revision: i64,
     bracket_locked_at: Option<OffsetDateTime>,
@@ -21542,6 +21737,118 @@ mod tests {
             "COMPLETED"
         ));
         assert!(!can_enter_auction_match_results(false, true, true, "READY"));
+    }
+
+    #[test]
+    fn auction_lineup_confirmation_snapshot_is_lane_ordered_and_immutable() {
+        let guild_id = GuildId::parse("200000000000000001").expect("guild ID");
+        let tournament_id = AuctionTournamentId::from_uuid(
+            Uuid::parse_str("01900000-0000-7000-8000-000000000501").expect("tournament ID"),
+        );
+        let match_id = AuctionMatchId::from_uuid(
+            Uuid::parse_str("01900000-0000-7000-8000-000000000601").expect("match ID"),
+        );
+        let left_team_id =
+            Uuid::parse_str("01900000-0000-7000-8000-000000000701").expect("left team ID");
+        let right_team_id =
+            Uuid::parse_str("01900000-0000-7000-8000-000000000702").expect("right team ID");
+        let lanes = [
+            Lane::Top,
+            Lane::Jungle,
+            Lane::Mid,
+            Lane::Bottom,
+            Lane::Support,
+        ];
+        let team = |team_id: Uuid, name: &str, starting_user: u8| AuctionMatchSnapshotTeam {
+            id: team_id,
+            team_name: name.to_owned(),
+            members: lanes
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, lane)| {
+                    let user_number = starting_user + u8::try_from(index).expect("lane index");
+                    AuctionTournamentTeamMemberSnapshot {
+                        team_member_id: Uuid::from_u128(u128::from(user_number)),
+                        user_id: UserId::parse(format!("1000000000000000{user_number:02}"))
+                            .expect("user ID"),
+                        display_name: format!("{name} {lane}"),
+                        declared_lane: Some(lane),
+                        mmr_at_acquisition: Some(1500.0),
+                        snapshot_origin: "TEST".to_owned(),
+                        acquired_via: "TEST".to_owned(),
+                        roster_slot: i16::try_from(index + 1).expect("roster slot"),
+                    }
+                })
+                .collect(),
+        };
+        let left_team = team(left_team_id, "블루팀", 1);
+        let right_team = team(right_team_id, "레드팀", 6);
+        let lineups = [&left_team, &right_team]
+            .into_iter()
+            .flat_map(|team| {
+                team.members.iter().zip(lanes).map(move |(member, lane)| {
+                    AuctionMatchLineupAssignmentSnapshot {
+                        team_id: team.id,
+                        lane,
+                        team_member_id: member.team_member_id,
+                        user_id: member.user_id.clone(),
+                    }
+                })
+            })
+            .collect();
+        let snapshot = AuctionMatchSnapshot {
+            r#match: AuctionMatchSnapshotMatch {
+                id: match_id,
+                tournament_id,
+                match_key: "FINAL".to_owned(),
+                label: "결승".to_owned(),
+                best_of: 3,
+                hard_fearless: true,
+                status: "READY".to_owned(),
+                revision: 14,
+                left_team_id,
+                right_team_id,
+                left_score: 0,
+                right_score: 0,
+                winner_team_id: None,
+                lineups_locked: true,
+            },
+            teams: vec![left_team, right_team],
+            lineups,
+            games: Vec::new(),
+            permissions: AuctionMatchSnapshotPermissions {
+                can_manage_lineup: false,
+                can_enter_results: true,
+                can_unlock_lineup: true,
+                can_revert_last_game: false,
+            },
+        };
+        let tournament = AuctionTournamentLockRow {
+            display_number: 42,
+            title: "금요 경매 내전".to_owned(),
+            format: "TWENTY_PERSON".to_owned(),
+            hard_fearless: true,
+            status: AuctionTournamentStatus::InGame,
+            revision: 8,
+            bracket_locked_at: Some(OffsetDateTime::now_utc()),
+        };
+
+        let confirmation =
+            auction_match_lineup_confirmation_snapshot(&guild_id, &tournament, &snapshot)
+                .expect("complete lock snapshot creates a confirmation card");
+        let payload = serde_json::to_value(&confirmation).expect("confirmation serializes");
+
+        assert_eq!(payload["tournament"]["format"], "TWENTY_PERSON");
+        assert_eq!(payload["match"]["id"], match_id.to_string());
+        assert_eq!(payload["teams"][0]["teamId"], left_team_id.to_string());
+        assert_eq!(payload["teams"][1]["teamId"], right_team_id.to_string());
+        assert_eq!(payload["teams"][0]["players"][0]["lane"], "TOP");
+        assert_eq!(payload["teams"][0]["players"][4]["lane"], "SUPPORT");
+        assert_eq!(
+            payload["links"]["pickBan"],
+            format!("/g/{guild_id}/auction/matches/{match_id}")
+        );
     }
 
     #[test]

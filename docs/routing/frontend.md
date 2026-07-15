@@ -842,8 +842,10 @@ Backend 데이터:
 `season=null, players=[]`을 정상 empty state로 표시한다. API의 `stats`는 실제 game이 한 건 이상인 lane만
 포함하며, Riot ID와 profile icon은 backend가 적용한 `show_riot_ids` projection을 그대로 신뢰한다.
 
-통합/라인 탭, player 검색, 25/50/100 표시 제한, MMR 정렬, 순위와 승률은 읽은 전체 snapshot 위에서
-`LeaderboardBoard`가 local state로 처리한다. 이 UI state를 query parameter나 별도 API로 보내지 않는다.
+통합/라인 탭, player 검색, 고정 25명 단위의 local pagination, MMR 정렬, 순위와 승률은 읽은 전체
+snapshot 위에서 `LeaderboardBoard`가 local state로 처리한다. 순위는 페이지마다 다시 매기지 않으며,
+이 UI state를 query parameter나 별도 API로 보내지 않는다. 목록은 viewport의 남은 영역에서만
+스크롤하고, header·탭·pagination과 app footer는 화면에 남는다.
 
 WebSocket: 사용하지 않는다.
 
@@ -942,6 +944,7 @@ WebSocket: 사용하지 않는다.
 
 - 길드 멤버 등록 상태, Riot 연결 상태, MMR을 조회하고 관리한다.
 - 운영자 역할, 모집/엔트리/로그 채널과 외부 공개 설정을 관리한다.
+- 현재 시즌 MMR seed archive를 내보내고 안전하게 가져온다.
 - audit log를 필터링하고 destructive/admin action을 추적한다.
 - checkpoint/revert 운영 탭은 MVP에서 노출하지 않는다.
 
@@ -950,6 +953,7 @@ WebSocket: 사용하지 않는다.
 - `members`: 멤버 검색, MMR 조정, 비활성화와 복구.
 - `settings`: Discord 역할/채널과 공개 설정.
 - `seasons`: `/g/[guildId]/admin/seasons`의 별도 route로 이동한다.
+- `data`: `/g/[guildId]/admin/data`의 별도 route로 이동한다.
 - `logs`: 작업, 대상, 실행자별 감사 로그와 상세 payload.
 
 관리 헤더와 OPERATOR 권한 검사는 admin layout이 공통으로 제공한다. `settings` tab의 server load는
@@ -1042,6 +1046,67 @@ principal type/ID로 fallback한다. 펼침 상세는 저장된 note와 before/a
 기존 entry를 유지한다. 감사 로그는 append-only 조회 화면이므로 WebSocket, CSRF, revision과 idempotency
 key를 사용하지 않는다.
 
+### `/g/[guildId]/admin/data`
+
+파일:
+
+- `apps/web/src/routes/g/[guildId]/admin/data/+page.server.ts`
+- `apps/web/src/routes/g/[guildId]/admin/data/+page.svelte`
+- `apps/web/src/lib/components/workflow/GuildDataTransferPanel.svelte`
+- `apps/web/src/lib/api/guildDataTransfer.ts`
+- `apps/web/src/lib/contracts/guildDataTransfer.ts`
+
+목적:
+
+- 현재 guild의 ACTIVE OPERATOR가 현재 ACTIVE 시즌의 member lane MMR을 backup archive로 내보낸다.
+- readable plain JSON archive를 preview하고, target guild의 이미 ACTIVE인 Discord member에게만 MMR seed를
+  적용한다.
+
+화면은 `내보내기`와 `가져오기` 두 작업만 보여준다. 통계 카드, dummy member picker, Discord channel/role
+selector, history migration 선택지는 만들지 않는다. `/admin` layout의 권한 검사를 그대로 받으며 data route는
+별도 service-admin 권한이나 Bot command를 추가하지 않는다.
+
+내보내기는 `POST /api/guilds/:guildId/data-export`로 실행한다. CSRF header를 포함하고, 성공 response의
+`data.archive`를 JSON file로 내려받는다. 파일 이름은 response의 `data.fileName`을 사용한다. Archive는
+`format=MONKEYBOT_DATA_TRANSFER`, `kind=MEMBER_SEASON_MMR_SEED`, `schemaVersion=1`, source
+`{ guildId, guildName, season: { id, name } }`, Discord member별 다섯 lane의 `{ lane, mmr }`만 가진 strict
+JSON이며 member 수는 최대 1,000명이다. 파일은 읽고 편집할 수 있으며 source metadata는 provenance로만
+사용한다. Riot account/PUUID,
+privacy, champion preference, game/win counter, Discord role/channel, dummy user와 내전 history를 client가
+추가하거나 표시하지 않는다.
+
+가져오기는 JSON file 하나를 선택한 뒤 `POST /api/guilds/:guildId/data-imports/preview`에
+`{ archive }`를 보낸다. response의 다음 snapshot만 검토 화면의 source of truth다.
+
+```text
+importId
+digest
+expiresAt
+source
+summary
+  archiveMembers
+  matchedMembers
+  laneEntries
+  changes
+conflicts[]
+  reason
+  message
+  discordId
+  displayName
+targetRevision
+```
+
+`conflicts`는 target guild에서 찾지 못한 active Discord member의 server reason/message를 그대로 표시한다.
+duplicate member/lane, canonical lane 누락, invalid MMR은 preview conflict가 아니라 `invalid_archive` 실패로
+표시한다. Client가 matched count나 변경 결과를 계산하거나 충돌을 숨기지 않는다. conflict가 있거나 preview가
+만료된 상태에서는 apply action을 disabled로 유지한다.
+
+apply는 같은 `importId` 경로에 `{ expectedDigest, expectedTargetRevision }`을 보내며 CSRF와 새
+`Idempotency-Key`를 포함한다. 성공 response의 `status=APPLIED`, `summary`, `targetRevision`을 보여 준 뒤
+선택 파일과 preview를 비운다. `revision_conflict`, `mmr_state_changed`, `invalid_mmr_transfer`, preview expiry 같은
+실패는 backend의 stable code/message/request ID를 그대로 표시하며 성공처럼 UI를 갱신하지 않는다. Data transfer는 WebSocket을
+열지 않으며, 새 import가 끝난 뒤 members/records가 필요하면 해당 화면이 HTTP snapshot을 다시 읽는다.
+
 ### `/g/[guildId]/admin/seasons`
 
 파일:
@@ -1083,6 +1148,9 @@ Riot ID이고 null은 미연결만 의미한다. Public/guild records 화면의 
 - `PUT /api/guilds/:guildId/settings`
 - `GET /api/guilds/:guildId/seasons`
 - `POST /api/guilds/:guildId/seasons`
+- `POST /api/guilds/:guildId/data-export`
+- `POST /api/guilds/:guildId/data-imports/preview`
+- `POST /api/guilds/:guildId/data-imports/:importId/apply`
 - `GET /api/guilds/:guildId/audit-logs`
 
 시즌 API는 settings payload와 revision에 포함하지 않는다. 감사 로그 page도 settings/members/seasons

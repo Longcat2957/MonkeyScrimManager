@@ -66,6 +66,7 @@ docs/09-backend-development-plan.md Axum/PostgreSQL 상세 실행계획
 docs/11-dummy-users.md          개발용 더미 사용자 신원, 관리, 기능 연결 계약
 docs/12-current-operating-contract.md 현재 구현 기준의 운영 계약
 docs/13-code-review-plan.md     현재 구현 기준의 코드 리뷰 계획
+docs/14-data-import-json-format.md 외부 시스템용 현재 시즌 MMR JSON 가져오기 규격
 deploy/README.md                VPS dev 배포 runbook
 docs/routing/frontend.md        Frontend route
 docs/routing/backend.md         Backend API route

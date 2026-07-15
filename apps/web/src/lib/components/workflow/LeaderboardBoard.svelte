@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Search, Trophy, UserRound } from 'lucide-svelte';
+	import { ChevronLeft, ChevronRight, Search, Trophy, UserRound } from 'lucide-svelte';
 	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
 	import type {
@@ -43,12 +43,13 @@
 	let { catalog, snapshot, loadError = null, onOpenPlayer }: Props = $props();
 	let selectedRole = $state<LeaderboardRole>('COMPOSITE');
 	let query = $state('');
-	let limit = $state(25);
+	let currentPage = $state(1);
 	let selectedPlayerId = $state<string | null>(null);
+	const pageSize = 25;
 
 	const players = $derived(snapshot?.players ?? []);
 	const rows = $derived(buildRows(selectedRole));
-	const visibleRows = $derived(
+	const filteredRows = $derived(
 		rows
 			.filter((row) => {
 				const needle = query.trim().toLocaleLowerCase();
@@ -58,8 +59,14 @@
 					(row.player.tag?.toLocaleLowerCase().includes(needle) ?? false)
 				);
 			})
-			.slice(0, limit)
 	);
+	const pageCount = $derived(Math.max(1, Math.ceil(filteredRows.length / pageSize)));
+	const activePage = $derived(Math.min(currentPage, pageCount));
+	const visibleRows = $derived(
+		filteredRows.slice((activePage - 1) * pageSize, activePage * pageSize)
+	);
+	const visibleStart = $derived(visibleRows[0]?.rank ?? 0);
+	const visibleEnd = $derived(visibleRows.at(-1)?.rank ?? 0);
 	const seasonLabel = $derived(
 		loadError ? '조회 실패' : (snapshot?.season?.name ?? '활성 시즌 없음')
 	);
@@ -116,6 +123,17 @@
 	function selectRole(role: LeaderboardRole) {
 		selectedRole = role;
 		query = '';
+		currentPage = 1;
+		selectedPlayerId = null;
+	}
+
+	function resetPagination() {
+		currentPage = 1;
+		selectedPlayerId = null;
+	}
+
+	function setPage(nextPage: number) {
+		currentPage = Math.max(1, Math.min(nextPage, pageCount));
 		selectedPlayerId = null;
 	}
 
@@ -141,10 +159,10 @@
 </script>
 
 <section
-	class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
+	class="flex h-full min-h-0 flex-1 flex-col overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
 >
 	<header
-		class="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
+		class="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
 	>
 		<div class="flex min-w-0 items-center gap-3">
 			<Trophy size={20} class="text-amber-300" aria-hidden="true" />
@@ -161,32 +179,19 @@
 				<Search size={15} class="shrink-0 text-slate-500" aria-hidden="true" />
 				<input
 					bind:value={query}
+					oninput={resetPagination}
 					type="search"
 					class="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
 					placeholder="플레이어 검색"
 					aria-label="플레이어 검색"
 				/>
 			</label>
-			<div class="flex rounded-sm border border-[var(--color-app-border)] p-0.5">
-				{#each [25, 50, 100] as option (option)}
-					<button
-						type="button"
-						class={`h-7 min-w-10 rounded-sm px-2 text-[10px] font-semibold ${
-							limit === option
-								? 'bg-cyan-400/12 text-cyan-100'
-								: 'text-slate-600 hover:text-slate-300'
-						}`}
-						aria-pressed={limit === option}
-						onclick={() => (limit = option)}
-					>
-						{option}
-					</button>
-				{/each}
-			</div>
 		</div>
 	</header>
 
-	<div class="flex min-w-0 overflow-x-auto border-b border-[var(--color-app-border)] px-3 pt-2">
+	<div
+		class="flex min-w-0 shrink-0 overflow-x-auto border-b border-[var(--color-app-border)] px-3 pt-2"
+	>
 		{#each roleOrder as role (role)}
 			<button
 				type="button"
@@ -207,10 +212,10 @@
 		{/each}
 	</div>
 
-	<div class="overflow-x-auto">
+	<div class="min-h-0 flex-1 overflow-auto overscroll-contain">
 		<div class="min-w-[940px]">
 			<div
-				class="grid grid-cols-[72px_minmax(240px,1fr)_110px_120px_100px_200px_100px] items-center border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-3 py-2 text-[10px] font-semibold text-slate-600"
+				class="sticky top-0 z-10 grid grid-cols-[72px_minmax(240px,1fr)_110px_120px_100px_200px_100px] items-center border-b border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-3 py-2 text-[10px] font-semibold text-slate-600"
 			>
 				<span>순위</span><span>플레이어</span><span class="text-right">MMR</span><span
 					class="text-right">전적</span
@@ -280,4 +285,41 @@
 			{/each}
 		</div>
 	</div>
+
+	<footer
+		class="flex min-h-12 shrink-0 items-center justify-between gap-3 border-t border-[var(--color-app-border)] px-4 py-2"
+	>
+		<p class="text-xs tabular-nums text-slate-500">
+			{#if filteredRows.length > 0}
+				{visibleStart}-{visibleEnd} / {filteredRows.length}명
+			{:else}
+				0명
+			{/if}
+		</p>
+		<div class="flex items-center gap-1.5">
+			<button
+				type="button"
+				class="grid size-8 place-items-center border border-[var(--color-app-border)] text-slate-400 hover:border-cyan-400/35 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-35"
+				aria-label="이전 페이지"
+				title="이전 페이지"
+				disabled={activePage <= 1}
+				onclick={() => setPage(activePage - 1)}
+			>
+				<ChevronLeft size={15} aria-hidden="true" />
+			</button>
+			<span class="min-w-12 text-center text-xs font-semibold tabular-nums text-slate-300">
+				{activePage} / {pageCount}
+			</span>
+			<button
+				type="button"
+				class="grid size-8 place-items-center border border-[var(--color-app-border)] text-slate-400 hover:border-cyan-400/35 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-35"
+				aria-label="다음 페이지"
+				title="다음 페이지"
+				disabled={activePage >= pageCount}
+				onclick={() => setPage(activePage + 1)}
+			>
+				<ChevronRight size={15} aria-hidden="true" />
+			</button>
+		</div>
+	</footer>
 </section>

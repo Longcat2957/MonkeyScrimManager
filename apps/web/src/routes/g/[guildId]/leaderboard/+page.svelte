@@ -18,9 +18,11 @@
 	<title>리더보드 | MonkeyBot</title>
 </svelte:head>
 
-<LeaderboardBoard
-	catalog={data.championCatalog}
-	snapshot={data.snapshot}
-	loadError={data.loadError}
-	onOpenPlayer={openPlayerRecords}
-/>
+<div class="flex min-h-0 flex-1 flex-col">
+	<LeaderboardBoard
+		catalog={data.championCatalog}
+		snapshot={data.snapshot}
+		loadError={data.loadError}
+		onOpenPlayer={openPlayerRecords}
+	/>
+</div>

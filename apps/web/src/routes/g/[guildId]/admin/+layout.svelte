@@ -1,17 +1,18 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { CalendarRange, FileClock, Settings, UsersRound } from 'lucide-svelte';
+	import { CalendarRange, FileClock, FolderInput, Settings, UsersRound } from 'lucide-svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import type { LayoutProps } from './$types';
 
-	type AdminSection = 'members' | 'settings' | 'logs' | 'seasons';
+	type AdminSection = 'members' | 'settings' | 'logs' | 'seasons' | 'data';
 
 	let { data, children }: LayoutProps = $props();
 
 	const guild = $derived(data.guild);
 	const adminPath = $derived(resolve('/g/[guildId]/admin', { guildId: data.guildId }));
 	const seasonsPath = $derived(resolve('/g/[guildId]/admin/seasons', { guildId: data.guildId }));
+	const dataPath = $derived(resolve('/g/[guildId]/admin/data', { guildId: data.guildId }));
 	const activeSection = $derived(
 		getActiveSection(page.url.pathname, page.url.searchParams.get('tab'))
 	);
@@ -39,6 +40,13 @@
 			href: seasonsPath
 		},
 		{
+			value: 'data' as const,
+			label: '데이터',
+			shortLabel: '데이터',
+			icon: FolderInput,
+			href: dataPath
+		},
+		{
 			value: 'logs' as const,
 			label: '감사 로그',
 			shortLabel: '로그',
@@ -49,6 +57,7 @@
 
 	function getActiveSection(pathname: string, tab: string | null): AdminSection {
 		if (pathname === seasonsPath || pathname.startsWith(`${seasonsPath}/`)) return 'seasons';
+		if (pathname === dataPath || pathname.startsWith(`${dataPath}/`)) return 'data';
 		if (tab === 'settings' || tab === 'logs') return tab;
 		return 'members';
 	}
@@ -67,7 +76,7 @@
 		>
 			{#snippet actions()}
 				<nav
-					class="grid w-full max-w-full grid-cols-4 border border-[var(--color-app-border)] bg-[var(--color-app-control)] p-1 sm:flex sm:w-auto"
+					class="grid w-full max-w-full grid-cols-5 border border-[var(--color-app-border)] bg-[var(--color-app-control)] p-1 sm:flex sm:w-auto"
 					aria-label="길드 관리 메뉴"
 				>
 					{#each tabs as tab (tab.value)}

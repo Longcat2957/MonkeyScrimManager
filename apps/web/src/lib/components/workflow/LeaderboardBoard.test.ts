@@ -67,4 +67,12 @@ describe('LeaderboardBoard', () => {
 		expect(source).toContain('ondblclick={() => openPlayerRecords(row.player.id)}');
 		expect(source).toContain('두 번 클릭하면 내전 전적 열기');
 	});
+
+	it('uses fixed local pagination instead of the former display-limit tabs', () => {
+		expect(source).toContain('const pageSize = 25');
+		expect(source).toContain('const pageCount = $derived');
+		expect(source).toContain('aria-label="이전 페이지"');
+		expect(source).toContain('aria-label="다음 페이지"');
+		expect(source).not.toContain('[25, 50, 100]');
+	});
 });
