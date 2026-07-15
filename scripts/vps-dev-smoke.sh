@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${MONKEYBOT_DEV_COMPOSE_FILE:-${ROOT_DIR}/deploy/docker-compose.dev.yml}"
 ENV_FILE="${MONKEYBOT_DEV_ENV_FILE:-${ROOT_DIR}/deploy/dev.env}"
+RIOT_SERVICE="${MONKEYBOT_RIOT_SERVICE_NAME:-riot-api-dev}"
 
 if [[ ! -f "${ENV_FILE}" ]]; then
 	printf 'Deployment env file does not exist: %s\n' "${ENV_FILE}" >&2
@@ -60,7 +61,7 @@ expect_status 'Public install' 200 "${public_origin}/install"
 expect_status 'Unauthenticated API contract' 401 "${public_origin}/api/me"
 expect_route_status 'WebSocket route' "${public_origin}/ws"
 
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T riot-api-dev \
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T "${RIOT_SERVICE}" \
 	curl --fail --silent --show-error http://127.0.0.1:8081/healthz >/dev/null
 printf 'Riot integration health HTTP 200\n'
 

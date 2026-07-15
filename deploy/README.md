@@ -1,7 +1,7 @@
-# VPS Dev Deployment Runbook
+# VPS Deployment Runbook
 
-이 디렉터리는 `dev.monkeybot.lol`의 MonkeyBot 전용 앱 배포만 정의한다. 실제 VPS에서 이미
-동작하는 mookbot stack, nginx, PostgreSQL은 이 Compose가 생성하거나 재시작하지 않는다.
+이 디렉터리는 `monkeybot.lol` main과 필요할 때의 `dev.monkeybot.lol` 개발 스택을 정의한다. 실제 VPS에서
+이미 동작하는 mookbot stack, nginx, PostgreSQL은 이 Compose가 생성하거나 재시작하지 않는다.
 
 ## Boundary
 
@@ -9,11 +9,38 @@
 
 - `/root/deploy`의 `nginx`, `web`, `api`, `bot`, `valkey`는 기존 mookbot 소유다. 이 디렉터리에서
   `docker compose up`, `down`, `restart`를 실행하지 않는다.
-- `/root/monkeybot-infra/postgres/docker-compose.remote.yml`의 `monkeybot-postgres`가 개발 DB의
-  유일한 owner다. 포트는 `127.0.0.1:10010`만 사용한다.
+- `/root/monkeybot-infra/postgres/docker-compose.remote.yml`의 `monkeybot-postgres`가 MonkeyBot
+  PostgreSQL cluster의 유일한 owner다. 포트는 `127.0.0.1:10010`만 사용한다.
 - MonkeyBot app stack은 별도 Git checkout(권장: `/root/monkeybot-dev`)에서
   `deploy/docker-compose.dev.yml` 하나만 사용한다. Compose 파일만 따로 복사하지 않는다.
-- main(`monkeybot.lol`) 배포는 별도 승인 전까지 만들거나 실행하지 않는다.
+- main은 `/root/monkeybot-main` checkout에서 `deploy/docker-compose.main.yml`만 사용한다.
+
+## Main Topology
+
+| Service                   | Network                         | Host port         | Purpose                                  |
+| ------------------------- | ------------------------------- | ----------------- | ---------------------------------------- |
+| `monkeybot-web-main`      | `deploy_default`                | `127.0.0.1:20010` | SvelteKit web                            |
+| `monkeybot-api-main`      | edge, data, app-owned Riot link | `127.0.0.1:20020` | Axum API and `/ws`                       |
+| `monkeybot-bot-main`      | `deploy_default`                | `127.0.0.1:20030` | Discord command, notification, heartbeat |
+| `monkeybot-riot-api-main` | app-owned Riot link             | none              | private Riot provider adapter            |
+| `monkeybot-valkey-main`   | `deploy_data`                   | none              | MonkeyBot-only realtime Pub/Sub          |
+
+Main uses the separate `monkeybot_main` database, `monkeybot_migrator_main` migration role, and
+`monkeybot_runtime_main` application role. Do not copy test or dummy data from `monkeybot_dev` into main.
+
+Copy `deploy/main.env.example` to `/root/monkeybot-main/deploy/main.env`. The four referenced runtime
+env files belong under `/root/monkeybot-infra` with mode `600`. Main always uses
+`MONKEYBOT_PUBLIC_ORIGIN=https://monkeybot.lol`, `MONKEYBOT_ENV=production`, and dummy users disabled.
+
+Main release order:
+
+1. Build and push all four images with the same full Git SHA.
+2. Provision the separate main database and roles, set passwords, and create the main runtime env files.
+3. Run `scripts/vps-main-preflight.sh`, then the one-shot `migrate-main` profile and `runtime-grants.sql`.
+4. Start `valkey-main`, `riot-api-main`, `api-main`, `web-main`, and `bot-main`; register global Discord commands.
+5. Install `deploy/nginx/sites/monkeybot.conf`, run `docker exec nginx nginx -t`, then reload nginx.
+6. Run `scripts/vps-main-smoke.sh` and complete a real Discord OAuth callback.
+7. Only after main passes, stop the dev services and remove `monkeybot-dev.conf` from nginx.
 
 ## Dev Topology
 
@@ -33,8 +60,8 @@ MonkeyBot Valkey는 기존 mookbot Valkey와 별도 process다. 이는 Redis와 
 
 `deploy_default`와 `deploy_data`는 VPS가 이미 가진 external Docker network다. app Compose는
 둘을 삭제하거나 새로 만들지 않는다. `deploy_data`는 intentionally internal이므로 API와 Riot adapter는
-app-owned `monkeybot-dev_riot-egress` bridge로만 서로 통신한다. Riot adapter는 이 network 하나만 쓰며,
-Riot HTTPS egress를 얻지만 host port나 mookbot access는 추가하지 않는다.
+app-owned `monkeybot-<environment>_riot-egress` bridge로만 서로 통신한다. Riot adapter는 이 network 하나만
+쓰며, Riot HTTPS egress를 얻지만 host port나 mookbot access는 추가하지 않는다.
 
 ## Release Images
 

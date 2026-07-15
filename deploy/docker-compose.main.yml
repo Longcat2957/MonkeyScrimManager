@@ -1,0 +1,161 @@
+name: monkeybot-main
+
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+services:
+  # MonkeyBot owns this Valkey instance only. PostgreSQL remains the source of truth.
+  valkey-main:
+    image: valkey/valkey:8-alpine
+    container_name: monkeybot-valkey-main
+    restart: unless-stopped
+    command: valkey-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy noeviction
+    expose:
+      - '6379'
+    networks:
+      - data
+    mem_limit: 128m
+    pids_limit: 128
+    logging: *json-logging
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  riot-api-main:
+    image: ${MONKEYBOT_RIOT_API_IMAGE:?set MONKEYBOT_RIOT_API_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    container_name: monkeybot-riot-api-main
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - path: ${MONKEYBOT_RIOT_RUNTIME_ENV:?set MONKEYBOT_RIOT_RUNTIME_ENV}
+        required: true
+    environment:
+      MONKEYBOT_RIOT_BIND_ADDR: 0.0.0.0:8081
+    networks:
+      - riot-egress
+    mem_limit: 256m
+    pids_limit: 256
+    logging: *json-logging
+
+  api-main:
+    image: ${MONKEYBOT_API_IMAGE:?set MONKEYBOT_API_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    container_name: monkeybot-api-main
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - path: ${MONKEYBOT_API_RUNTIME_ENV:?set MONKEYBOT_API_RUNTIME_ENV}
+        required: true
+    environment:
+      MONKEYBOT_ENV: production
+      MONKEYBOT_BIND_ADDR: 0.0.0.0:8080
+      MONKEYBOT_PUBLIC_ORIGIN: ${MONKEYBOT_PUBLIC_ORIGIN:?set MONKEYBOT_PUBLIC_ORIGIN}
+      MONKEYBOT_LOG_FILTER: monkeybot_api=info
+      MONKEYBOT_REQUEST_TIMEOUT_MS: '10000'
+      MONKEYBOT_SHUTDOWN_TIMEOUT_MS: '20000'
+      MONKEYBOT_MAX_BODY_BYTES: '1048576'
+      MONKEYBOT_DUMMY_USERS_ENABLED: 'false'
+      MONKEYBOT_VALKEY_URL: redis://monkeybot-valkey-main:6379/
+      MONKEYBOT_RIOT_SERVICE_URL: http://monkeybot-riot-api-main:8081/internal/riot/
+    ports:
+      - 127.0.0.1:${MONKEYBOT_API_PORT:?set MONKEYBOT_API_PORT}:8080
+    depends_on:
+      valkey-main:
+        condition: service_started
+      riot-api-main:
+        condition: service_started
+    networks:
+      - edge
+      - data
+      - riot-egress
+    mem_limit: 512m
+    pids_limit: 512
+    logging: *json-logging
+
+  migrate-main:
+    image: ${MONKEYBOT_API_IMAGE:?set MONKEYBOT_API_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    profiles: ['migration']
+    restart: 'no'
+    entrypoint: ['/usr/local/bin/monkeybot-migrate']
+    env_file:
+      - path: ${MONKEYBOT_MIGRATION_RUNTIME_ENV:?set MONKEYBOT_MIGRATION_RUNTIME_ENV}
+        required: true
+    networks:
+      - data
+    logging: *json-logging
+
+  web-main:
+    image: ${MONKEYBOT_WEB_IMAGE:?set MONKEYBOT_WEB_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    container_name: monkeybot-web-main
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment:
+      HOST: 0.0.0.0
+      PORT: '3002'
+      ORIGIN: ${MONKEYBOT_PUBLIC_ORIGIN:?set MONKEYBOT_PUBLIC_ORIGIN}
+      PUBLIC_APP_NAME: MonkeyBot
+      PUBLIC_WEB_ORIGIN: ${MONKEYBOT_PUBLIC_ORIGIN:?set MONKEYBOT_PUBLIC_ORIGIN}
+      API_BASE_URL: http://monkeybot-api-main:8080/api/
+      OAUTH_BASE_URL: http://monkeybot-api-main:8080/
+      DATA_DRAGON_BASE_URL: https://ddragon.leagueoflegends.com
+    ports:
+      - 127.0.0.1:${MONKEYBOT_WEB_PORT:?set MONKEYBOT_WEB_PORT}:3002
+    depends_on:
+      api-main:
+        condition: service_started
+    networks:
+      - edge
+    mem_limit: 256m
+    pids_limit: 256
+    logging: *json-logging
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3002/landing']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  bot-main:
+    image: ${MONKEYBOT_BOT_IMAGE:?set MONKEYBOT_BOT_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    container_name: monkeybot-bot-main
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - path: ${MONKEYBOT_BOT_RUNTIME_ENV:?set MONKEYBOT_BOT_RUNTIME_ENV}
+        required: true
+    environment:
+      MONKEYBOT_ENV: production
+      MONKEYBOT_BOT_API_BASE_URL: http://monkeybot-api-main:8080
+      MONKEYBOT_WEB_ORIGIN: ${MONKEYBOT_PUBLIC_ORIGIN:?set MONKEYBOT_PUBLIC_ORIGIN}
+      MONKEYBOT_BOT_HEALTH_ADDR: 0.0.0.0:8081
+      MONKEYBOT_BOT_API_TIMEOUT_MS: '10000'
+      MONKEYBOT_BOT_HEARTBEAT_INTERVAL_MS: '30000'
+      MONKEYBOT_BOT_NOTIFICATION_POLL_INTERVAL_MS: '1000'
+      MONKEYBOT_BOT_LOG_LEVEL: info
+      MONKEYBOT_BOT_VERSION: ${MONKEYBOT_RELEASE_TAG:?set}
+      MONKEYBOT_BOT_COMMIT_SHA: ${MONKEYBOT_RELEASE_TAG:?set}
+    ports:
+      - 127.0.0.1:${MONKEYBOT_BOT_HEALTH_PORT:?set MONKEYBOT_BOT_HEALTH_PORT}:8081
+    depends_on:
+      api-main:
+        condition: service_started
+    networks:
+      - edge
+    mem_limit: 384m
+    pids_limit: 256
+    logging: *json-logging
+
+networks:
+  edge:
+    external: true
+    name: ${MONKEYBOT_EDGE_NETWORK:-deploy_default}
+  data:
+    external: true
+    name: ${MONKEYBOT_DATA_NETWORK:-deploy_data}
+  riot-egress:
+    internal: false

@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${MONKEYBOT_DEV_COMPOSE_FILE:-${ROOT_DIR}/deploy/docker-compose.dev.yml}"
 ENV_FILE="${MONKEYBOT_DEV_ENV_FILE:-${ROOT_DIR}/deploy/dev.env}"
 CHECK_IMAGES="${MONKEYBOT_CHECK_IMAGES:-0}"
+DEPLOYMENT_NAME="${MONKEYBOT_DEPLOYMENT_NAME:-dev}"
 
 if [[ ! -f "${COMPOSE_FILE}" ]]; then
 	printf 'Compose file does not exist: %s\n' "${COMPOSE_FILE}" >&2
@@ -198,4 +199,4 @@ if [[ "${CHECK_IMAGES}" == "1" ]]; then
 	done
 fi
 
-printf 'MonkeyBot dev preflight passed for release %s\n' "${MONKEYBOT_RELEASE_TAG}"
+printf 'MonkeyBot %s preflight passed for release %s\n' "${DEPLOYMENT_NAME}" "${MONKEYBOT_RELEASE_TAG}"
