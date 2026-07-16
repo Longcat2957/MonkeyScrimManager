@@ -11,7 +11,8 @@
 		UserRoundPlus
 	} from 'lucide-svelte';
 
-	const loginHref = `${resolve('/oauth/[...path]', { path: 'discord/start' })}?${new URLSearchParams({ next: '/' })}`;
+	const loginHref = `${resolve('/oauth/[...path]', { path: 'discord/start' })}?${new globalThis.URLSearchParams({ next: '/' })}`;
+	const installHref = 'https://discord.com/oauth2/authorize?client_id=1525847677542207548';
 
 	const setupSteps = [
 		{
@@ -155,6 +156,15 @@
 							<p class="text-xs font-semibold text-cyan-200">STEP {selectedStep + 1}</p>
 							<h2 class="mt-1 text-lg font-semibold text-slate-50">{activeStep.title}</h2>
 							<p class="mt-3 text-sm leading-6 text-slate-400">{activeStep.description}</p>
+							{#if selectedStep === 0}
+								<a
+									href={installHref}
+									class="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-cyan-300 px-4 text-sm font-semibold text-slate-950 hover:bg-cyan-200"
+								>
+									Discord 서버에 설치
+									<ArrowRight size={16} aria-hidden="true" />
+								</a>
+							{/if}
 						</div>
 					</div>
 
