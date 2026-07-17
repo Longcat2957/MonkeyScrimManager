@@ -19,7 +19,7 @@ use crate::domain::DiscordUserId;
 const DEFAULT_LOG_FILTER: &str = "monkeybot_api=info";
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 20_000;
-const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+const DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_DATABASE_MAX_CONNECTIONS: u64 = 10;
 const DEFAULT_DATABASE_MIN_CONNECTIONS: u64 = 1;
 const DEFAULT_DATABASE_ACQUIRE_TIMEOUT_MS: u64 = 1_000;
@@ -433,7 +433,9 @@ impl AuthConfig {
         lookup: &mut impl FnMut(&str) -> Option<String>,
         environment: Environment,
     ) -> Result<Option<Self>, ConfigError> {
-        let client_id =
+        let application_id =
+            lookup("MONKEYBOT_DISCORD_APPLICATION_ID").filter(|value| !value.trim().is_empty());
+        let legacy_client_id =
             lookup("MONKEYBOT_DISCORD_CLIENT_ID").filter(|value| !value.trim().is_empty());
         let client_secret =
             lookup("MONKEYBOT_DISCORD_CLIENT_SECRET").filter(|value| !value.trim().is_empty());
@@ -441,19 +443,35 @@ impl AuthConfig {
             lookup("MONKEYBOT_OAUTH_ENCRYPTION_KEY").filter(|value| !value.trim().is_empty());
 
         if environment == Environment::Test
-            && client_id.is_none()
+            && application_id.is_none()
+            && legacy_client_id.is_none()
             && client_secret.is_none()
             && encryption_key.is_none()
         {
             return Ok(None);
         }
 
-        let discord_client_id = client_id.ok_or(ConfigError::Missing {
-            key: "MONKEYBOT_DISCORD_CLIENT_ID",
-        })?;
-        DiscordUserId::parse(discord_client_id.clone()).map_err(|_| {
-            ConfigError::invalid("MONKEYBOT_DISCORD_CLIENT_ID", "must be a Discord snowflake")
-        })?;
+        if application_id
+            .as_ref()
+            .zip(legacy_client_id.as_ref())
+            .is_some_and(|(application_id, legacy_client_id)| application_id != legacy_client_id)
+        {
+            return Err(ConfigError::invalid(
+                "MONKEYBOT_DISCORD_APPLICATION_ID",
+                "must match MONKEYBOT_DISCORD_CLIENT_ID when both are set",
+            ));
+        }
+        let (discord_client_id, application_id_key) = match (application_id, legacy_client_id) {
+            (Some(application_id), _) => (application_id, "MONKEYBOT_DISCORD_APPLICATION_ID"),
+            (None, Some(legacy_client_id)) => (legacy_client_id, "MONKEYBOT_DISCORD_CLIENT_ID"),
+            (None, None) => {
+                return Err(ConfigError::Missing {
+                    key: "MONKEYBOT_DISCORD_APPLICATION_ID",
+                });
+            }
+        };
+        DiscordUserId::parse(discord_client_id.clone())
+            .map_err(|_| ConfigError::invalid(application_id_key, "must be a Discord snowflake"))?;
         let discord_client_secret =
             SecretString::from(client_secret.ok_or(ConfigError::Missing {
                 key: "MONKEYBOT_DISCORD_CLIENT_SECRET",
@@ -927,7 +945,7 @@ mod tests {
         assert!(!config.dummy_users_enabled());
         assert_eq!(config.request_timeout(), Duration::from_secs(10));
         assert_eq!(config.shutdown_timeout(), Duration::from_secs(20));
-        assert_eq!(config.max_body_bytes(), 1024 * 1024);
+        assert_eq!(config.max_body_bytes(), 16 * 1024 * 1024);
         assert!(config.database().is_none());
         assert!(config.bot_service().is_none());
         assert!(config.riot_service().is_none());
@@ -1094,6 +1112,10 @@ mod tests {
         let mut values = valid_values();
         values.extend([
             (
+                "MONKEYBOT_DISCORD_APPLICATION_ID".to_owned(),
+                "100000000000000001".to_owned(),
+            ),
+            (
                 "MONKEYBOT_DISCORD_CLIENT_ID".to_owned(),
                 "100000000000000001".to_owned(),
             ),
@@ -1128,6 +1150,37 @@ mod tests {
         let output = format!("{config:?}");
         assert!(!output.contains("discord-client-secret"));
         assert!(!output.contains(&URL_SAFE_NO_PAD.encode([7_u8; 32])));
+    }
+
+    #[test]
+    fn rejects_mismatched_canonical_and_legacy_discord_application_ids() {
+        let mut values = valid_values();
+        values.extend([
+            (
+                "MONKEYBOT_DISCORD_APPLICATION_ID".to_owned(),
+                "100000000000000001".to_owned(),
+            ),
+            (
+                "MONKEYBOT_DISCORD_CLIENT_ID".to_owned(),
+                "100000000000000002".to_owned(),
+            ),
+            (
+                "MONKEYBOT_DISCORD_CLIENT_SECRET".to_owned(),
+                "discord-client-secret".to_owned(),
+            ),
+            (
+                "MONKEYBOT_OAUTH_ENCRYPTION_KEY".to_owned(),
+                URL_SAFE_NO_PAD.encode([7_u8; 32]),
+            ),
+        ]);
+
+        assert!(matches!(
+            Config::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: "MONKEYBOT_DISCORD_APPLICATION_ID",
+                ..
+            })
+        ));
     }
 
     #[test]

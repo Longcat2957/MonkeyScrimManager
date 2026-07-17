@@ -2,11 +2,17 @@
 
 -- Run this while connected as the migration role after all core migrations.
 -- Required psql variable: runtime_role
+-- Optional psql variable: service_admin_reset_enabled (default: false; development only)
 
 \if :{?runtime_role}
 \else
   \echo 'runtime_role is required'
   \quit 3
+\endif
+
+\if :{?service_admin_reset_enabled}
+\else
+  \set service_admin_reset_enabled false
 \endif
 
 BEGIN;
@@ -32,6 +38,20 @@ REVOKE UPDATE, DELETE, TRUNCATE
              public.admin_audit_log,
              public.dummy_user_audit_log
     FROM :"runtime_role";
+
+-- Direct ledger/audit deletion remains denied. The guarded non-production service-admin reset
+-- route receives only this narrow, guild-scoped capability.
+REVOKE ALL PRIVILEGES
+    ON FUNCTION public.service_admin_reset_guild_records(text)
+    FROM PUBLIC;
+REVOKE ALL PRIVILEGES
+    ON FUNCTION public.service_admin_reset_guild_records(text)
+    FROM :"runtime_role";
+\if :service_admin_reset_enabled
+  GRANT EXECUTE
+      ON FUNCTION public.service_admin_reset_guild_records(text)
+      TO :"runtime_role";
+\endif
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
     REVOKE ALL PRIVILEGES ON TABLES FROM :"runtime_role";

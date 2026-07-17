@@ -101,7 +101,11 @@ Arch Linux에서 VS Code `rust-analyzer`를 사용하려면 먼저 `sudo pacman 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-docker compose --env-file deploy/dev.env.example -f deploy/docker-compose.dev.yml config
+MONKEYBOT_API_RUNTIME_ENV=./api/runtime.env.example \
+MONKEYBOT_MIGRATION_RUNTIME_ENV=./api/migration.env.example \
+MONKEYBOT_RIOT_RUNTIME_ENV=./riot-api/runtime.env.example \
+MONKEYBOT_BOT_RUNTIME_ENV=./bot/runtime.env.example \
+  docker compose --env-file deploy/dev.env.example -f deploy/docker-compose.dev.yml config
 ```
 
 실제 PostgreSQL 통합 테스트는 Docker로 PostgreSQL 18.4를 자동 실행한다. 복구 smoke는 권한을 제한한
@@ -119,17 +123,44 @@ SSH 터널의 별도 포트 `127.0.0.1:15432`로 접속한다.
 scripts/vps-db-tunnel.sh
 ```
 
-Host에서 migration이나 API를 실행할 때는 ignored `.env.local`을 명시적으로 source한다. Axum은
-env 파일을 자동으로 읽지 않는다. `.env.local`의 database URL은 모두 `127.0.0.1:15432`를
-가리켜야 한다.
+Host의 migration, API, Bot runtime 값은 ignored `.local/env/dev` 아래에 process별로 분리한다. 실제 파일은
+`deploy/local/*.env.example`에서 만들고 mode `600`을 유지한다. Repository root `.env.local`에는 Web과
+same-origin proxy 값만 둔다. 전체 Discord application 경계는
+[`docs/15-discord-environment-operations.md`](docs/15-discord-environment-operations.md)를 따른다.
+
+```bash
+install -d -m 700 .local/env/dev
+install -m 600 deploy/local/discord.env.example .local/env/dev/discord.env
+install -m 600 deploy/local/api.env.example .local/env/dev/api.env
+install -m 600 deploy/local/bot.env.example .local/env/dev/bot.env
+install -m 600 deploy/local/migration.env.example .local/env/dev/migration.env
+```
+
+Migration과 API를 직접 실행할 때는 필요한 파일만 명시적으로 source한다. 모든 local database URL은
+`127.0.0.1:15432`를 가리켜야 한다.
 
 ```bash
 set -a
-. ./.env.local
+. ./.local/env/dev/migration.env
 set +a
-
 cargo run --locked -p monkeybot-api --bin monkeybot-migrate
+
+set -a
+. ./.local/env/dev/discord.env
+. ./.local/env/dev/api.env
+set +a
+scripts/local-discord-preflight.sh
 cargo run --locked -p monkeybot-api --bin monkeybot-api
+```
+
+로컬 API user service도 분리된 두 runtime 파일만 읽는다. 파일 입력과 preflight가 끝난 뒤 예제 unit을
+설치한다.
+
+```bash
+install -d -m 700 "$HOME/.config/systemd/user"
+install -m 644 deploy/systemd/monkeybot-api-local.service.example \
+  "$HOME/.config/systemd/user/monkeybot-api-local.service"
+systemctl --user daemon-reload
 ```
 
 `0012_user_identity_kinds.sql`을 처음 적용하는 기존 database에서는 column rename 동안 구 Axum binary가
@@ -137,6 +168,9 @@ cargo run --locked -p monkeybot-api --bin monkeybot-api
 
 ```bash
 systemctl --user stop monkeybot-api-local.service
+set -a
+. ./.local/env/dev/migration.env
+set +a
 cargo run --locked -p monkeybot-api --bin monkeybot-migrate
 scripts/local-api-reload.sh '/api/me'
 ```

@@ -44,6 +44,9 @@ const ADMIN_SESSION: &str = "service-status-admin-session";
 const ADMIN_CSRF: &str = "service-status-admin-csrf";
 const MEMBER_SESSION: &str = "service-status-member-session";
 const MEMBER_CSRF: &str = "service-status-member-csrf";
+const RESET_GUILD_ID: &str = "800000000000000001";
+const RESET_PATH: &str = "/api/admin/guilds/800000000000000001/record-reset";
+const RESET_CONFIRMATION: &str = "RESET 800000000000000001";
 
 type TestResult<T = ()> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -241,6 +244,9 @@ async fn run_flow() -> TestResult {
         "마지막 heartbeat가 5분을 초과했거나 아직 수신되지 않았습니다."
     );
 
+    seed_reset_target(&pool).await?;
+    assert_record_reset_flow(&app, &pool).await?;
+
     Ok(())
 }
 
@@ -256,6 +262,368 @@ fn service_array<'a>(body: &'a Value, key: &str) -> &'a Value {
         .as_array()
         .expect("status response services");
     service(services, key)
+}
+
+async fn seed_reset_target(pool: &sqlx::PgPool) -> TestResult {
+    let now = OffsetDateTime::now_utc();
+    let season_id = Uuid::now_v7();
+    let recruitment_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO guilds (
+             guild_id, discord_name, icon_hash, status, installed_by,
+             installed_at, activated_at, left_at, updated_at
+         ) VALUES ($1, 'Reset Target', NULL, 'ACTIVE', $2, $3, $3, NULL, $3)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_members (
+             guild_id, user_id, display_name, status, main_lane, first_seen_at,
+             registered_at, discord_joined_at, last_active_at, last_synced_at, inactivated_at
+         ) VALUES ($1, $2, 'Reset Target Member', 'ACTIVE', 'TOP', $3, $3, NULL, $3, NULL, NULL)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_config (
+             guild_id, display_name, operator_role_id, recruitment_channel_id,
+             log_channel_id, is_externally_public, revision, updated_by, updated_at
+         ) VALUES ($1, 'Reset Target Display', '700000000000000001', NULL, NULL, false, 0, $2, $3)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_admin_state (guild_id, scope, revision, updated_by, updated_at)
+         VALUES ($1, 'MEMBERS', 4, $2, $3), ($1, 'OPERATIONS', 9, $2, $3)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO seasons (
+             guild_id, id, name, status, started_at, ended_at, created_by, created_at
+         ) VALUES ($1, $2, '테스트 시즌', 'ACTIVE', $3, NULL, $4, $3)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(season_id)
+    .bind(now)
+    .bind(MEMBER_ID)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_counters (guild_id, counter_key, next_value)
+         SELECT $1, key, 7
+         FROM unnest(ARRAY['RECRUITMENT', 'SERIES', 'AUCTION_RECRUITMENT', 'AUCTION_TOURNAMENT']) AS key",
+    )
+    .bind(RESET_GUILD_ID)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO recruitments (
+             guild_id, id, season_id, display_number, title, target_count, status, revision,
+             channel_id, message_id, created_by, created_at, updated_by, updated_at,
+             closed_at, converted_at, cancelled_at
+         ) VALUES ($1, $2, $3, 6, '초기화 대상 모집', 10, 'OPEN', 0,
+                   NULL, NULL, $4, $5, NULL, $5, NULL, NULL, NULL)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(recruitment_id)
+    .bind(season_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO recruitment_participants (
+             guild_id, recruitment_id, user_id, status, joined_at, withdrawn_at
+         ) VALUES ($1, $2, $3, 'JOINED', $4, NULL)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(recruitment_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO recruitment_preferred_lanes (
+             guild_id, recruitment_id, user_id, priority, lane
+         ) VALUES ($1, $2, $3, 1, 'TOP')",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(recruitment_id)
+    .bind(MEMBER_ID)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO recruitment_entry_drafts (
+             guild_id, recruitment_id, revision, updated_by, updated_at
+         ) VALUES ($1, $2, 0, $3, $4)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(recruitment_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO recruitment_entry_assignments (
+             guild_id, recruitment_id, user_id, team, lane
+         ) VALUES ($1, $2, $3, 'TEAM_1', 'TOP')",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(recruitment_id)
+    .bind(MEMBER_ID)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO user_lane_mmr (
+             guild_id, season_id, user_id, lane, mmr, games_played, wins, revision, updated_at
+         ) VALUES ($1, $2, $3, 'TOP', 1530, 2, 1, 1, $4)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(season_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO admin_audit_log (
+             guild_id, id, principal_type, principal_id, action, target_type, target_id,
+             checkpoint_id, request_id, before_summary, after_summary, result, note, created_at
+         ) VALUES ($1, $2, 'USER', $3, 'TEST_ACTION', 'GUILD', $1,
+                   NULL, 'reset-seed', NULL, NULL, 'APPLIED', NULL, $4)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(Uuid::now_v7())
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO outbox_events (
+             id, guild_id, topic, aggregate_type, aggregate_id, aggregate_revision,
+             event_type, payload, occurred_at, available_at
+         ) VALUES ($1, $2, 'test', 'RECRUITMENT', $3, 0, 'TEST_EVENT', '{}'::jsonb, $4, $4)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(RESET_GUILD_ID)
+    .bind(recruitment_id.to_string())
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_full_data_imports (
+             guild_id, id, actor_id, status, archive_digest, archive_payload,
+             source_guild_id, target_state_digest, summary, conflicts, conflict_count,
+             request_id, created_at, expires_at, applied_at
+         ) VALUES ($1, $2, $3, 'APPLIED', $4, NULL,
+                   '800000000000000002', $4, '{}'::jsonb, '[]'::jsonb, 0,
+                   'reset-import-seed', $5, $6, $5)",
+    )
+    .bind(RESET_GUILD_ID)
+    .bind(Uuid::now_v7())
+    .bind(MEMBER_ID)
+    .bind(vec![0_u8; 32])
+    .bind(now)
+    .bind(now + time::Duration::hours(1))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn assert_record_reset_flow(app: &Router, pool: &sqlx::PgPool) -> TestResult {
+    let unauthenticated = app
+        .clone()
+        .oneshot(Request::get(RESET_PATH).body(Body::empty())?)
+        .await?;
+    assert_error(
+        unauthenticated,
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "인증이 필요합니다.",
+    )
+    .await?;
+
+    let non_admin = browser_get_path(app, RESET_PATH, MEMBER_SESSION).await?;
+    assert_error(
+        non_admin,
+        StatusCode::FORBIDDEN,
+        "service_admin_required",
+        "서비스 관리자 권한이 필요합니다.",
+    )
+    .await?;
+
+    let preview = body_json(browser_get_path(app, RESET_PATH, ADMIN_SESSION).await?).await?;
+    assert_eq!(preview["data"]["guildId"], RESET_GUILD_ID);
+    assert_eq!(preview["data"]["displayName"], "Reset Target Display");
+    assert_eq!(preview["data"]["memberCount"], 1);
+    assert_eq!(preview["data"]["confirmation"], RESET_CONFIRMATION);
+    assert_eq!(preview["data"]["counts"]["recruitments"], 1);
+    assert_eq!(preview["data"]["counts"]["mmrRows"], 1);
+    assert_eq!(preview["data"]["counts"]["importJobs"], 1);
+
+    let missing_csrf = browser_reset_post(
+        app,
+        ADMIN_SESSION,
+        ADMIN_CSRF,
+        false,
+        RESET_CONFIRMATION,
+        Uuid::now_v7(),
+    )
+    .await?;
+    assert_error(
+        missing_csrf,
+        StatusCode::FORBIDDEN,
+        "csrf_validation_failed",
+        "요청 출처를 확인할 수 없습니다.",
+    )
+    .await?;
+
+    let wrong_confirmation = browser_reset_post(
+        app,
+        ADMIN_SESSION,
+        ADMIN_CSRF,
+        true,
+        "RESET wrong-server",
+        Uuid::now_v7(),
+    )
+    .await?;
+    assert_error(
+        wrong_confirmation,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "reset_confirmation_mismatch",
+        "확인 문구가 대상 서버와 일치하지 않습니다.",
+    )
+    .await?;
+
+    let idempotency_key = Uuid::now_v7();
+    let reset = browser_reset_post(
+        app,
+        ADMIN_SESSION,
+        ADMIN_CSRF,
+        true,
+        RESET_CONFIRMATION,
+        idempotency_key,
+    )
+    .await?;
+    assert_eq!(reset.status(), StatusCode::OK);
+    let reset = body_json(reset).await?;
+    assert_eq!(reset["data"]["deleted"]["recruitments"], 1);
+    assert_eq!(reset["data"]["deleted"]["mmrRows"], 1);
+    assert_eq!(reset["data"]["deleted"]["importJobs"], 1);
+    assert_eq!(reset["data"]["freshSeason"]["name"], "테스트 시즌");
+    let fresh_season_id = reset["data"]["freshSeason"]["id"].clone();
+
+    let replay = body_json(
+        browser_reset_post(
+            app,
+            ADMIN_SESSION,
+            ADMIN_CSRF,
+            true,
+            RESET_CONFIRMATION,
+            idempotency_key,
+        )
+        .await?,
+    )
+    .await?;
+    assert_eq!(replay["data"]["freshSeason"]["id"], fresh_season_id);
+
+    let remaining: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT count(*) FROM recruitments WHERE guild_id = $1),
+             (SELECT count(*) FROM user_lane_mmr WHERE guild_id = $1),
+             (SELECT count(*) FROM admin_audit_log WHERE guild_id = $1),
+             (SELECT count(*) FROM outbox_events WHERE guild_id = $1),
+             (SELECT count(*) FROM guild_full_data_imports WHERE guild_id = $1),
+             (SELECT count(*) FROM guild_members WHERE guild_id = $1)",
+    )
+    .bind(RESET_GUILD_ID)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(remaining, (0, 0, 0, 0, 0, 1));
+    let season: (i64, String) = sqlx::query_as(
+        "SELECT count(*), max(name)::text
+         FROM seasons
+         WHERE guild_id = $1 AND status = 'ACTIVE'",
+    )
+    .bind(RESET_GUILD_ID)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(season, (1, "테스트 시즌".to_owned()));
+    let counters: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), sum(next_value)::bigint FROM guild_counters WHERE guild_id = $1",
+    )
+    .bind(RESET_GUILD_ID)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(counters, (4, 4));
+    let admin_revisions: Vec<(String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT scope, revision, updated_by
+         FROM guild_admin_state
+         WHERE guild_id = $1
+         ORDER BY scope",
+    )
+    .bind(RESET_GUILD_ID)
+    .fetch_all(pool)
+    .await?;
+    assert_eq!(
+        admin_revisions,
+        vec![
+            ("MEMBERS".to_owned(), 5, None),
+            ("OPERATIONS".to_owned(), 10, None),
+        ]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guild_config WHERE guild_id = $1")
+            .bind(RESET_GUILD_ID)
+            .fetch_one(pool)
+            .await?,
+        1
+    );
+    Ok(())
+}
+
+async fn browser_get_path(app: &Router, path: &str, session: &str) -> TestResult<Response<Body>> {
+    let request = Request::get(path)
+        .header(header::COOKIE, format!("monkeybot_session={session}"))
+        .body(Body::empty())?;
+    Ok(app.clone().oneshot(request).await?)
+}
+
+async fn browser_reset_post(
+    app: &Router,
+    session: &str,
+    csrf: &str,
+    include_csrf_header: bool,
+    confirmation: &str,
+    idempotency_key: Uuid,
+) -> TestResult<Response<Body>> {
+    let mut request = Request::post(RESET_PATH)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, PUBLIC_ORIGIN)
+        .header("idempotency-key", idempotency_key.to_string())
+        .header(
+            header::COOKIE,
+            format!("monkeybot_session={session}; monkeybot_csrf={csrf}"),
+        );
+    if include_csrf_header {
+        request = request.header("x-csrf-token", csrf);
+    }
+    let request = request.body(Body::from(serde_json::to_vec(&json!({
+        "confirmation": confirmation
+    }))?))?;
+    Ok(app.clone().oneshot(request).await?)
 }
 
 async fn bot_post(app: &Router, path: &str, body: Value) -> TestResult<Response<Body>> {
@@ -329,6 +697,10 @@ fn test_config(database_url: String) -> TestResult<Config> {
         (
             "MONKEYBOT_PUBLIC_ORIGIN".to_owned(),
             PUBLIC_ORIGIN.to_owned(),
+        ),
+        (
+            "MONKEYBOT_DUMMY_USERS_ENABLED".to_owned(),
+            "true".to_owned(),
         ),
         ("MONKEYBOT_DATABASE_URL".to_owned(), database_url),
         (

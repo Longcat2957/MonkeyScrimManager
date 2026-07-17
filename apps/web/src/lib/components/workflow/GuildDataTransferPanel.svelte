@@ -3,27 +3,29 @@
 	import {
 		AlertTriangle,
 		Check,
+		DatabaseBackup,
 		Download,
 		FileJson,
 		FileUp,
+		History,
 		LoaderCircle,
 		ShieldCheck,
 		Upload,
 		X
 	} from 'lucide-svelte';
 	import {
-		applyGuildMemberSeasonMmrSeedImport,
-		exportGuildMemberSeasonMmrSeed,
+		applyGuildFullSnapshotImport,
+		exportGuildFullSnapshot,
 		GuildDataTransferApiError,
-		previewGuildMemberSeasonMmrSeedImport,
-		serializeGuildMemberSeasonMmrSeedArchive
+		previewGuildFullSnapshotImport,
+		serializeGuildFullSnapshotArchive
 	} from '$lib/api/guildDataTransfer';
 	import {
-		memberSeasonMmrSeedMaxMembers,
-		memberSeasonMmrSeedArchiveSchema,
-		type GuildDataTransferPreview,
-		type MemberSeasonMmrSeedArchive
-	} from '$lib/contracts/guildDataTransfer';
+		guildFullSnapshotArchiveSchema,
+		guildFullSnapshotMaxBytes,
+		type GuildFullDataTransferPreview,
+		type GuildFullSnapshotArchive
+	} from '$lib/contracts/guildFullDataTransfer';
 
 	interface Props {
 		guildId: string;
@@ -36,8 +38,8 @@
 
 	let archiveInput = $state<globalThis.HTMLInputElement>();
 	let selectedFileName = $state<string | null>(null);
-	let selectedArchive = $state<MemberSeasonMmrSeedArchive | null>(null);
-	let preview = $state<GuildDataTransferPreview | null>(null);
+	let selectedArchive = $state<GuildFullSnapshotArchive | null>(null);
+	let preview = $state<GuildFullDataTransferPreview | null>(null);
 	let exportError = $state('');
 	let importError = $state('');
 	let notice = $state('');
@@ -51,14 +53,14 @@
 	let previewClock = $state(Date.now());
 
 	const hasPreviewConflicts = $derived((preview?.conflicts.length ?? 0) > 0);
-	const hasChanges = $derived((preview?.summary.changes ?? 0) > 0);
+	const hasRows = $derived((preview?.summary.totalRows ?? 0) > 0);
 	const isPreviewExpired = $derived(
 		Boolean(preview) &&
 			(!Number.isFinite(Date.parse(preview?.expiresAt ?? '')) ||
 				Date.parse(preview?.expiresAt ?? '') <= previewClock)
 	);
 	const canOpenApplyDialog = $derived(
-		Boolean(preview) && !hasPreviewConflicts && hasChanges && !isPreviewExpired
+		Boolean(preview) && !hasPreviewConflicts && hasRows && !isPreviewExpired
 	);
 	const canApply = $derived(
 		canOpenApplyDialog && confirmationValue.trim() === guildName && !applying
@@ -85,8 +87,8 @@
 		exportError = '';
 		notice = '';
 		try {
-			const { archive, fileName } = await exportGuildMemberSeasonMmrSeed(guildId);
-			const blob = new Blob([serializeGuildMemberSeasonMmrSeedArchive(archive)], {
+			const { archive, fileName, summary } = await exportGuildFullSnapshot(guildId);
+			const blob = new Blob([serializeGuildFullSnapshotArchive(archive)], {
 				type: 'application/json;charset=utf-8'
 			});
 			const url = URL.createObjectURL(blob);
@@ -98,9 +100,9 @@
 			anchor.click();
 			anchor.remove();
 			URL.revokeObjectURL(url);
-			notice = 'MMR 백업 파일을 준비했습니다.';
+			notice = `전적과 MMR 이력을 포함한 ${formatCount(summary.totalRows)}개 행의 전체 백업을 준비했습니다.`;
 		} catch (cause) {
-			exportError = errorText(cause, 'MMR 백업을 만들지 못했습니다.');
+			exportError = errorText(cause, '전체 데이터 백업을 만들지 못했습니다.');
 		} finally {
 			exporting = false;
 		}
@@ -110,6 +112,15 @@
 		archiveInput?.click();
 	}
 
+	function resetPreviewState() {
+		preview = null;
+		previewClock = Date.now();
+		applyDialogOpen = false;
+		confirmationValue = '';
+		applyIntent = '';
+		applyIdempotencyKey = '';
+	}
+
 	async function loadArchiveFile(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
@@ -117,30 +128,18 @@
 
 		selectedFileName = file.name;
 		selectedArchive = null;
-		preview = null;
-		previewClock = Date.now();
+		resetPreviewState();
 		importError = '';
 		notice = '';
-		applyDialogOpen = false;
-		confirmationValue = '';
-		applyIntent = '';
-		applyIdempotencyKey = '';
 
 		try {
-			const payload: unknown = JSON.parse(await file.text());
-			if (
-				typeof payload === 'object' &&
-				payload !== null &&
-				Array.isArray((payload as { members?: unknown }).members) &&
-				(payload as { members: unknown[] }).members.length > memberSeasonMmrSeedMaxMembers
-			) {
-				throw new Error(
-					`MMR 백업 파일은 최대 ${memberSeasonMmrSeedMaxMembers.toLocaleString()}명까지 지원합니다.`
-				);
+			if (file.size > guildFullSnapshotMaxBytes) {
+				throw new Error('전체 백업 파일은 최대 16 MiB까지 지원합니다.');
 			}
-			const parsed = memberSeasonMmrSeedArchiveSchema.safeParse(payload);
+			const payload: unknown = JSON.parse(await file.text());
+			const parsed = guildFullSnapshotArchiveSchema.safeParse(payload);
 			if (!parsed.success) {
-				throw new Error('선택한 파일은 지원되는 MonkeyBot 멤버·시즌 MMR 백업 JSON이 아닙니다.');
+				throw new Error('선택한 파일은 지원되는 MonkeyBot 전체 데이터 백업 JSON이 아닙니다.');
 			}
 			selectedArchive = parsed.data;
 		} catch (cause) {
@@ -158,16 +157,11 @@
 		previewing = true;
 		importError = '';
 		notice = '';
-		preview = null;
-		previewClock = Date.now();
-		applyDialogOpen = false;
-		confirmationValue = '';
-		applyIntent = '';
-		applyIdempotencyKey = '';
+		resetPreviewState();
 		try {
-			preview = await previewGuildMemberSeasonMmrSeedImport(guildId, selectedArchive);
+			preview = await previewGuildFullSnapshotImport(guildId, selectedArchive);
 		} catch (cause) {
-			importError = errorText(cause, '가져오기 검증을 완료하지 못했습니다.');
+			importError = errorText(cause, '전체 데이터 가져오기 검증을 완료하지 못했습니다.');
 		} finally {
 			previewing = false;
 		}
@@ -186,7 +180,7 @@
 
 	async function applyImport() {
 		if (!preview || !canApply) return;
-		const intent = JSON.stringify([preview.importId, preview.digest, preview.targetRevision]);
+		const intent = JSON.stringify([preview.importId, preview.digest, preview.targetDigest]);
 		if (intent !== applyIntent) {
 			applyIntent = intent;
 			applyIdempotencyKey = globalThis.crypto.randomUUID();
@@ -196,13 +190,23 @@
 		importError = '';
 		notice = '';
 		try {
-			const result = await applyGuildMemberSeasonMmrSeedImport(guildId, {
+			const result = await applyGuildFullSnapshotImport(guildId, {
 				importId: preview.importId,
 				expectedDigest: preview.digest,
-				expectedTargetRevision: preview.targetRevision,
+				expectedTargetDigest: preview.targetDigest,
 				idempotencyKey: applyIdempotencyKey
 			});
-			notice = `${result.summary.changes}개 레인 MMR을 반영했습니다.`;
+			notice = `전적과 MMR 이력을 포함한 ${formatCount(result.summary.totalRows)}개 행을 반영했습니다.${
+				result.remappedSourceGuild ? ` 원본 길드 데이터를 ${guildName}에 재매핑했습니다.` : ''
+			}${
+				result.usedTargetActiveSeason
+					? ` 백업의 활성 시즌 데이터는 ${currentSeasonName}에 연결했습니다.`
+					: ''
+			}${
+				result.rebasedDisplayNumbers
+					? ' 기존 기록과 겹치지 않도록 내전 표시 번호를 이어 붙였습니다.'
+					: ''
+			}`;
 			applyDialogOpen = false;
 			confirmationValue = '';
 			selectedArchive = null;
@@ -210,7 +214,7 @@
 			preview = null;
 			previewClock = Date.now();
 		} catch (cause) {
-			importError = errorText(cause, '가져오기를 적용하지 못했습니다.');
+			importError = errorText(cause, '전체 데이터 가져오기를 적용하지 못했습니다.');
 		} finally {
 			applying = false;
 		}
@@ -234,6 +238,14 @@
 			hourCycle: 'h23'
 		}).format(new Date(value));
 	}
+
+	function formatCount(value: number): string {
+		return value.toLocaleString('ko-KR');
+	}
+
+	function selectedRowCount(archive: GuildFullSnapshotArchive): number {
+		return Object.values(archive.tables).reduce((total, rows) => total + rows.length, 0);
+	}
 </script>
 
 <Dialog.Root bind:open={applyDialogOpen}>
@@ -248,11 +260,11 @@
 					<span
 						class="grid size-8 shrink-0 place-items-center border border-cyan-400/20 bg-cyan-400/8 text-cyan-200"
 					>
-						<Download size={16} aria-hidden="true" />
+						<DatabaseBackup size={16} aria-hidden="true" />
 					</span>
 					<div class="min-w-0">
-						<h2 class="truncate text-sm font-semibold text-slate-50">데이터 내보내기</h2>
-						<p class="text-xs text-slate-500">현재 활성 멤버의 시즌 레인 MMR 백업</p>
+						<h2 class="truncate text-sm font-semibold text-slate-50">전체 데이터 내보내기</h2>
+						<p class="text-xs text-slate-500">멤버·시즌·전적·픽/밴·경매·MMR 원장·감사 기록</p>
 					</div>
 				</div>
 				<button
@@ -264,7 +276,7 @@
 					{#if exporting}
 						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 준비 중
 					{:else}
-						<Download size={14} aria-hidden="true" /> JSON 내보내기
+						<Download size={14} aria-hidden="true" /> 전체 JSON 내보내기
 					{/if}
 				</button>
 			</header>
@@ -282,18 +294,19 @@
 				class="grid divide-y divide-[var(--color-app-border-muted)] sm:grid-cols-2 sm:divide-x sm:divide-y-0"
 			>
 				<div class="px-4 py-3">
-					<span class="block text-[10px] font-semibold text-slate-600">내보낼 멤버</span>
+					<span class="block text-[10px] font-semibold text-slate-600">현재 활성 멤버</span>
 					<strong class="mt-1 block text-sm text-slate-100">{activeMemberCount}명</strong>
 				</div>
 				<div class="px-4 py-3">
-					<span class="block text-[10px] font-semibold text-slate-600">기준 시즌</span>
+					<span class="block text-[10px] font-semibold text-slate-600">현재 시즌</span>
 					<strong class="mt-1 block truncate text-sm text-slate-100">{currentSeasonName}</strong>
 				</div>
 			</div>
 			<p
 				class="border-t border-[var(--color-app-border-muted)] px-4 py-2.5 text-xs leading-5 text-slate-500"
 			>
-				암호화하지 않은 읽고 편집할 수 있는 JSON 파일입니다.
+				세션·OAuth 비밀값·Discord 동기화 캐시·Riot 조회 캐시는 제외합니다. 파일에는 개인정보와 운영
+				이력이 포함되므로 안전하게 보관하세요.
 			</p>
 		</section>
 
@@ -306,13 +319,12 @@
 				<div class="flex min-w-0 items-center gap-3">
 					<span
 						class="grid size-8 shrink-0 place-items-center border border-cyan-400/20 bg-cyan-400/8 text-cyan-200"
+						><Upload size={16} aria-hidden="true" /></span
 					>
-						<Upload size={16} aria-hidden="true" />
-					</span>
 					<div class="min-w-0">
-						<h2 class="truncate text-sm font-semibold text-slate-50">데이터 가져오기</h2>
+						<h2 class="truncate text-sm font-semibold text-slate-50">전체 데이터 가져오기</h2>
 						<p class="text-xs text-slate-500">
-							MonkeyBot 멤버·시즌 MMR 백업 JSON만 지원 · 최대 1,000명
+							길드 ID가 달라도 적용 가능한 GUILD_FULL_SNAPSHOT v1 JSON
 						</p>
 					</div>
 				</div>
@@ -329,10 +341,17 @@
 					type="file"
 					accept="application/json,.json"
 					class="sr-only"
-					aria-label="가져올 MonkeyBot MMR 백업 JSON 파일"
+					aria-label="가져올 MonkeyBot 전체 데이터 백업 JSON 파일"
 					onchange={(event) => void loadArchiveFile(event)}
 				/>
 			</header>
+
+			<div
+				class="border-b border-amber-300/15 bg-amber-400/5 px-4 py-2.5 text-xs leading-5 text-amber-100/80"
+			>
+				현재 활성 시즌에 전적·MMR·진행 데이터가 있으면 적용을 차단합니다. 닫힌 시즌 이력은 보존하며,
+				미리보기는 PostgreSQL 제약을 실제로 검사한 뒤 모두 롤백합니다.
+			</div>
 
 			{#if importError}
 				<p
@@ -348,18 +367,17 @@
 					<div class="flex min-w-0 items-center gap-2">
 						<FileJson size={16} class="shrink-0 text-slate-500" aria-hidden="true" />
 						<div class="min-w-0">
-							<strong class="block truncate text-xs text-slate-200">
-								{selectedFileName ?? '선택한 파일 없음'}
-							</strong>
+							<strong class="block truncate text-xs text-slate-200"
+								>{selectedFileName ?? '선택한 파일 없음'}</strong
+							>
 							{#if selectedArchive}
-								<span class="mt-0.5 block truncate text-[11px] text-slate-500">
-									{selectedArchive.source.guildName} · {selectedArchive.source.season.name} · {selectedArchive
-										.members.length}명
-								</span>
-							{:else}
-								<span class="mt-0.5 block text-[11px] text-slate-600"
-									>JSON 파일을 선택해 주세요.</span
+								<span class="mt-0.5 block truncate text-[11px] text-slate-500"
+									>{selectedArchive.source.guildName} · {formatCount(
+										selectedRowCount(selectedArchive)
+									)}개 행</span
 								>
+							{:else}
+								<span class="mt-0.5 block text-[11px] text-slate-600">최대 16 MiB JSON 파일</span>
 							{/if}
 						</div>
 					</div>
@@ -372,7 +390,7 @@
 						{#if previewing}
 							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 검증 중
 						{:else}
-							<ShieldCheck size={14} aria-hidden="true" /> 검증
+							<ShieldCheck size={14} aria-hidden="true" /> 안전성 검증
 						{/if}
 					</button>
 				</div>
@@ -381,84 +399,92 @@
 					<div class="grid gap-4 px-4 py-4">
 						<div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
 							<div class="min-w-0">
-								<span class="block text-[10px] font-semibold text-slate-600">가져올 원본</span>
-								<strong class="mt-1 block truncate text-sm text-slate-100">
-									{preview.source.guildName} · {preview.source.season.name}
-								</strong>
+								<span class="block text-[10px] font-semibold text-slate-600">검증한 원본</span>
+								<strong class="mt-1 block truncate text-sm text-slate-100"
+									>{preview.source.guildName}</strong
+								>
 								<p class="mt-1 text-xs text-slate-500">
-									{formatDateTime(preview.expiresAt)}까지 이 검증 결과를 적용할 수 있습니다.
+									{formatDateTime(preview.expiresAt)}까지 적용할 수 있습니다.
 								</p>
 							</div>
 							{#if hasPreviewConflicts}
-								<span class="inline-flex items-center gap-1 text-xs font-semibold text-amber-200">
-									<AlertTriangle size={14} aria-hidden="true" /> 충돌 {preview.conflicts.length}건
-								</span>
+								<span class="inline-flex items-center gap-1 text-xs font-semibold text-amber-200"
+									><AlertTriangle size={14} aria-hidden="true" /> 충돌 {preview.conflicts
+										.length}건</span
+								>
 							{:else if isPreviewExpired}
 								<span class="text-xs font-semibold text-amber-200">검증 결과 만료</span>
-							{:else if hasChanges}
-								<span class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-300">
-									<Check size={14} aria-hidden="true" /> 적용 가능
-								</span>
 							{:else}
-								<span class="text-xs font-semibold text-slate-500">변경할 MMR 없음</span>
+								<span class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-300"
+									><Check size={14} aria-hidden="true" /> 제약 검증 통과</span
+								>
 							{/if}
 						</div>
 
 						<dl
-							class="grid grid-cols-2 gap-px border border-[var(--color-app-border-muted)] bg-[var(--color-app-border-muted)] text-xs sm:grid-cols-4"
+							class="grid grid-cols-2 gap-px border border-[var(--color-app-border-muted)] bg-[var(--color-app-border-muted)] text-xs sm:grid-cols-3 lg:grid-cols-6"
 						>
-							<div class="min-w-0 bg-[var(--color-app-surface)] px-3 py-2.5">
-								<dt class="text-[10px] font-semibold text-slate-600">파일 멤버</dt>
-								<dd class="mt-1 text-sm font-semibold text-slate-200">
-									{preview.summary.archiveMembers}
-								</dd>
-							</div>
-							<div class="min-w-0 bg-[var(--color-app-surface)] px-3 py-2.5">
-								<dt class="text-[10px] font-semibold text-slate-600">매칭 멤버</dt>
-								<dd class="mt-1 text-sm font-semibold text-slate-200">
-									{preview.summary.matchedMembers}
-								</dd>
-							</div>
-							<div class="min-w-0 bg-[var(--color-app-surface)] px-3 py-2.5">
-								<dt class="text-[10px] font-semibold text-slate-600">레인 항목</dt>
-								<dd class="mt-1 text-sm font-semibold text-slate-200">
-									{preview.summary.laneEntries}
-								</dd>
-							</div>
-							<div class="min-w-0 bg-[var(--color-app-surface)] px-3 py-2.5">
-								<dt class="text-[10px] font-semibold text-slate-600">변경 예정</dt>
-								<dd class="mt-1 text-sm font-semibold text-cyan-100">{preview.summary.changes}</dd>
-							</div>
+							{#each [['전체 행', preview.summary.totalRows], ['멤버', preview.summary.members], ['일반 내전', preview.summary.series], ['경기 전적', preview.summary.games], ['경매 대회', preview.summary.auctionTournaments], ['MMR 원장', preview.summary.mmrLedgerEntries]] as item (item[0])}
+								<div class="min-w-0 bg-[var(--color-app-surface)] px-3 py-2.5">
+									<dt class="text-[10px] font-semibold text-slate-600">{item[0]}</dt>
+									<dd class="mt-1 text-sm font-semibold text-slate-200">
+										{formatCount(Number(item[1]))}
+									</dd>
+								</div>
+							{/each}
 						</dl>
 
-						{#if hasPreviewConflicts}
-							<div class="overflow-x-auto border border-amber-300/20">
-								<div class="min-w-[620px]">
-									<div
-										class="grid grid-cols-[130px_150px_140px_minmax(180px,1fr)] gap-x-3 border-b border-amber-300/15 bg-amber-400/5 px-3 py-2 text-[10px] font-semibold text-amber-200/75"
-									>
-										<span>Discord ID</span><span>멤버</span><span>사유</span><span>상세</span>
-									</div>
-									<div class="divide-y divide-amber-300/10">
-										{#each preview.conflicts as conflict (`${conflict.discordId}:${conflict.reason}`)}
-											<div
-												class="grid grid-cols-[130px_150px_140px_minmax(180px,1fr)] gap-x-3 px-3 py-2.5 text-xs"
-											>
-												<span class="truncate font-mono text-slate-500">{conflict.discordId}</span>
-												<span class="truncate text-slate-300">{conflict.displayName}</span>
-												<span class="truncate text-amber-200">{conflict.reason}</span>
-												<span class="break-words text-slate-400">{conflict.message}</span>
-											</div>
-										{/each}
-									</div>
-								</div>
-							</div>
-						{:else if !hasChanges}
-							<p
-								class="border border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-3 py-2.5 text-xs leading-5 text-slate-500"
+						{#if preview.remapsSourceGuild}
+							<div
+								class="flex items-start gap-2 border border-amber-300/20 bg-amber-400/5 px-3 py-2.5 text-xs text-amber-100"
 							>
-								현재 길드의 MMR과 동일합니다. 적용할 변경이 없습니다.
-							</p>
+								<AlertTriangle size={14} class="mt-0.5 shrink-0" aria-hidden="true" />
+								<p>
+									원본 {preview.source.guildName} ({preview.source.guildId})의 길드 데이터를 현재
+									대상
+									{guildName} ({guildId})로 재매핑합니다. 전적·MMR·대회 기록은 보존하고, 원본 길드의
+									모집글·결과 카드 채널/메시지 연결은 제거합니다. 현재 Discord 설정과 역할/채널
+									카탈로그는 덮어쓰지 않습니다.
+								</p>
+							</div>
+						{/if}
+
+						{#if preview.usesTargetActiveSeason && !hasPreviewConflicts}
+							<div
+								class="flex items-start gap-2 border border-amber-300/20 bg-amber-400/5 px-3 py-2.5 text-xs text-amber-100"
+							>
+								<AlertTriangle size={14} class="mt-0.5 shrink-0" aria-hidden="true" />
+								<p>
+									백업의 활성 시즌 데이터는 현재 활성 시즌인 {currentSeasonName}에 연결합니다. 현재
+									시즌 자체는 삭제하거나 새로 만들지 않습니다.
+								</p>
+							</div>
+						{/if}
+
+						{#if preview.rebasesDisplayNumbers && !hasPreviewConflicts}
+							<div
+								class="flex items-start gap-2 border border-amber-300/20 bg-amber-400/5 px-3 py-2.5 text-xs text-amber-100"
+							>
+								<AlertTriangle size={14} class="mt-0.5 shrink-0" aria-hidden="true" />
+								<p>
+									기존 닫힌 시즌의 내전 번호와 겹치지 않도록 가져오는 모집·일반전·경매 번호를 현재
+									번호 뒤로 이어 붙입니다.
+								</p>
+							</div>
+						{/if}
+
+						{#if hasPreviewConflicts}
+							<div class="divide-y divide-amber-300/10 border border-amber-300/20">
+								{#each preview.conflicts as conflict (`${conflict.reason}:${conflict.table ?? 'target'}`)}
+									<div
+										class="grid gap-1 px-3 py-2.5 text-xs sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:gap-3"
+									>
+										<span class="font-mono text-amber-200">{conflict.reason}</span>
+										<span class="text-slate-400">{conflict.message}</span>
+										<span class="text-slate-500">{formatCount(conflict.rowCount)}개 행</span>
+									</div>
+								{/each}
+							</div>
 						{/if}
 
 						<div class="flex justify-end">
@@ -468,7 +494,7 @@
 								onclick={openApplyDialog}
 								class="inline-flex h-9 items-center justify-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 hover:bg-amber-400/16 disabled:cursor-not-allowed disabled:opacity-35"
 							>
-								<Upload size={14} aria-hidden="true" /> 가져오기 적용
+								<Upload size={14} aria-hidden="true" /> 전체 데이터 적용
 							</button>
 						</div>
 					</div>
@@ -481,8 +507,7 @@
 				role="status"
 				class="flex items-center gap-1.5 border border-emerald-300/15 bg-emerald-400/5 px-3 py-2.5 text-xs font-semibold text-emerald-300"
 			>
-				<Check size={14} aria-hidden="true" />
-				{notice}
+				<Check size={14} aria-hidden="true" />{notice}
 			</p>
 		{/if}
 	</div>
@@ -497,25 +522,35 @@
 			<header
 				class="flex h-12 items-center justify-between border-b border-[var(--color-app-border)] px-4"
 			>
-				<Dialog.Title class="text-sm font-semibold text-slate-50">MMR 가져오기 확인</Dialog.Title>
+				<Dialog.Title class="text-sm font-semibold text-slate-50"
+					>전체 데이터 가져오기 확인</Dialog.Title
+				>
 				<Dialog.Close
 					disabled={applying}
 					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
-					aria-label="MMR 가져오기 확인 창 닫기"
+					aria-label="전체 데이터 가져오기 확인 창 닫기"
+					><X size={16} aria-hidden="true" /></Dialog.Close
 				>
-					<X size={16} aria-hidden="true" />
-				</Dialog.Close>
 			</header>
 			{#if preview}
 				<div class="grid gap-4 p-4">
 					<div class="border border-amber-300/20 bg-amber-400/6 px-3 py-3">
-						<strong class="block text-sm text-amber-100">
-							{preview.summary.changes}개 레인 MMR을 변경합니다.
-						</strong>
+						<strong class="flex items-center gap-1.5 text-sm text-amber-100"
+							><History size={15} aria-hidden="true" />{formatCount(preview.summary.totalRows)}개
+							행을 가져옵니다.</strong
+						>
 						<p class="mt-1 text-xs leading-5 text-slate-400">
-							대상 길드의 기존 활성 멤버만 Discord ID로 매칭합니다. 경기·전적·승패 수는 옮기지
-							않습니다.
+							일반전 {formatCount(preview.summary.games)}경기, 경매 {formatCount(
+								preview.summary.auctionTournaments
+							)}개 대회, MMR 원장 {formatCount(preview.summary.mmrLedgerEntries)}건을 포함합니다.
+							현재 길드 설정과 Discord 역할 동기화 값은 덮어쓰지 않습니다.
 						</p>
+						{#if preview.remapsSourceGuild}
+							<p class="mt-2 text-xs leading-5 font-semibold text-amber-100">
+								{preview.source.guildId} → {guildId} 길드 ID 재매핑과 원본 Discord 게시물 연결 제거를
+								함께 적용합니다.
+							</p>
+						{/if}
 					</div>
 					<label class="grid gap-1.5 text-xs font-semibold text-slate-500">
 						확인을 위해 길드 이름 입력
@@ -523,7 +558,7 @@
 							bind:value={confirmationValue}
 							disabled={applying}
 							placeholder={guildName}
-							aria-label="가져오기 확인 길드 이름"
+							aria-label="전체 데이터 가져오기 확인 길드 이름"
 							class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 disabled:opacity-55"
 						/>
 					</label>
@@ -532,9 +567,8 @@
 					<Dialog.Close
 						disabled={applying}
 						class="h-9 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
+						>취소</Dialog.Close
 					>
-						취소
-					</Dialog.Close>
 					<button
 						type="button"
 						disabled={!canApply}
@@ -544,7 +578,7 @@
 						{#if applying}
 							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 적용 중
 						{:else}
-							<Upload size={14} aria-hidden="true" /> MMR 적용
+							<Upload size={14} aria-hidden="true" /> 전체 데이터 적용
 						{/if}
 					</button>
 				</footer>

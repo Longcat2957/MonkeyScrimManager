@@ -13,7 +13,7 @@ Phase 1 Axum foundation에서 문서에 수치가 없던 설정을 다음처럼 
 - public origin: `MONKEYBOT_PUBLIC_ORIGIN`, production은 HTTPS만 허용
 - request timeout: 기본 10초, `MONKEYBOT_REQUEST_TIMEOUT_MS`
 - graceful drain: 기본 20초, `MONKEYBOT_SHUTDOWN_TIMEOUT_MS`
-- request body: 기본 1 MiB, `MONKEYBOT_MAX_BODY_BYTES`
+- request body: 전체 길드 스냅샷을 수용하도록 기본 16 MiB, `MONKEYBOT_MAX_BODY_BYTES`
 
 ## Request ID
 

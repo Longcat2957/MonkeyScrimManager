@@ -590,7 +590,7 @@ WebSocket: 사용하지 않는다. 저장과 생성 성공 뒤에는 response의
   추론하지 않고 다음 snapshot의 status와 permissions를 따른다.
 - `permissions.canRevertLast=true`일 때만 마지막 직접 입찰/배치 action의 되돌리기 control을 보인다.
   `BIDDING`에서는 마지막 action만 되돌리고, 아직 확정하지 않은 `BRACKET_SETUP`에서는 `입찰 단계로
-  되돌리기`로 표시해 slot을 비운 뒤 `BIDDING`으로 돌아간다. 이 동작은 모집을 다시 열지 않으며, client가
+되돌리기`로 표시해 slot을 비운 뒤 `BIDDING`으로 돌아간다. 이 동작은 모집을 다시 열지 않으며, client가
   action history나 roster count로 가능 여부를 추정하지 않는다.
 - `BIDDING` 동안에는 브래킷으로 이동하는 control을 노출하지 않는다. 직접
   `/g/[guildId]/auction/tournaments/[id]/bracket`에 접근해도 backend의 lifecycle `409`을 받아 draft로
@@ -722,7 +722,7 @@ canonical match snapshot을 다시 읽는다.
 - 진행 중에는 경매 목록, 브래킷, `READY`/`IN_PROGRESS` match 작업대에서 이 route로 이동한다. 현재 작업을
   바꾸는 control은 각 canonical match route에 남긴다.
 - `IN_GAME`이고 result snapshot의 `permissions.canRecoverBracket=true`이면 active operator에게만 `대진 확정
-  해제` 확인 control을 보인다. 성공 시 `/bracket`의 편집 단계로 이동한다. 결과가 기록된 이후의 복구는
+해제` 확인 control을 보인다. 성공 시 `/bracket`의 편집 단계로 이동한다. 결과가 기록된 이후의 복구는
   canonical match route에서 마지막 game을 먼저 되돌려야 하며, result route가 범용 rollback을 만들지 않는다.
 
 Backend 데이터:
@@ -1055,28 +1055,28 @@ key를 사용하지 않는다.
 - `apps/web/src/lib/components/workflow/GuildDataTransferPanel.svelte`
 - `apps/web/src/lib/api/guildDataTransfer.ts`
 - `apps/web/src/lib/contracts/guildDataTransfer.ts`
+- `apps/web/src/lib/contracts/guildFullDataTransfer.ts`
 
 목적:
 
-- 현재 guild의 ACTIVE OPERATOR가 현재 ACTIVE 시즌의 member lane MMR을 backup archive로 내보낸다.
-- readable plain JSON archive를 preview하고, target guild의 이미 ACTIVE인 Discord member에게만 MMR seed를
-  적용한다.
+- 현재 guild의 ACTIVE OPERATOR가 멤버·시즌·전적·픽밴·경매·MMR 원장·감사 기록을 전체 backup archive로
+  내보낸다.
+- source Discord guild ID가 달라도 readable `GUILD_FULL_SNAPSHOT` V1 JSON을 preview하고, 기존 closed season을
+  보존한 채 현재 active season이 비어 있는 target에 transaction으로 적용한다.
 
 화면은 `내보내기`와 `가져오기` 두 작업만 보여준다. 통계 카드, dummy member picker, Discord channel/role
 selector, history migration 선택지는 만들지 않는다. `/admin` layout의 권한 검사를 그대로 받으며 data route는
 별도 service-admin 권한이나 Bot command를 추가하지 않는다.
 
-내보내기는 `POST /api/guilds/:guildId/data-export`로 실행한다. CSRF header를 포함하고, 성공 response의
-`data.archive`를 JSON file로 내려받는다. 파일 이름은 response의 `data.fileName`을 사용한다. Archive는
-`format=MONKEYBOT_DATA_TRANSFER`, `kind=MEMBER_SEASON_MMR_SEED`, `schemaVersion=1`, source
-`{ guildId, guildName, season: { id, name } }`, Discord member별 다섯 lane의 `{ lane, mmr }`만 가진 strict
-JSON이며 member 수는 최대 1,000명이다. 파일은 읽고 편집할 수 있으며 source metadata는 provenance로만
-사용한다. Riot account/PUUID,
-privacy, champion preference, game/win counter, Discord role/channel, dummy user와 내전 history를 client가
-추가하거나 표시하지 않는다.
+내보내기는 `POST /api/guilds/:guildId/full-data-export`로 실행한다. CSRF header를 포함하고, 성공 response의
+`data.archive`를 `data.fileName`으로 내려받는다. Archive는 `format=MONKEYBOT_DATA_TRANSFER`,
+`kind=GUILD_FULL_SNAPSHOT`, `schemaVersion=1`, source `{ guildId, guildName }`와 strict 41-table 배열을 가진다.
+화면은 총 row, member, series/game, auction, MMR ledger count를 server summary 그대로 표시한다. Session/OAuth
+secret, Discord role/channel config, cache/outbox 제외 사실과 파일에 개인정보가 포함된다는 경고를 함께 보인다.
 
-가져오기는 JSON file 하나를 선택한 뒤 `POST /api/guilds/:guildId/data-imports/preview`에
-`{ archive }`를 보낸다. response의 다음 snapshot만 검토 화면의 source of truth다.
+가져오기는 최대 16 MiB JSON file 하나를 client schema로 확인한 뒤
+`POST /api/guilds/:guildId/full-data-imports/preview`에 `{ archive }`를 보낸다. response의 다음 snapshot만
+검토 화면의 source of truth다.
 
 ```text
 importId
@@ -1084,28 +1084,33 @@ digest
 expiresAt
 source
 summary
-  archiveMembers
-  matchedMembers
-  laneEntries
-  changes
+  totalRows
+  users, members, seasons, recruitments, series, games
+  auctionTournaments, auctionMatches, mmrLedgerEntries, auditEntries
 conflicts[]
   reason
   message
-  discordId
-  displayName
-targetRevision
+  table
+  rowCount
+targetDigest
+remapsSourceGuild
+usesTargetActiveSeason
+rebasesDisplayNumbers
 ```
 
-`conflicts`는 target guild에서 찾지 못한 active Discord member의 server reason/message를 그대로 표시한다.
-duplicate member/lane, canonical lane 누락, invalid MMR은 preview conflict가 아니라 `invalid_archive` 실패로
-표시한다. Client가 matched count나 변경 결과를 계산하거나 충돌을 숨기지 않는다. conflict가 있거나 preview가
-만료된 상태에서는 apply action을 disabled로 유지한다.
+Archive/table shape 오류와 PostgreSQL constraint 실패는 backend의 concrete error와 request ID를 표시한다.
+Target의 현재 active season에 전적·MMR·진행 data가 있으면 conflict를 그대로 보여 준다. `remapsSourceGuild=true`이면 source/target
+길드 이름과 ID, source Discord 게시물 연결 제거, target 설정/역할/채널 catalog 유지 사실을 경고한다. 비어 있는
+현재 active season을 사용할 수 있으면 `usesTargetActiveSeason` 경고로 archive active season 데이터가 현재
+season에 연결되고 season 자체는 삭제되지 않는다는 사실을 명시한다. `rebasesDisplayNumbers=true`이면 기존
+closed history 뒤로 모집·시리즈·경매 번호를 이어 붙인다는 사실도 명시한다. Client가 import 결과를 추측하거나 충돌을
+숨기지 않는다. Conflict, 0-row archive, 만료된 preview에서는 apply를 disabled로 유지한다.
 
-apply는 같은 `importId` 경로에 `{ expectedDigest, expectedTargetRevision }`을 보내며 CSRF와 새
-`Idempotency-Key`를 포함한다. 성공 response의 `status=APPLIED`, `summary`, `targetRevision`을 보여 준 뒤
-선택 파일과 preview를 비운다. `revision_conflict`, `mmr_state_changed`, `invalid_mmr_transfer`, preview expiry 같은
-실패는 backend의 stable code/message/request ID를 그대로 표시하며 성공처럼 UI를 갱신하지 않는다. Data transfer는 WebSocket을
-열지 않으며, 새 import가 끝난 뒤 members/records가 필요하면 해당 화면이 HTTP snapshot을 다시 읽는다.
+apply 전 modal에서 대상 guild name을 정확히 다시 입력한다. 같은 `importId` 경로에
+`{ expectedDigest, expectedTargetDigest }`와 새 `Idempotency-Key`를 보내며, 성공 response의
+`status=APPLIED`, summary, `remappedSourceGuild`, `usedTargetActiveSeason`, `rebasedDisplayNumbers` 결과를 보여 준 뒤 선택 파일과 preview를
+비운다. Target change, preview expiry/actor/digest, constraint/transport 실패는 backend stable
+code/message/request ID를 그대로 표시하고 성공처럼 갱신하지 않는다. Data transfer는 WebSocket을 열지 않는다.
 
 ### `/g/[guildId]/admin/seasons`
 
@@ -1148,9 +1153,9 @@ Riot ID이고 null은 미연결만 의미한다. Public/guild records 화면의 
 - `PUT /api/guilds/:guildId/settings`
 - `GET /api/guilds/:guildId/seasons`
 - `POST /api/guilds/:guildId/seasons`
-- `POST /api/guilds/:guildId/data-export`
-- `POST /api/guilds/:guildId/data-imports/preview`
-- `POST /api/guilds/:guildId/data-imports/:importId/apply`
+- `POST /api/guilds/:guildId/full-data-export`
+- `POST /api/guilds/:guildId/full-data-imports/preview`
+- `POST /api/guilds/:guildId/full-data-imports/:importId/apply`
 - `GET /api/guilds/:guildId/audit-logs`
 
 시즌 API는 settings payload와 revision에 포함하지 않는다. 감사 로그 page도 settings/members/seasons
@@ -1193,14 +1198,19 @@ Season POST는 trim한 `name`, snapshot의 `current.id`를 `expectedCurrentSeaso
 - 최초 mount와 새로고침 action에서 authoritative snapshot을 읽는다. `401`, `403`, network, invalid response는
   backend의 message/request ID를 유지한 retryable error panel로 보이며, client가 status를 추정하거나
   mock timestamp를 만들지 않는다.
+- 개발 환경에서는 Discord guild ID로 전체 기록 초기화 preview를 먼저 읽고, 대상 이름·삭제 건수와
+  `RESET {guildId}` 확인 입력이 일치할 때만 destructive command를 활성화한다. 성공 후 삭제 row 수와 새
+  ACTIVE 시즌을 표시한다.
 
 Backend 데이터:
 
 - `GET /api/admin/status`
+- `GET|POST /api/admin/guilds/{guildId}/record-reset`
 
 권한:
 
-- service admin allowlist.
+- service admin allowlist. 기록 초기화는 backend의 non-production 개발 기능 flag도 필요하며 guild operator
+  권한은 필요하지 않다.
 
 WebSocket: 사용하지 않는다. Bot heartbeat의 90초/5분 분류와 모든 service 상태는 backend snapshot이
 결정한다.

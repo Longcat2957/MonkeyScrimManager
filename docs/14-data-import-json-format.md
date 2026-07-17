@@ -1,25 +1,26 @@
 # MonkeyBot 데이터 가져오기 JSON 규격 V1
 
-이 문서는 외부 시스템이 MonkeyBot 길드의 현재 시즌 lane MMR을 가져오기 전에 생성할 수 있는
-`MEMBER_SEASON_MMR_SEED` JSON 아카이브 규격을 정의한다. 이 파일은 사람이 검토하고 수정할 수 있는
-plain JSON이며, V1에는 암호화, 서명, 토큰 또는 데이터베이스 dump 형식이 포함되지 않는다.
+이 문서는 MonkeyBot의 두 JSON 아카이브 규격을 정의한다. `MEMBER_SEASON_MMR_SEED`는 현재 시즌 MMR만
+교환하는 호환 규격이고, `GUILD_FULL_SNAPSHOT`은 Discord 길드의 멤버·시즌·모집·전적·픽밴·경매·MMR
+원장·감사 기록을 함께 백업하고 복원하는 전체 규격이다. 두 파일 모두 사람이 검토할 수 있는 plain JSON이며,
+V1에는 암호화, 서명, 토큰 또는 데이터베이스 dump 형식이 포함되지 않는다.
 
 이 규격은 **파일 형식**이다. 현재 import API는 외부 서비스용 API key 또는 service-to-service 인증을
 제공하지 않는다. 외부 시스템은 이 형식의 파일을 만들고, 대상 길드의 활성 운영자가 MonkeyBot Web의
 검토 및 적용 절차를 수행해야 한다. API를 직접 호출하는 클라이언트도 같은 browser session, CSRF,
 Origin 및 운영자 권한을 충족해야 한다.
 
-## 범위
+## `MEMBER_SEASON_MMR_SEED` 범위
 
 V1은 대상 길드의 **현재 ACTIVE 시즌**에 있는 활성 Discord 멤버의 five-lane MMR만 seed 또는 교체한다.
 `discordId`로 대상 멤버를 매칭하며, 파일의 `displayName`은 대상 멤버의 이름을 변경하지 않는다.
 
-| 지원 | 지원하지 않음 |
-| --- | --- |
-| 현재 ACTIVE 시즌의 `TOP`, `JUNGLE`, `MID`, `BOTTOM`, `SUPPORT` MMR | 사용자, 길드 멤버십, Discord 역할 또는 채널 생성/복구 |
-| MMR 값을 운영자가 검토 후 편집한 JSON | Riot 계정/PUUID, privacy, 선호 챔피언 |
-| source guild/season 표기 metadata | dummy user, dummy profile 또는 INACTIVE 멤버 |
-| 대상 길드에 이미 존재하는 활성 Discord 멤버의 MMR 변경 | 모집, 엔트리, 시리즈, 경매, 픽밴, game, MMR ledger/history, audit/outbox/idempotency 기록 |
+| 지원                                                               | 지원하지 않음                                                                             |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| 현재 ACTIVE 시즌의 `TOP`, `JUNGLE`, `MID`, `BOTTOM`, `SUPPORT` MMR | 사용자, 길드 멤버십, Discord 역할 또는 채널 생성/복구                                     |
+| MMR 값을 운영자가 검토 후 편집한 JSON                              | Riot 계정/PUUID, privacy, 선호 챔피언                                                     |
+| source guild/season 표기 metadata                                  | dummy user, dummy profile 또는 INACTIVE 멤버                                              |
+| 대상 길드에 이미 존재하는 활성 Discord 멤버의 MMR 변경             | 모집, 엔트리, 시리즈, 경매, 픽밴, game, MMR ledger/history, audit/outbox/idempotency 기록 |
 
 가져오기는 부분 성공을 하지 않는다. 대상에 없는 멤버 하나라도 있으면 검토는 가능하지만 적용은 전부
 막힌다.
@@ -55,18 +56,18 @@ MemberSeasonMmrSeedArchive = {
 }
 ```
 
-| Field | 규칙 |
-| --- | --- |
-| `format` | 정확히 `MONKEYBOT_DATA_TRANSFER` |
-| `kind` | 정확히 `MEMBER_SEASON_MMR_SEED` |
-| `schemaVersion` | JSON number `1` |
-| `exportedAt` | RFC 3339 timestamp string. provenance 표기용이며 대상 MMR 계산에는 쓰지 않는다. |
-| `source.guildId`, `members[].discordId` | JSON string의 0이 아닌 10진 Discord snowflake. 앞자리 `0`은 불가하며 unsigned 64-bit 범위를 넘어서는 값은 불가하다. JSON number가 아니라 string으로 보낸다. |
-| `source.guildName`, `source.season.name`, `members[].displayName` | `trim()` 후 Unicode 문자 수가 1~100. 빈 문자열/공백만 있는 값은 불가하다. |
-| `source.season.id` | 파싱 가능한 UUID string |
-| `members` | 0~1,000개. `discordId`는 아카이브 안에서 중복될 수 없다. 빈 배열은 구조상 유효하지만 변경값이 없어 적용할 수 없다. |
-| `members[].lanes` | 정확히 5개. `TOP`, `JUNGLE`, `MID`, `BOTTOM`, `SUPPORT`를 각각 한 번씩 포함해야 하며 중복/누락은 불가하다. |
-| `mmr` | 유한한 JSON number. `NaN`, `Infinity`, 문자열 MMR, `null`은 불가하다. 별도의 고정 최솟값/최댓값은 없지만 대상의 현재 MMR과 안전한 finite delta를 계산할 수 있어야 한다. |
+| Field                                                             | 규칙                                                                                                                                                                    |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`                                                          | 정확히 `MONKEYBOT_DATA_TRANSFER`                                                                                                                                        |
+| `kind`                                                            | 정확히 `MEMBER_SEASON_MMR_SEED`                                                                                                                                         |
+| `schemaVersion`                                                   | JSON number `1`                                                                                                                                                         |
+| `exportedAt`                                                      | RFC 3339 timestamp string. provenance 표기용이며 대상 MMR 계산에는 쓰지 않는다.                                                                                         |
+| `source.guildId`, `members[].discordId`                           | JSON string의 0이 아닌 10진 Discord snowflake. 앞자리 `0`은 불가하며 unsigned 64-bit 범위를 넘어서는 값은 불가하다. JSON number가 아니라 string으로 보낸다.             |
+| `source.guildName`, `source.season.name`, `members[].displayName` | `trim()` 후 Unicode 문자 수가 1~100. 빈 문자열/공백만 있는 값은 불가하다.                                                                                               |
+| `source.season.id`                                                | 파싱 가능한 UUID string                                                                                                                                                 |
+| `members`                                                         | 0~1,000개. `discordId`는 아카이브 안에서 중복될 수 없다. 빈 배열은 구조상 유효하지만 변경값이 없어 적용할 수 없다.                                                      |
+| `members[].lanes`                                                 | 정확히 5개. `TOP`, `JUNGLE`, `MID`, `BOTTOM`, `SUPPORT`를 각각 한 번씩 포함해야 하며 중복/누락은 불가하다.                                                              |
+| `mmr`                                                             | 유한한 JSON number. `NaN`, `Infinity`, 문자열 MMR, `null`은 불가하다. 별도의 고정 최솟값/최댓값은 없지만 대상의 현재 MMR과 안전한 finite delta를 계산할 수 있어야 한다. |
 
 Export는 lane을 `TOP`, `JUNGLE`, `MID`, `BOTTOM`, `SUPPORT` 순서로 쓴다. Import는 다섯 lane이 각각
 한 번 있다는 조건만 검사하므로 배열 순서 자체에는 의미가 없지만, 파일을 수정할 때도 이 canonical 순서를
@@ -81,31 +82,31 @@ Export는 lane을 `TOP`, `JUNGLE`, `MID`, `BOTTOM`, `SUPPORT` 순서로 쓴다. 
 
 ```json
 {
-  "format": "MONKEYBOT_DATA_TRANSFER",
-  "kind": "MEMBER_SEASON_MMR_SEED",
-  "schemaVersion": 1,
-  "exportedAt": "2026-07-16T12:00:00Z",
-  "source": {
-    "guildId": "1525851181157580861",
-    "guildName": "MonkeyBot Test Guild",
-    "season": {
-      "id": "019f7000-0000-7000-8000-000000000001",
-      "name": "2026 Summer"
-    }
-  },
-  "members": [
-    {
-      "discordId": "390526792496054283",
-      "displayName": "Longcat",
-      "lanes": [
-        { "lane": "TOP", "mmr": 1590 },
-        { "lane": "JUNGLE", "mmr": 1560.5 },
-        { "lane": "MID", "mmr": 1625 },
-        { "lane": "BOTTOM", "mmr": 1540 },
-        { "lane": "SUPPORT", "mmr": 1510 }
-      ]
-    }
-  ]
+	"format": "MONKEYBOT_DATA_TRANSFER",
+	"kind": "MEMBER_SEASON_MMR_SEED",
+	"schemaVersion": 1,
+	"exportedAt": "2026-07-16T12:00:00Z",
+	"source": {
+		"guildId": "1525851181157580861",
+		"guildName": "MonkeyBot Test Guild",
+		"season": {
+			"id": "019f7000-0000-7000-8000-000000000001",
+			"name": "2026 Summer"
+		}
+	},
+	"members": [
+		{
+			"discordId": "390526792496054283",
+			"displayName": "Longcat",
+			"lanes": [
+				{ "lane": "TOP", "mmr": 1590 },
+				{ "lane": "JUNGLE", "mmr": 1560.5 },
+				{ "lane": "MID", "mmr": 1625 },
+				{ "lane": "BOTTOM", "mmr": 1540 },
+				{ "lane": "SUPPORT", "mmr": 1510 }
+			]
+		}
+	]
 }
 ```
 
@@ -114,13 +115,13 @@ Export는 lane을 `TOP`, `JUNGLE`, `MID`, `BOTTOM`, `SUPPORT` 순서로 쓴다. 
 
 ```json
 {
-  "data": {
-    "archive": { "...": "위 규격의 archive object" },
-    "fileName": "monkeybot-mmr-1525851181157580861-019f7000-0000-7000-8000-000000000001.json"
-  },
-  "meta": {
-    "requestId": "019f7000-0000-7000-8000-000000000002"
-  }
+	"data": {
+		"archive": { "...": "위 규격의 archive object" },
+		"fileName": "monkeybot-mmr-1525851181157580861-019f7000-0000-7000-8000-000000000001.json"
+	},
+	"meta": {
+		"requestId": "019f7000-0000-7000-8000-000000000002"
+	}
 }
 ```
 
@@ -137,7 +138,7 @@ Preview request body는 `archive` 하나만 허용한다.
 
 ```json
 {
-  "archive": { "...": "위 규격의 archive object" }
+	"archive": { "...": "위 규격의 archive object" }
 }
 ```
 
@@ -145,21 +146,21 @@ Preview 성공 응답의 핵심 값은 다음과 같다.
 
 ```json
 {
-  "data": {
-    "importId": "019f7000-0000-7000-8000-000000000003",
-    "digest": "server-generated 64-character lowercase SHA-256 hex",
-    "expiresAt": "2026-07-16T12:15:00Z",
-    "source": { "...": "archive.source" },
-    "summary": {
-      "archiveMembers": 1,
-      "matchedMembers": 1,
-      "laneEntries": 5,
-      "changes": 5
-    },
-    "conflicts": [],
-    "targetRevision": 7
-  },
-  "meta": { "requestId": "019f7000-0000-7000-8000-000000000004" }
+	"data": {
+		"importId": "019f7000-0000-7000-8000-000000000003",
+		"digest": "server-generated 64-character lowercase SHA-256 hex",
+		"expiresAt": "2026-07-16T12:15:00Z",
+		"source": { "...": "archive.source" },
+		"summary": {
+			"archiveMembers": 1,
+			"matchedMembers": 1,
+			"laneEntries": 5,
+			"changes": 5
+		},
+		"conflicts": [],
+		"targetRevision": 7
+	},
+	"meta": { "requestId": "019f7000-0000-7000-8000-000000000004" }
 }
 ```
 
@@ -176,8 +177,8 @@ Idempotency-Key: 019f7000-0000-7000-8000-000000000005
 
 ```json
 {
-  "expectedDigest": "preview response의 digest",
-  "expectedTargetRevision": 7
+	"expectedDigest": "preview response의 digest",
+	"expectedTargetRevision": 7
 }
 ```
 
@@ -192,31 +193,128 @@ Preview는 MMR, 길드 멤버, game, ledger를 변경하지 않는다. 서버는
 뒤 로컬 파일을 수정해도 이미 저장된 preview에는 영향을 주지 않으며, 수정한 값을 적용하려면 그 파일을 다시
 올려 새 preview를 만들어야 한다. 대상 멤버/MMR/활성 시즌이 바뀐 경우도 새 preview가 필요하다.
 
-| 상황 | HTTP / code | 동작 |
-| --- | --- | --- |
-| archive JSON이 아닌 값, literal/version/field/ID/text/lane/MMR 규격 위반, 1,000명 초과 | `400 invalid_archive` | 검토 row를 만들지 않는다. |
-| Content-Type 누락/오류, malformed outer JSON, outer body의 unknown field | `415 unsupported_media_type`, `400 bad_request`, `422 unprocessable_entity` | API body 자체를 거절한다. |
-| 각 MMR은 finite이지만 대상 MMR과 finite ledger delta를 안전하게 계산할 수 없음 | `422 invalid_mmr_transfer` | 검토 또는 적용을 거절하며 MMR을 바꾸지 않는다. |
-| archive의 Discord ID가 대상 길드의 ACTIVE Discord member가 아님 | preview `conflicts[].reason = member_not_active`, 이후 `409 preview_conflicts` | 일부 멤버만 적용하지 않는다. 대상 멤버를 먼저 등록/활성화한 뒤 새 preview를 만든다. |
-| ACTIVE 시즌이 없음 | `409 no_active_season` | export/preview/apply를 진행하지 않는다. |
-| 모든 lane MMR이 이미 같음 | `409 no_import_changes` | 변경 및 ledger를 만들지 않는다. |
-| preview가 15분을 넘김, actor/digest/revision/MMR snapshot/시즌이 달라짐 | `404 preview_not_found`, `403 preview_actor_mismatch`, 또는 `409 preview_expired`, `preview_digest_mismatch`, `revision_conflict`, `mmr_state_changed`, `target_season_changed` | 다시 preview부터 수행한다. |
-| 진행 중인 모집 또는 내전이 존재 | `409 active_workflow_conflict` | workflow를 정리한 뒤 새 preview로 재시도한다. |
-| 로그인하지 않았거나 운영자 권한/CSRF가 없음 | `401 unauthorized`, `403 operator_required`, `403 csrf_validation_failed` | 대상 길드의 활성 운영자 session으로 다시 시도한다. |
+| 상황                                                                                   | HTTP / code                                                                                                                                                                     | 동작                                                                                |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| archive JSON이 아닌 값, literal/version/field/ID/text/lane/MMR 규격 위반, 1,000명 초과 | `400 invalid_archive`                                                                                                                                                           | 검토 row를 만들지 않는다.                                                           |
+| Content-Type 누락/오류, malformed outer JSON, outer body의 unknown field               | `415 unsupported_media_type`, `400 bad_request`, `422 unprocessable_entity`                                                                                                     | API body 자체를 거절한다.                                                           |
+| 각 MMR은 finite이지만 대상 MMR과 finite ledger delta를 안전하게 계산할 수 없음         | `422 invalid_mmr_transfer`                                                                                                                                                      | 검토 또는 적용을 거절하며 MMR을 바꾸지 않는다.                                      |
+| archive의 Discord ID가 대상 길드의 ACTIVE Discord member가 아님                        | preview `conflicts[].reason = member_not_active`, 이후 `409 preview_conflicts`                                                                                                  | 일부 멤버만 적용하지 않는다. 대상 멤버를 먼저 등록/활성화한 뒤 새 preview를 만든다. |
+| ACTIVE 시즌이 없음                                                                     | `409 no_active_season`                                                                                                                                                          | export/preview/apply를 진행하지 않는다.                                             |
+| 모든 lane MMR이 이미 같음                                                              | `409 no_import_changes`                                                                                                                                                         | 변경 및 ledger를 만들지 않는다.                                                     |
+| preview가 15분을 넘김, actor/digest/revision/MMR snapshot/시즌이 달라짐                | `404 preview_not_found`, `403 preview_actor_mismatch`, 또는 `409 preview_expired`, `preview_digest_mismatch`, `revision_conflict`, `mmr_state_changed`, `target_season_changed` | 다시 preview부터 수행한다.                                                          |
+| 진행 중인 모집 또는 내전이 존재                                                        | `409 active_workflow_conflict`                                                                                                                                                  | workflow를 정리한 뒤 새 preview로 재시도한다.                                       |
+| 로그인하지 않았거나 운영자 권한/CSRF가 없음                                            | `401 unauthorized`, `403 operator_required`, `403 csrf_validation_failed`                                                                                                       | 대상 길드의 활성 운영자 session으로 다시 시도한다.                                  |
 
 모든 실패 응답은 아래 envelope를 사용한다. `message`는 사용자에게 표시할 수 있는 안전한 이유이며,
 `requestId`는 운영 문의와 로그 상관관계에 사용한다.
 
 ```json
 {
-  "error": {
-    "code": "invalid_archive",
-    "message": "지원되는 MonkeyBot MMR 백업 파일 형식이 아닙니다.",
-    "requestId": "019f7000-0000-7000-8000-000000000006"
-  }
+	"error": {
+		"code": "invalid_archive",
+		"message": "지원되는 MonkeyBot MMR 백업 파일 형식이 아닙니다.",
+		"requestId": "019f7000-0000-7000-8000-000000000006"
+	}
 }
 ```
 
 성공 apply는 `status: "APPLIED"`, `appliedAt`, preview와 같은 `summary`, 적용 후 `targetRevision`을
 반환한다. 실제 값이 바뀐 lane마다 `DATA_IMPORT_SEED` ledger를 남기지만, 이 import는 database restore나
 generic revert checkpoint를 만들지 않는다.
+
+## `GUILD_FULL_SNAPSHOT` V1
+
+전체 스냅샷은 `/g/{guildId}/admin/data`의 기본 내보내기/가져오기 규격이다. 원본과 대상 Discord 길드 ID가
+달라도 대상 길드의 현재 ACTIVE 시즌에 모집·시리즈·경매·게임·MMR 진행 데이터가 없으면 적용할 수 있다.
+기존 target guild의 닫힌 시즌 이력, bootstrap, 운영자 멤버, Discord role/channel catalog와 설정은 유지한다.
+
+포함 범위:
+
+- global 사용자, Discord identity, privacy, 선호 챔피언, Riot account와 guild member
+- 시즌, 일반 모집/entry draft, 시리즈, 확정 게임/통계/픽/밴
+- 경매 모집/setup, 팀/후보/lot/action/point ledger, bracket/match/lineup
+- 현재 lane MMR과 append-only MMR ledger, 관리자 감사 기록
+
+제외 범위:
+
+- 로그인 session, OAuth state/secret, service token과 idempotency record
+- Discord role membership snapshot, guild config와 Discord channel/role catalog
+- Riot 조회 cache/screening 결과, outbox, websocket/lease 등 일시 상태
+
+최상위 구조는 다음과 같다. `tables`는 아래 41개 key를 정확히 한 번씩 가져야 하며 각 값은 PostgreSQL table
+row를 snake_case field로 표현한 배열이다. 총 row는 최대 250,000개, request body는 최대 16 MiB다.
+
+```text
+GuildFullSnapshotArchive = {
+  format: "MONKEYBOT_DATA_TRANSFER",
+  kind: "GUILD_FULL_SNAPSHOT",
+  schemaVersion: 1,
+  exportedAt: RFC 3339 timestamp,
+  source: { guildId: Discord snowflake string, guildName: non-empty text },
+  tables: {
+    users, user_discord_identities, user_privacy_settings,
+    user_champion_preferences, riot_accounts, dummy_user_profiles,
+    guild_members, user_guild_preferences, guild_counters, seasons,
+    recruitments, recruitment_participants, recruitment_preferred_lanes,
+    recruitment_entry_drafts, recruitment_entry_assignments, series,
+    series_participants, auction_recruitments,
+    auction_recruitment_participants, auction_setup_drafts,
+    auction_setup_teams, auction_tournaments, auction_teams,
+    auction_bid_candidates, auction_lots, auction_actions,
+    auction_team_members, auction_point_ledger, auction_bracket_slots,
+    auction_matches, auction_match_lineups, game_inputs, game_input_picks,
+    game_input_bans, games, game_participants, game_participant_stats,
+    game_bans, user_lane_mmr, mmr_ledger_entries, admin_audit_log
+  }
+}
+```
+
+### 전체 스냅샷 검토와 적용
+
+1. `POST /api/guilds/{guildId}/full-data-export`의 `data.archive`를 JSON 파일로 보관한다.
+2. `POST /api/guilds/{guildId}/full-data-imports/preview`에 `{ "archive": ... }`를 보낸다.
+3. `conflicts=[]`인지, source/target 길드와 summary count가 예상과 같은지 확인한다. ID가 다르면
+   `remapsSourceGuild=true`여야 한다.
+4. 15분 안에 같은 운영자가 `POST /api/guilds/{guildId}/full-data-imports/{importId}/apply`를 호출한다.
+
+이미 MonkeyBot에 Riot 계정이 있는 사용자는 현재 계정 묶음을 보존하고 archive의 Riot 계정을 추가하지 않는다.
+선호 챔피언도 사용자·lane별 현재 값이 하나라도 있으면 그 lane 전체를 보존하며, 현재 값이 비어 있을 때만
+archive 값을 보충한다. 과거 경기·MMR row는 이 전역 프로필 우선순위와 무관하게 archive 범위대로 가져온다.
+
+Apply body는 preview 응답의 값을 그대로 사용한다.
+
+```json
+{
+	"expectedDigest": "preview response의 digest",
+	"expectedTargetDigest": "preview response의 targetDigest"
+}
+```
+
+Apply에는 printable ASCII 128 bytes 이하의 `Idempotency-Key`가 필요하다. Preview는 archive row를 PostgreSQL
+SAVEPOINT 안에서 실제 schema에 넣어 FK/CHECK/UNIQUE 제약을 검증한 다음 모두 rollback한다. Target의 active
+season에 아직 전적·MMR·진행 row가 없으면 preview의 `usesTargetActiveSeason=true`로 표시한다.
+Archive의 active season row는 새로 만들지 않고, 그 ID를 참조하는 모집·시리즈·경기·MMR·감사 row를 현재 target
+active season ID로 매핑한다. 기존 target의 Closed season 이력은 그대로 보존한다. 모집·시리즈·경매의
+`display_number`가 기존 closed history와 겹치지 않도록 namespace별 현재 최대 번호 뒤로 이동하며 preview의
+`rebasesDisplayNumbers`, apply의 `rebasedDisplayNumbers`가 실제 재배치 여부를 나타낸다. 따라서 preview 성공만으로
+시즌·전적·MMR이 바뀌지 않는다. Apply는 preview 당시 target digest와 현재 target importability를 다시 검증하고
+같은 transaction에서 매핑된 전체 archive를 반영한다. Partial success는 없으며 적용 성공 직후 preview에
+저장했던 개인정보 archive payload를 제거한다.
+
+Source와 path target의 길드 ID가 다르면 preview/apply는 archive의 `guild_id`,
+`user_guild_preferences.default_guild_id`, 감사 기록 안의 정확히 일치하는 guild ID 값을 path target ID로
+재매핑한다. 이 경우 모집글과 시리즈/경매 결과 카드에 저장된 source `channel_id`/`message_id`는 새 길드에서
+유효하지 않으므로 `null`로 정리한다. 전적·픽밴·대회·MMR 이력은 그대로 보존한다. Preview 응답의
+`remapsSourceGuild`와 apply 응답의 `remappedSourceGuild`가 이 동작 여부를 나타낸다. 파일의 `source` metadata와
+digest는 provenance 확인을 위해 원본 값으로 보관한다.
+
+`mookbot_v3` D1/Valkey 변환 산출물도 이 규격을 사용한다. Soft-delete된 과거 시리즈·대회·게임은 누락하지 않고
+archive의 단일 active season 이력으로 합친다. 삭제 당시 진행 중이던 aggregate는 `CANCELLED`, MMR 원장이 없는
+과거 game은 `LEGACY_NOT_APPLIED`로 명시한다. 변환과 preview 검증은 DB import가 아니며, 실제
+apply는 운영자가 source checksum, omission/re-entry report와 target guild를 확인한 뒤 별도로 승인하고
+실행한다.
+
+이전 시스템에서 시리즈로 전환되지 않은 `CLOSED` 일반 모집과, `CONVERTED` 상태지만 대응 series가 없는 일반
+모집은 미완료 작업으로 정제 단계에서 제외한다. 이는 MonkeyBot의 `시리즈 생성 대기`·`엔트리 편성` 대기열에
+과거 작업이 다시 나타나는 것을 막기 위한 명시적 omission이다. 완료된 series·game·MMR은 유지하며, 제외한 모집과
+참가자·선호 라인·draft·assignment 수는 conversion report에 남긴다.

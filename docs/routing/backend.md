@@ -2055,6 +2055,70 @@ Idempotency record, changed summary/ledger, `DATA_IMPORT_APPLIED`/`DATA_IMPORT` 
 status는 하나의 transaction으로 commit한다. 이 operation은 generic checkpoint/revert나 database restore를
 만들지 않으며, 완료된 import의 archive를 다시 apply하지 않는다.
 
+### POST /api/guilds/{guildId}/full-data-export
+
+ACTIVE OPERATOR browser session, CSRF cookie/header와 Origin 검증이 필요하다. `REPEATABLE READ` snapshot에서
+`GUILD_FULL_SNAPSHOT` V1 archive를 만들며 body와 idempotency key는 받지 않는다. Export에는 global 사용자
+identity/Riot/privacy/선호 챔피언, guild member, 시즌, 일반 모집/시리즈, 경매 전체 원장, 픽밴/게임/통계,
+현재 MMR/ledger와 관리자 audit이 포함된다. Session/OAuth secret, Discord role/channel catalog·guild config,
+cache/outbox/idempotency row는 제외한다.
+
+```text
+data
+  archive              MONKEYBOT_DATA_TRANSFER / GUILD_FULL_SNAPSHOT / schemaVersion 1
+    source             { guildId, guildName }
+    tables             strict 41-table row arrays, total 최대 250,000 rows
+  fileName
+  summary
+    totalRows, users, members, seasons, recruitments, series, games
+    auctionTournaments, auctionMatches, mmrLedgerEntries, auditEntries
+meta
+```
+
+성공 시 `FULL_DATA_TRANSFER_EXPORTED` audit을 남긴다. Request body 기본 한도는 전체 archive 계약과 동일한
+16 MiB다.
+
+### POST /api/guilds/{guildId}/full-data-imports/preview
+
+Body는 `{ archive }` 하나만 받는다. Archive의 source guild ID가 path guild와 다르면 모든 정확한 source
+guild 참조를 path target ID로 매핑하고 `remapsSourceGuild=true`로 명시한다. 이때 source guild의 모집글과
+시리즈/경매 결과 카드 `channel_id`/`message_id`는 `null`로 정리한다. Target의
+현재 active season에 모집·시리즈·경매·game/MMR domain row가 있으면
+`target_active_season_not_empty` conflict를 반환한다. Closed season 이력은 importability를 막지 않는다.
+현재 active season이 비어 있으면 archive active season 참조를 그 target season ID로 매핑하며 response의
+`usesTargetActiveSeason=true`로 명시한다. 모집·시리즈·경매 display number는 기존 target history의 namespace별
+최대 번호와 counter 뒤로 이동하고 `rebasesDisplayNumbers=true`로 명시한다.
+
+Global 사용자 정보는 기존 MonkeyBot 값을 우선한다. 동일 사용자에게 Riot account가 하나라도 있으면 archive의
+그 사용자 Riot account 묶음을 insert하지 않는다. `user_champion_preferences`도 동일 사용자·lane에 현재 row가
+하나라도 있으면 archive의 해당 lane 묶음을 insert하지 않는다. 현재 값이 없는 사용자/line만 archive 값으로 보충한다.
+이 병합은 과거 경기·MMR domain row import 범위를 줄이지 않는다.
+
+Importable target에서는 archive active season ID를 target active season ID로 재작성하고, 해당 source season
+row는 제외한 뒤 transaction SAVEPOINT에서 41 table을 실제 import order로 insert해 PostgreSQL
+FK/CHECK/UNIQUE 제약을 확인한다. Closed season은 재작성하지 않는다. 검증 성공/실패와 무관하게 savepoint까지
+rollback하므로 preview가 domain row를 바꾸지 않는다. 성공 response는 `importId`, archive `digest`,
+`targetDigest`, 15분 `expiresAt`, source, summary, conflicts, `remapsSourceGuild`와
+`usesTargetActiveSeason`, `rebasesDisplayNumbers`를 반환한다. 원본 source metadata/digest는 바꾸지 않는다. Preview row/audit만
+savepoint 밖 transaction에서 commit한다.
+
+### POST /api/guilds/{guildId}/full-data-imports/{importId}/apply
+
+같은 preview actor의 ACTIVE OPERATOR session, CSRF/Origin과 `Idempotency-Key`가 필요하다.
+
+```text
+expectedDigest          preview response의 digest
+expectedTargetDigest    preview response의 targetDigest
+```
+
+Server는 actor/status/expiry/digest/conflicts와 저장된 source guild를 확인하고 guild lock 아래에서 target
+digest와 importability를 다시 계산한다. 하나라도 달라지면 적용하지 않고 구체적인 stable error와 request ID를
+반환한다. 성공 시 preview와 동일한 target guild/active season ID 매핑을 적용한 모든 archive row, import status,
+payload 제거,
+`FULL_DATA_IMPORT_APPLIED` audit과 idempotency response를 한 transaction으로 commit한다. Response의
+`remappedSourceGuild`, `usedTargetActiveSeason`, `rebasedDisplayNumbers`가 실제 매핑 여부를 나타낸다. Partial apply와 완료 archive
+payload 재사용은 지원하지 않는다.
+
 ### GET /api/guilds/{guildId}/reverts/recent
 
 ```text
@@ -2209,6 +2273,27 @@ Bot heartbeat는 newest persisted `bot_instances.last_heartbeat_at`을 기준으
 `>90초~<=5분 delayed`, 미수신 또는 `>5분 down`이다. stale Bot도 마지막 persisted timestamp는
 `lastHealthyAt`으로 유지한다. API가 PostgreSQL row를 읽을 수 없으면 status aggregate 자체를 만들 수 없으므로
 `503 database_unavailable`을 반환한다.
+
+### GET|POST /api/admin/guilds/{guildId}/record-reset
+
+개발/테스트 환경의 전체 기록 초기화 도구다. 두 method 모두 로그인한 service admin allowlist만 허용하고
+guild operator 여부는 검사하지 않는다. 또한 `MONKEYBOT_DUMMY_USERS_ENABLED=true`가 필요하며 이 설정은
+production startup에서 거부된다.
+
+POST는 runtime role에 append-only 원장의 직접 `DELETE` 권한을 부여하지 않는다. migration이 만든
+guild-scoped `service_admin_reset_guild_records(text)` security-definer 함수가 FK 순서대로 모든 이력을
+제거하고, API가 빈 active season을 재생성하는 작업까지 같은 transaction에서 처리한다. 함수 실행 권한도
+개발 DB의 runtime grant에서 `service_admin_reset_enabled=true`를 명시한 경우에만 부여한다.
+
+GET은 대상 길드 이름, 유지할 ACTIVE 멤버 수, 현재 시즌 이름, 삭제 대상 요약과 정확한 확인문구
+`RESET {guildId}`를 반환한다. POST는 CSRF, UUID `Idempotency-Key`, GET이 준 확인문구를 요구한다. 확인문구가
+다르면 `422 reset_confirmation_mismatch`다.
+
+POST transaction은 시즌·일반/경매 모집·시리즈·게임·MMR·import 작업·workflow audit/outbox/idempotency를
+삭제하고, 기존 ACTIVE 시즌 이름을 가진 빈 ACTIVE 시즌 하나와 네 display counter(`next_value=1`)를 다시
+만든다. `guilds`, `guild_members`, `guild_config`, Discord role/channel catalog, Riot 계정과 사용자 설정은
+보존한다. 같은 key와 같은 길드의 재전송은 저장된 성공 응답을 반환하며 다른 길드에 key를 재사용하면
+`409 idempotency_conflict`다.
 
 ### GET /healthz
 

@@ -12,6 +12,7 @@
 		"bot:dev": "pnpm --filter @monkeybot/bot dev",
 		"bot:commands:guild": "pnpm --filter @monkeybot/bot commands:register:guild",
 		"bot:commands:global": "pnpm --filter @monkeybot/bot commands:register:global",
+		"bot:commands:clear:legacy-global": "pnpm --filter @monkeybot/bot commands:clear:legacy-global",
 		"docker:build": "scripts/docker-build.sh",
 		"docker:push": "PUSH=1 scripts/docker-build.sh",
 		"format": "prettier --write .",

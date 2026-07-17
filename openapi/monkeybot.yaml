@@ -1076,6 +1076,146 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/full-data-export:
+    post:
+      operationId: exportGuildFullSnapshot
+      summary: Export the complete portable guild snapshot
+      description: >-
+        Requires an active guild operator, CSRF, and valid Origin. Returns a portable
+        GUILD_FULL_SNAPSHOT V1 archive containing member, season, workflow, match, auction, MMR
+        ledger, and audit history. Authentication secrets, guild Discord configuration, caches,
+        outboxes, and idempotency records are excluded.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: Complete portable guild archive and server-derived summary.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildFullDataExportResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/full-data-imports/preview:
+    post:
+      operationId: previewGuildFullSnapshotImport
+      summary: Validate a complete guild snapshot without importing it
+      description: >-
+        Requires an active target-guild operator, CSRF, and valid Origin. If the source guild ID
+        differs, every archive guild reference is remapped to the path guild and stale source-guild
+        Discord message/channel links are cleared. On an empty target domain, the mapped rows are
+        inserted under a PostgreSQL savepoint to validate database constraints and then rolled back.
+        Existing MonkeyBot Riot accounts and lane-level champion preferences take precedence; archive
+        values only fill users or lanes that have no current global profile. Only the expiring preview
+        record and audit event are committed.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuildFullDataPreviewRequest'
+      responses:
+        '200':
+          description: Preview summary, target digest, and any non-empty-target conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildFullDataPreviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/full-data-imports/{importId}/apply:
+    post:
+      operationId: applyGuildFullSnapshotImport
+      summary: Atomically apply a previously validated complete guild snapshot
+      description: >-
+        Requires the same active operator that created the unexpired preview, CSRF, valid Origin,
+        and an Idempotency-Key. Revalidates the archive and target digests and empty target domain,
+        deterministically reapplies any guild and active-season mappings, then imports every row in
+        one transaction. Partial success is not supported.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: importId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuildFullDataApplyRequest'
+      responses:
+        '200':
+          description: The complete archive was imported atomically and its preview payload removed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildFullDataApplyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}/audit-logs:
     get:
       operationId: listGuildAdminAuditLogs
@@ -4792,6 +4932,90 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/admin/guilds/{guildId}/record-reset:
+    get:
+      operationId: previewServiceAdminGuildRecordReset
+      summary: Preview a development guild record reset
+      description: >-
+        Service-admin-only, non-mutating preview for the non-production test reset tool. It does
+        not require guild operator membership. Returns the exact target, retained active member
+        count, destructive confirmation text, and guild-scoped workflow/history row counts.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+      responses:
+        '200':
+          description: Reset target and deletion impact.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildRecordResetPreviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: resetServiceAdminGuildRecords
+      summary: Reset every workflow and history row for a development guild
+      description: >-
+        Requires a service-admin session, the non-production development-tools flag, exact CSRF,
+        a UUID Idempotency-Key, and the confirmation returned by GET. Guild operator membership is
+        deliberately not required. In one transaction it removes seasons, recruitments, series,
+        games, MMR, auction workflows, import jobs, workflow audit/outbox/idempotency rows, then
+        creates one empty active season and resets all four display counters. Guild membership,
+        settings, Discord catalog, Riot accounts, and user preferences are preserved.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuildRecordResetCommand'
+      responses:
+        '200':
+          description: Authoritative deletion counts and fresh active season.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuildRecordResetResultResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /healthz:
     get:
       operationId: getLiveness
@@ -5259,6 +5483,310 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
   schemas:
+    GuildFullSnapshotSource:
+      type: object
+      additionalProperties: false
+      required: [guildId, guildName]
+      properties:
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        guildName:
+          type: string
+          minLength: 1
+          maxLength: 100
+    GuildFullSnapshotRow:
+      type: object
+      description: Exact snake_case PostgreSQL row projection for the named archive table.
+      additionalProperties: true
+    GuildFullSnapshotRows:
+      type: array
+      items:
+        $ref: '#/components/schemas/GuildFullSnapshotRow'
+    GuildFullSnapshotTables:
+      type: object
+      additionalProperties: false
+      required:
+        - users
+        - user_discord_identities
+        - user_privacy_settings
+        - user_champion_preferences
+        - riot_accounts
+        - dummy_user_profiles
+        - guild_members
+        - user_guild_preferences
+        - guild_counters
+        - seasons
+        - recruitments
+        - recruitment_participants
+        - recruitment_preferred_lanes
+        - recruitment_entry_drafts
+        - recruitment_entry_assignments
+        - series
+        - series_participants
+        - auction_recruitments
+        - auction_recruitment_participants
+        - auction_setup_drafts
+        - auction_setup_teams
+        - auction_tournaments
+        - auction_teams
+        - auction_bid_candidates
+        - auction_lots
+        - auction_actions
+        - auction_team_members
+        - auction_point_ledger
+        - auction_bracket_slots
+        - auction_matches
+        - auction_match_lineups
+        - game_inputs
+        - game_input_picks
+        - game_input_bans
+        - games
+        - game_participants
+        - game_participant_stats
+        - game_bans
+        - user_lane_mmr
+        - mmr_ledger_entries
+        - admin_audit_log
+      properties:
+        users: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        user_discord_identities: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        user_privacy_settings: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        user_champion_preferences: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        riot_accounts: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        dummy_user_profiles: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        guild_members: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        user_guild_preferences: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        guild_counters: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        seasons: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        recruitments: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        recruitment_participants: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        recruitment_preferred_lanes: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        recruitment_entry_drafts: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        recruitment_entry_assignments: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        series: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        series_participants: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_recruitments: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_recruitment_participants: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_setup_drafts: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_setup_teams: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_tournaments: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_teams: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_bid_candidates: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_lots: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_actions: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_team_members: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_point_ledger: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_bracket_slots: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_matches: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        auction_match_lineups: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        game_inputs: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        game_input_picks: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        game_input_bans: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        games: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        game_participants: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        game_participant_stats: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        game_bans: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        user_lane_mmr: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        mmr_ledger_entries: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+        admin_audit_log: { $ref: '#/components/schemas/GuildFullSnapshotRows' }
+    GuildFullSnapshotArchive:
+      type: object
+      additionalProperties: false
+      required: [format, kind, schemaVersion, exportedAt, source, tables]
+      properties:
+        format:
+          const: MONKEYBOT_DATA_TRANSFER
+        kind:
+          const: GUILD_FULL_SNAPSHOT
+        schemaVersion:
+          const: 1
+        exportedAt:
+          type: string
+          format: date-time
+        source:
+          $ref: '#/components/schemas/GuildFullSnapshotSource'
+        tables:
+          $ref: '#/components/schemas/GuildFullSnapshotTables'
+    GuildFullDataSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - totalRows
+        - users
+        - members
+        - seasons
+        - recruitments
+        - series
+        - games
+        - auctionTournaments
+        - auctionMatches
+        - mmrLedgerEntries
+        - auditEntries
+      properties:
+        totalRows: { type: integer, minimum: 0 }
+        users: { type: integer, minimum: 0 }
+        members: { type: integer, minimum: 0 }
+        seasons: { type: integer, minimum: 0 }
+        recruitments: { type: integer, minimum: 0 }
+        series: { type: integer, minimum: 0 }
+        games: { type: integer, minimum: 0 }
+        auctionTournaments: { type: integer, minimum: 0 }
+        auctionMatches: { type: integer, minimum: 0 }
+        mmrLedgerEntries: { type: integer, minimum: 0 }
+        auditEntries: { type: integer, minimum: 0 }
+    GuildFullDataExportData:
+      type: object
+      additionalProperties: false
+      required: [archive, fileName, summary]
+      properties:
+        archive:
+          $ref: '#/components/schemas/GuildFullSnapshotArchive'
+        fileName:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*\.json$'
+        summary:
+          $ref: '#/components/schemas/GuildFullDataSummary'
+    GuildFullDataExportResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildFullDataExportData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildFullDataPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [archive]
+      properties:
+        archive:
+          $ref: '#/components/schemas/GuildFullSnapshotArchive'
+    GuildFullDataIssue:
+      type: object
+      additionalProperties: false
+      required: [reason, message, table, rowCount]
+      properties:
+        reason:
+          type: string
+        message:
+          type: string
+        table:
+          oneOf:
+            - type: string
+            - type: 'null'
+        rowCount:
+          type: integer
+          minimum: 0
+    GuildFullDataPreviewData:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          importId,
+          digest,
+          targetDigest,
+          expiresAt,
+          source,
+          summary,
+          conflicts,
+          remapsSourceGuild,
+          usesTargetActiveSeason,
+          rebasesDisplayNumbers
+        ]
+      properties:
+        importId:
+          type: string
+          format: uuid
+        digest:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+        targetDigest:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+        expiresAt:
+          type: string
+          format: date-time
+        source:
+          $ref: '#/components/schemas/GuildFullSnapshotSource'
+        summary:
+          $ref: '#/components/schemas/GuildFullDataSummary'
+        conflicts:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/GuildFullDataIssue'
+        remapsSourceGuild:
+          type: boolean
+          description: Whether archive guild references will be remapped from the source guild ID to the target path guild ID.
+        usesTargetActiveSeason:
+          type: boolean
+          description: Whether archive rows from its active season will use the target guild's existing active season.
+        rebasesDisplayNumbers:
+          type: boolean
+          description: Whether imported recruitment, series, or auction display numbers will be appended after existing target history.
+    GuildFullDataPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildFullDataPreviewData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildFullDataApplyRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedDigest, expectedTargetDigest]
+      properties:
+        expectedDigest:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+        expectedTargetDigest:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+    GuildFullDataApplyData:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          importId,
+          status,
+          appliedAt,
+          summary,
+          remappedSourceGuild,
+          usedTargetActiveSeason,
+          rebasedDisplayNumbers
+        ]
+      properties:
+        importId:
+          type: string
+          format: uuid
+        status:
+          const: APPLIED
+        appliedAt:
+          type: string
+          format: date-time
+        summary:
+          $ref: '#/components/schemas/GuildFullDataSummary'
+        remappedSourceGuild:
+          type: boolean
+          description: Whether archive guild references were remapped to the target path guild ID.
+        usedTargetActiveSeason:
+          type: boolean
+          description: Whether archive rows from its active season were mapped to the target active season.
+        rebasedDisplayNumbers:
+          type: boolean
+          description: Whether imported recruitment, series, or auction display numbers were appended after existing target history.
+    GuildFullDataApplyResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildFullDataApplyData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     DiscordSnowflake:
       type: string
       pattern: '^[1-9][0-9]{0,19}$'
@@ -7141,6 +7669,130 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/ServiceStatusData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildRecordResetCounts:
+      type: object
+      additionalProperties: false
+      required:
+        - totalRows
+        - seasons
+        - recruitments
+        - series
+        - games
+        - auctionRecruitments
+        - auctionTournaments
+        - mmrRows
+        - importJobs
+      properties:
+        totalRows:
+          type: integer
+          format: int64
+          minimum: 0
+        seasons:
+          type: integer
+          format: int64
+          minimum: 0
+        recruitments:
+          type: integer
+          format: int64
+          minimum: 0
+        series:
+          type: integer
+          format: int64
+          minimum: 0
+        games:
+          type: integer
+          format: int64
+          minimum: 0
+        auctionRecruitments:
+          type: integer
+          format: int64
+          minimum: 0
+        auctionTournaments:
+          type: integer
+          format: int64
+          minimum: 0
+        mmrRows:
+          type: integer
+          format: int64
+          minimum: 0
+        importJobs:
+          type: integer
+          format: int64
+          minimum: 0
+    GuildRecordResetPreviewData:
+      type: object
+      additionalProperties: false
+      required: [guildId, displayName, memberCount, activeSeasonName, confirmation, counts]
+      properties:
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        memberCount:
+          type: integer
+          format: int64
+          minimum: 0
+        activeSeasonName:
+          type: string
+          minLength: 1
+        confirmation:
+          type: string
+          pattern: '^RESET [1-9][0-9]{9,19}$'
+        counts:
+          $ref: '#/components/schemas/GuildRecordResetCounts'
+    GuildRecordResetPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildRecordResetPreviewData'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+    GuildRecordResetCommand:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation:
+          type: string
+          pattern: '^RESET [1-9][0-9]{9,19}$'
+    GuildRecordResetResultData:
+      type: object
+      additionalProperties: false
+      required: [guildId, displayName, resetAt, deleted, freshSeason]
+      properties:
+        guildId:
+          $ref: '#/components/schemas/DiscordSnowflake'
+        displayName:
+          type: string
+          minLength: 1
+        resetAt:
+          type: string
+          format: date-time
+        deleted:
+          $ref: '#/components/schemas/GuildRecordResetCounts'
+        freshSeason:
+          type: object
+          additionalProperties: false
+          required: [id, name]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              minLength: 1
+    GuildRecordResetResultResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/GuildRecordResetResultData'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
     MeData:

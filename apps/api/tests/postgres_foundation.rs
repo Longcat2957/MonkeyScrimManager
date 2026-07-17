@@ -312,7 +312,15 @@ async fn assert_latest_schema(pool: &PgPool) -> TestResult {
     )
     .fetch_one(pool)
     .await?;
-    assert_eq!(table_count, 64, "unexpected public table count");
+    assert_eq!(table_count, 65, "unexpected public table count");
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT to_regclass('public.guild_full_data_imports')::text",
+        )
+        .fetch_one(pool)
+        .await?,
+        Some("guild_full_data_imports".to_owned())
+    );
     Ok(())
 }
 

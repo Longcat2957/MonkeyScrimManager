@@ -90,13 +90,13 @@ Discord Bot / Web browser
 모든 mutation은 HTTP snapshot, `expectedRevision`, CSRF, 필요한 경우 `Idempotency-Key`로 확정한다.
 WebSocket은 authoritative state patch가 아니라 invalidate 신호만 전달한다.
 
-| 화면 | WebSocket 대상 | 범위 |
-| --- | --- | --- |
-| 일반 내전 엔트리 편성 | active guild member | 모집/entry draft 두 topic invalidate |
-| 일반 시리즈 픽/밴 | 현재 active operator | 진행 중 series invalidate |
-| 경매 모집 상세 | active operator | OPEN/CLOSED roster invalidate |
-| 경매 입찰 | `BIDDING` active operator | tournament draft invalidate |
-| 경매 setup, bracket, lineup, match, 결과 | 사용하지 않음 | HTTP snapshot과 revision conflict refetch |
+| 화면                                     | WebSocket 대상            | 범위                                      |
+| ---------------------------------------- | ------------------------- | ----------------------------------------- |
+| 일반 내전 엔트리 편성                    | active guild member       | 모집/entry draft 두 topic invalidate      |
+| 일반 시리즈 픽/밴                        | 현재 active operator      | 진행 중 series invalidate                 |
+| 경매 모집 상세                           | active operator           | OPEN/CLOSED roster invalidate             |
+| 경매 입찰                                | `BIDDING` active operator | tournament draft invalidate               |
+| 경매 setup, bracket, lineup, match, 결과 | 사용하지 않음             | HTTP snapshot과 revision conflict refetch |
 
 - reconnect, browser focus, `resync_required`, 더 높은 revision invalidate 뒤에는 HTTP GET으로 최신 snapshot을
   다시 읽는다.
@@ -113,31 +113,51 @@ WebSocket은 authoritative state patch가 아니라 invalidate 신호만 전달�
   privacy setting으로 숨기지 않는다.
 - guild admin은 members, settings, seasons, data transfer, audit logs를 현재 운영 범위에 둔다.
   operations/revert 전용 admin 탭과 web bulk registration은 노출하지 않는다.
-- `/g/{guildId}/admin/data`는 active operator가 현재 ACTIVE 시즌의 guild MMR summary를 readable plain JSON
-  `MEMBER_SEASON_MMR_SEED` archive로 내보내거나, preview를 통과한 archive를 가져오는 경로다. Import는
-  target guild에 이미 ACTIVE인 Discord member만 Discord ID로 매칭하며, global user identity, Riot account,
-  privacy, Discord role/channel config, dummy user, 모집/시리즈/경매/게임 history를 만들거나 변경하지 않는다.
-- data import는 preview가 고정한 archive digest, MEMBERS revision, target lane MMR snapshot을 다시 검증한 뒤
-  MMR summary와 `DATA_IMPORT_SEED` ledger를 한 transaction으로 기록한다. game/win counters와 기존 game history는
-  옮기지 않으며, generic restore나 mookbot_v3 dump import가 아니다.
+- `/g/{guildId}/admin/data`의 기본 경로는 active operator가 `GUILD_FULL_SNAPSHOT` V1 plain JSON으로
+  멤버·시즌·모집·시리즈·경매·픽밴·게임·MMR 원장·감사 기록을 함께 내보내고 가져온다. Session/OAuth secret,
+  Discord role/channel catalog·설정, cache/outbox는 포함하지 않는다. `MEMBER_SEASON_MMR_SEED` API는 현재 시즌
+  MMR만 교환하는 하위 호환 계약으로 유지한다.
+- full data import는 source와 target Discord guild ID가 달라도 허용한다. Target의 기존 closed season 이력은
+  보존하고 현재 active season의 전적·MMR·진행 도메인만 비어 있어야 한다. 모든 archive guild 참조를 target
+  ID로 매핑하고 source Discord 게시물 연결은 제거한다. Archive의 active season을 참조하는 모든 row는 target의
+  현재 season ID로 매핑하며, 전역 모집/시리즈/경매 display number는 기존 target 번호 뒤로 재배치한다. Preview는 PostgreSQL SAVEPOINT에서
+  이 매핑 결과를 실제 제약으로 검사하고 모든 domain 변경을 rollback한다. Apply는 archive와 target digest를
+  다시 검증한 뒤 한 transaction으로만 반영하며 partial success가 없다. 동일 사용자의 Riot 계정이나 lane별
+  선호 챔피언이 이미 MonkeyBot에 있으면 현재 전역 프로필을 보존하고, 비어 있는 사용자/lane에만 archive 값을 보충한다.
+- `mookbot_v3` D1/Valkey는 read-only snapshot과 명시적 정제/변환 report를 거쳐 같은
+  `GUILD_FULL_SNAPSHOT`으로 만든다. 변환·preview와 실제 apply는 분리하며 operator 승인 전에는 apply하지 않는다.
 - dummy user 기능은 `MONKEYBOT_DUMMY_USERS_ENABLED=true`인 non-production service-admin 도구다. 더미
   사용자는 실제 DB entity이지만 로그인/Discord role/운영 principal이 될 수 없다.
+
+## Discord 애플리케이션 환경 경계
+
+- 로컬 PC와 VPS dev는 `MonkeyBot[dev]` 한 애플리케이션을 사용하고, VPS main만 `MonkeyBot`을 사용한다.
+- 로컬 OAuth redirect는 `http://localhost:5173/oauth/callback`, VPS dev는
+  `https://dev.monkeybot.lol/oauth/callback`, VPS main은 `https://monkeybot.lol/oauth/callback`으로 고정한다.
+- API와 Bot은 환경별 공통 `MONKEYBOT_DISCORD_APPLICATION_ID`를 사용한다. OAuth client secret과 Bot token은
+  각각의 secret runtime 파일에만 두며 deployment env나 저장소에 넣지 않는다.
+- 로컬과 VPS dev의 command scope는 `guild`이고 `MONKEYBOT_BOT_DEV_GUILD_ID`가 필수다. VPS main의 scope는
+  `global`이며 dev guild ID를 설정하지 않는다.
+- Bot은 로그인한 토큰의 application ID가 설정값과 같은지 확인하기 전에는 readiness를 열거나 명령을
+  등록하지 않는다. 로컬 helper는 guild 등록만 제공하며 dev application의 과거 global 명령 삭제는 별도
+  명시적 작업으로 한 번만 실행한다.
+- 실제 파일 배치, preflight, 자격증명 교체 순서는 `docs/15-discord-environment-operations.md`를 따른다.
 
 ## 현재 Bot 명령 등록
 
 `apps/bot/src/commands/index.ts`에 현재 등록된 명령만 사용자에게 제공한다.
 
-| 명령 | 역할 |
-| --- | --- |
-| `/초기설정` | 운영 role, 필수 모집 채널, 선택 feedback 채널을 설정 |
-| `/등록` | 현재 guild membership과 Riot ID 연결 |
-| `/내전모집` | 일반 내전 모집 생성 |
-| `/경매모집` | 10/20인 경매 모집과 rule snapshot 생성 |
-| `/경매인원추가` | 운영자의 경매 모집 대상 참가자 추가 |
-| `/경매인원삭제` | 운영자의 경매 모집 참가자 제거 |
-| `/경매목록` | active/completed tournament 조회 |
-| `/경매강제취소` | 경매 모집/연결 tournament의 안전 취소 |
-| `/경매조기종료` | 진행 중 tournament 조기 종료 |
+| 명령            | 역할                                                 |
+| --------------- | ---------------------------------------------------- |
+| `/초기설정`     | 운영 role, 필수 모집 채널, 선택 feedback 채널을 설정 |
+| `/등록`         | 현재 guild membership과 Riot ID 연결                 |
+| `/내전모집`     | 일반 내전 모집 생성                                  |
+| `/경매모집`     | 10/20인 경매 모집과 rule snapshot 생성               |
+| `/경매인원추가` | 운영자의 경매 모집 대상 참가자 추가                  |
+| `/경매인원삭제` | 운영자의 경매 모집 참가자 제거                       |
+| `/경매목록`     | active/completed tournament 조회                     |
+| `/경매강제취소` | 경매 모집/연결 tournament의 안전 취소                |
+| `/경매조기종료` | 진행 중 tournament 조기 종료                         |
 
 `/내전인원추가`, `/내전목록`, `/새시즌`, `/도움말`, `/전적`, `/랭킹` 등을 포함한 나머지 문서상 명령은 현재
 command registry에 없으므로 제공 기능으로 안내하지 않는다.

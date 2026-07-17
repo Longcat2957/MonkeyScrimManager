@@ -30,7 +30,9 @@ const environmentSchema = z
 	.object({
 		MONKEYBOT_ENV: z.enum(['local', 'development', 'production', 'test']),
 		MONKEYBOT_BOT_TOKEN: z.string().min(1),
-		MONKEYBOT_BOT_APPLICATION_ID: snowflakeSchema,
+		MONKEYBOT_DISCORD_APPLICATION_ID: optionalSnowflakeSchema,
+		MONKEYBOT_BOT_APPLICATION_ID: optionalSnowflakeSchema,
+		MONKEYBOT_BOT_COMMAND_SCOPE: z.enum(['guild', 'global']),
 		MONKEYBOT_BOT_DEV_GUILD_ID: optionalSnowflakeSchema,
 		MONKEYBOT_BOT_API_BASE_URL: httpUrlSchema,
 		MONKEYBOT_BOT_SERVICE_TOKEN: z.string().min(32),
@@ -67,11 +69,13 @@ const environmentSchema = z
 
 export type BotEnvironment = z.infer<typeof environmentSchema>['MONKEYBOT_ENV'];
 export type BotLogLevel = z.infer<typeof environmentSchema>['MONKEYBOT_BOT_LOG_LEVEL'];
+export type BotCommandScope = z.infer<typeof environmentSchema>['MONKEYBOT_BOT_COMMAND_SCOPE'];
 
 export interface BotConfig {
 	environment: BotEnvironment;
 	discordToken: string;
 	applicationId: string;
+	commandScope: BotCommandScope;
 	devGuildId?: string;
 	apiBaseUrl: URL;
 	serviceToken: string;
@@ -94,6 +98,30 @@ export class BotConfigError extends Error {
 	}
 }
 
+export function assertCommandRegistrationScope(
+	config: Pick<BotConfig, 'commandScope' | 'environment'>,
+	requestedScope: BotCommandScope
+): void {
+	if (requestedScope !== config.commandScope) {
+		throw new BotConfigError(
+			`Discord command registration scope ${requestedScope} is forbidden in ${config.environment}; configured scope is ${config.commandScope}`
+		);
+	}
+}
+
+export function assertLegacyGlobalCleanupAllowed(
+	config: Pick<BotConfig, 'commandScope' | 'environment'>
+): void {
+	if (
+		(config.environment !== 'local' && config.environment !== 'development') ||
+		config.commandScope !== 'guild'
+	) {
+		throw new BotConfigError(
+			'Legacy global command cleanup is allowed only for local/development guild-scoped applications'
+		);
+	}
+}
+
 export function loadBotConfig(environment: NodeJS.ProcessEnv = process.env): BotConfig {
 	const parsed = environmentSchema.safeParse(environment);
 	if (!parsed.success) {
@@ -108,11 +136,21 @@ export function loadBotConfig(environment: NodeJS.ProcessEnv = process.env): Bot
 	const health = parseHealthAddress(parsed.data.MONKEYBOT_BOT_HEALTH_ADDR);
 	const apiBaseUrl = normalizeBaseUrl(parsed.data.MONKEYBOT_BOT_API_BASE_URL);
 	const webOrigin = normalizeOrigin(parsed.data.MONKEYBOT_WEB_ORIGIN, 'MONKEYBOT_WEB_ORIGIN');
+	const applicationId = resolveApplicationId(
+		parsed.data.MONKEYBOT_DISCORD_APPLICATION_ID,
+		parsed.data.MONKEYBOT_BOT_APPLICATION_ID
+	);
+	validateCommandScope(
+		parsed.data.MONKEYBOT_ENV,
+		parsed.data.MONKEYBOT_BOT_COMMAND_SCOPE,
+		parsed.data.MONKEYBOT_BOT_DEV_GUILD_ID
+	);
 
 	return {
 		environment: parsed.data.MONKEYBOT_ENV,
 		discordToken: parsed.data.MONKEYBOT_BOT_TOKEN,
-		applicationId: parsed.data.MONKEYBOT_BOT_APPLICATION_ID,
+		applicationId,
+		commandScope: parsed.data.MONKEYBOT_BOT_COMMAND_SCOPE,
 		...(parsed.data.MONKEYBOT_BOT_DEV_GUILD_ID
 			? { devGuildId: parsed.data.MONKEYBOT_BOT_DEV_GUILD_ID }
 			: {}),
@@ -129,6 +167,46 @@ export function loadBotConfig(environment: NodeJS.ProcessEnv = process.env): Bot
 		notificationPollIntervalMs: parsed.data.MONKEYBOT_BOT_NOTIFICATION_POLL_INTERVAL_MS,
 		logLevel: parsed.data.MONKEYBOT_BOT_LOG_LEVEL
 	};
+}
+
+function resolveApplicationId(canonical: string | undefined, legacy: string | undefined): string {
+	if (canonical && legacy && canonical !== legacy) {
+		throw new BotConfigError(
+			'Invalid bot configuration: MONKEYBOT_DISCORD_APPLICATION_ID must match MONKEYBOT_BOT_APPLICATION_ID'
+		);
+	}
+	const applicationId = canonical ?? legacy;
+	if (!applicationId) {
+		throw new BotConfigError('Invalid bot configuration: MONKEYBOT_DISCORD_APPLICATION_ID');
+	}
+	return applicationId;
+}
+
+function validateCommandScope(
+	environment: BotEnvironment,
+	commandScope: BotCommandScope,
+	devGuildId: string | undefined
+): void {
+	if (environment === 'production' && commandScope !== 'global') {
+		throw new BotConfigError(
+			'Invalid bot configuration: production requires MONKEYBOT_BOT_COMMAND_SCOPE=global'
+		);
+	}
+	if ((environment === 'local' || environment === 'development') && commandScope !== 'guild') {
+		throw new BotConfigError(
+			'Invalid bot configuration: local/development requires MONKEYBOT_BOT_COMMAND_SCOPE=guild'
+		);
+	}
+	if (commandScope === 'guild' && !devGuildId) {
+		throw new BotConfigError(
+			'Invalid bot configuration: guild command scope requires MONKEYBOT_BOT_DEV_GUILD_ID'
+		);
+	}
+	if (commandScope === 'global' && devGuildId) {
+		throw new BotConfigError(
+			'Invalid bot configuration: global command scope forbids MONKEYBOT_BOT_DEV_GUILD_ID'
+		);
+	}
 }
 
 function normalizeBaseUrl(value: URL): URL {

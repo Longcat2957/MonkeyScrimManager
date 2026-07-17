@@ -8,6 +8,15 @@ import {
 	type GuildDataTransferExportData,
 	type GuildDataTransferPreview
 } from '$lib/contracts/guildDataTransfer';
+import {
+	guildFullDataTransferApplyEnvelopeSchema,
+	guildFullDataTransferExportEnvelopeSchema,
+	guildFullDataTransferPreviewEnvelopeSchema,
+	type GuildFullDataTransferApplyResult,
+	type GuildFullDataTransferExportData,
+	type GuildFullDataTransferPreview,
+	type GuildFullSnapshotArchive
+} from '$lib/contracts/guildFullDataTransfer';
 import { apiRoute } from '$lib/routing';
 import { z, type ZodType } from 'zod';
 
@@ -30,10 +39,21 @@ export interface ApplyGuildDataTransferCommand {
 	idempotencyKey: string;
 }
 
+export interface ApplyGuildFullDataTransferCommand {
+	importId: string;
+	expectedDigest: string;
+	expectedTargetDigest: string;
+	idempotencyKey: string;
+}
+
 /** Archive exports are deliberately portable, readable JSON rather than an encrypted container. */
 export function serializeGuildMemberSeasonMmrSeedArchive(
 	archive: MemberSeasonMmrSeedArchive
 ): string {
+	return `${JSON.stringify(archive, null, 2)}\n`;
+}
+
+export function serializeGuildFullSnapshotArchive(archive: GuildFullSnapshotArchive): string {
 	return `${JSON.stringify(archive, null, 2)}\n`;
 }
 
@@ -175,6 +195,55 @@ export async function applyGuildMemberSeasonMmrSeedImport(
 			body: JSON.stringify({
 				expectedDigest: command.expectedDigest,
 				expectedTargetRevision: command.expectedTargetRevision
+			})
+		}
+	);
+	return envelope.data;
+}
+
+export async function exportGuildFullSnapshot(
+	guildId: string
+): Promise<GuildFullDataTransferExportData> {
+	const envelope = await request(
+		apiRoute(['guilds', guildId, 'full-data-export']),
+		guildFullDataTransferExportEnvelopeSchema,
+		{
+			method: 'POST',
+			headers: mutationHeaders()
+		}
+	);
+	return envelope.data;
+}
+
+export async function previewGuildFullSnapshotImport(
+	guildId: string,
+	archive: GuildFullSnapshotArchive
+): Promise<GuildFullDataTransferPreview> {
+	const envelope = await request(
+		apiRoute(['guilds', guildId, 'full-data-imports', 'preview']),
+		guildFullDataTransferPreviewEnvelopeSchema,
+		{
+			method: 'POST',
+			headers: mutationHeaders(),
+			body: JSON.stringify({ archive })
+		}
+	);
+	return envelope.data;
+}
+
+export async function applyGuildFullSnapshotImport(
+	guildId: string,
+	command: ApplyGuildFullDataTransferCommand
+): Promise<GuildFullDataTransferApplyResult> {
+	const envelope = await request(
+		apiRoute(['guilds', guildId, 'full-data-imports', command.importId, 'apply']),
+		guildFullDataTransferApplyEnvelopeSchema,
+		{
+			method: 'POST',
+			headers: mutationHeaders(command.idempotencyKey),
+			body: JSON.stringify({
+				expectedDigest: command.expectedDigest,
+				expectedTargetDigest: command.expectedTargetDigest
 			})
 		}
 	);

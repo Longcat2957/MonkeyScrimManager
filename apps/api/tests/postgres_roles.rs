@@ -108,6 +108,26 @@ async fn run_postgres_role_contract() -> TestResult {
     let runtime = server
         .connect(DATABASE, RUNTIME_ROLE, RUNTIME_PASSWORD)
         .await?;
+    assert_permission_denied(
+        &runtime,
+        "SELECT public.service_admin_reset_guild_records('990000000000000001')",
+    )
+    .await?;
+    let reset_enabled = server
+        .exec_psql([
+            "-U",
+            MIGRATION_ROLE,
+            "-d",
+            DATABASE,
+            "-v",
+            &format!("runtime_role={RUNTIME_ROLE}"),
+            "-v",
+            "service_admin_reset_enabled=true",
+            "-f",
+            GRANTS_SCRIPT,
+        ])
+        .await?;
+    assert_eq!(reset_enabled.exit_code, 0, "{}", reset_enabled.stderr);
     assert_current_table_contract(&runtime).await?;
     assert_future_table_defaults(&migration, &runtime).await?;
 
@@ -192,6 +212,26 @@ async fn assert_current_table_contract(runtime: &PgPool) -> TestResult {
         .execute(runtime)
         .await?;
     }
+    sqlx::query(
+        "INSERT INTO guilds (
+             guild_id, discord_name, icon_hash, status, installed_by,
+             installed_at, activated_at, left_at, updated_at
+         ) VALUES (
+             '990000000000000001', 'runtime-reset-capability', NULL, 'ACTIVE', NULL,
+             now(), now(), NULL, now()
+         )",
+    )
+    .execute(runtime)
+    .await?;
+    let reset_capability_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT public.service_admin_reset_guild_records('990000000000000001')",
+    )
+    .fetch_one(runtime)
+    .await?;
+    assert_eq!(reset_capability_rows, 0);
+    sqlx::query("DELETE FROM guilds WHERE guild_id = '990000000000000001'")
+        .execute(runtime)
+        .await?;
     Ok(())
 }
 

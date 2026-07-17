@@ -9,6 +9,7 @@ mod guild_admin_member_routes;
 mod guild_admin_settings_routes;
 mod guild_audit_log_routes;
 mod guild_data_transfer_routes;
+mod guild_full_data_transfer_routes;
 mod guild_leaderboard_routes;
 mod guild_record_profile_routes;
 mod guild_season_routes;
@@ -18,10 +19,12 @@ mod realtime_routes;
 mod riot_routes;
 mod routes;
 mod search_suggestion_routes;
+mod service_admin_reset_routes;
 mod workflow_routes;
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     middleware::from_fn_with_state,
     routing::{delete, get, patch, post, put},
 };
@@ -107,6 +110,18 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/data-imports/{import_id}/apply",
             post(guild_data_transfer_routes::apply),
+        )
+        .route(
+            "/api/guilds/{guild_id}/full-data-export",
+            post(guild_full_data_transfer_routes::export),
+        )
+        .route(
+            "/api/guilds/{guild_id}/full-data-imports/preview",
+            post(guild_full_data_transfer_routes::preview),
+        )
+        .route(
+            "/api/guilds/{guild_id}/full-data-imports/{import_id}/apply",
+            post(guild_full_data_transfer_routes::apply),
         )
         .route(
             "/api/guilds/{guild_id}/seasons",
@@ -325,10 +340,12 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             get(riot_routes::privacy).put(riot_routes::update_privacy),
         )
         .merge(notification_routes::router())
+        .merge(service_admin_reset_routes::router())
         .merge(dummy_user_routes)
         .merge(extra_routes)
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
+        .layer(DefaultBodyLimit::max(max_body_bytes))
         .layer(RequestBodyLimitLayer::new(max_body_bytes))
         .layer(from_fn_with_state(
             state.clone(),
@@ -464,6 +481,32 @@ mod tests {
         let body = body_json(response).await;
         assert_eq!(body["error"]["code"], "payload_too_large");
         assert_eq!(body["error"]["details"]["maxBodyBytes"], 4);
+    }
+
+    #[tokio::test]
+    async fn json_body_above_axum_default_and_below_configured_limit_is_accepted() {
+        const AXUM_DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
+        const CONFIGURED_BODY_LIMIT: usize = 4 * 1024 * 1024;
+
+        let state = state(5_000, CONFIGURED_BODY_LIMIT);
+        let app = build_router_with_routes(state, Router::new().route("/json", post(accept_json)));
+        let payload = serde_json::json!({
+            "archive": "x".repeat(AXUM_DEFAULT_BODY_LIMIT + 1),
+        })
+        .to_string();
+        assert!(payload.len() < CONFIGURED_BODY_LIMIT);
+
+        let response = app
+            .oneshot(
+                Request::post("/json")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload))
+                    .expect("large JSON request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]

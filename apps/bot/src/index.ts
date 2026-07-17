@@ -1,6 +1,7 @@
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { MonkeyBotApiClient } from './api/client.js';
 import { loadBotConfig } from './config.js';
+import { assertDiscordApplicationIdentity } from './discord/application-identity.js';
 import { installGuildCatalogSync } from './discord/catalog-sync.js';
 import { installBotNotificationRelay } from './discord/notification-relay.js';
 import { installBotHeartbeatReporter } from './health/heartbeat.js';
@@ -61,13 +62,6 @@ async function main(): Promise<void> {
 	});
 	installInteractionDispatcher(client, { api, catalogSync, config, logger });
 
-	client.once(Events.ClientReady, (readyClient) => {
-		readiness.discord = { ready: true, checkedAt: new Date().toISOString() };
-		logger.info(
-			{ userId: readyClient.user.id, guildCount: readyClient.guilds.cache.size },
-			'Discord bot ready'
-		);
-	});
 	client.on(Events.Error, (error) => {
 		readiness.discord = { ready: false, checkedAt: new Date().toISOString() };
 		logger.error({ err: error }, 'Discord client error');
@@ -92,8 +86,19 @@ async function main(): Promise<void> {
 
 	try {
 		await client.login(config.discordToken);
+		assertDiscordApplicationIdentity(config.applicationId, client.application?.id);
+		readiness.discord = { ready: true, checkedAt: new Date().toISOString() };
+		logger.info(
+			{
+				applicationId: config.applicationId,
+				userId: client.user?.id,
+				guildCount: client.guilds.cache.size,
+				commandScope: config.commandScope
+			},
+			'Discord bot identity verified and ready'
+		);
 	} catch (error) {
-		logger.fatal({ err: error }, 'Discord login failed');
+		logger.fatal({ err: error }, 'Discord login or application identity verification failed');
 		await shutdown('SIGTERM');
 		throw error;
 	}

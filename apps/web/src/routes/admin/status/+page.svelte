@@ -1,11 +1,29 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Activity, Bot, Clock3, Database, RefreshCw, Server, TriangleAlert } from 'lucide-svelte';
+	import {
+		Activity,
+		Bot,
+		CheckCircle2,
+		Clock3,
+		Database,
+		RefreshCw,
+		Server,
+		ShieldAlert,
+		Trash2,
+		TriangleAlert
+	} from 'lucide-svelte';
 	import {
 		fetchServiceStatus,
 		serviceStatusErrorText,
 		type ServiceStatusSnapshot
 	} from '$lib/api/serviceStatus';
+	import {
+		fetchGuildRecordResetPreview,
+		resetGuildRecords,
+		serviceAdminResetErrorText,
+		type GuildRecordResetPreview,
+		type GuildRecordResetResult
+	} from '$lib/api/serviceAdminReset';
 	import Panel from '$lib/components/layout/Panel.svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
@@ -49,10 +67,24 @@
 	let loading = $state(true);
 	let refreshing = $state(false);
 	let refreshError = $state<string | null>(null);
+	let resetGuildId = $state('');
+	let resetPreview = $state<GuildRecordResetPreview | null>(null);
+	let resetResult = $state<GuildRecordResetResult | null>(null);
+	let resetConfirmation = $state('');
+	let resetPreviewing = $state(false);
+	let resetting = $state(false);
+	let resetError = $state<string | null>(null);
+	let resetIdempotencyKey = $state<string | null>(null);
 
 	const services = $derived(snapshot?.services.map(toServiceItem) ?? []);
 	const issues = $derived(services.filter((service) => service.status !== 'normal'));
 	const checkedAt = $derived(snapshot ? new Date(snapshot.checkedAt) : null);
+	const canReset = $derived(
+		resetPreview !== null &&
+			resetConfirmation === resetPreview.confirmation &&
+			!resetting &&
+			!resetPreviewing
+	);
 
 	onMount(() => {
 		void refreshStatus();
@@ -105,6 +137,45 @@
 		} finally {
 			loading = false;
 			refreshing = false;
+		}
+	}
+
+	async function inspectResetTarget() {
+		if (resetPreviewing || resetting) return;
+		resetPreviewing = true;
+		resetError = null;
+		resetPreview = null;
+		resetResult = null;
+		resetConfirmation = '';
+		resetIdempotencyKey = null;
+		try {
+			resetPreview = await fetchGuildRecordResetPreview(resetGuildId.trim());
+		} catch (cause) {
+			resetError = serviceAdminResetErrorText(cause);
+		} finally {
+			resetPreviewing = false;
+		}
+	}
+
+	async function executeReset() {
+		if (!canReset || !resetPreview) return;
+		resetting = true;
+		resetError = null;
+		const preview = resetPreview;
+		resetIdempotencyKey ??= globalThis.crypto.randomUUID();
+		try {
+			resetResult = await resetGuildRecords(
+				preview.guildId,
+				resetConfirmation,
+				resetIdempotencyKey
+			);
+			resetPreview = null;
+			resetConfirmation = '';
+			resetIdempotencyKey = null;
+		} catch (cause) {
+			resetError = serviceAdminResetErrorText(cause);
+		} finally {
+			resetting = false;
 		}
 	}
 </script>
@@ -229,4 +300,142 @@
 			</div>
 		</Panel>
 	{/if}
+
+	<Panel
+		title="테스트 데이터 초기화"
+		description="서비스 관리자만 사용할 수 있는 개발 환경 전용 기능입니다."
+		compact
+	>
+		<div class="border-b border-red-400/20 bg-red-500/[0.06] px-4 py-4">
+			<div class="flex items-start gap-3">
+				<div
+					class="grid size-9 shrink-0 place-items-center border border-red-300/30 bg-red-500/10 text-red-100"
+				>
+					<ShieldAlert size={17} aria-hidden="true" />
+				</div>
+				<div class="min-w-0">
+					<strong class="text-sm text-red-50"
+						>선택한 서버의 모든 경기 이력을 영구 삭제합니다.</strong
+					>
+					<p class="mt-1 text-xs leading-5 text-red-100/70">
+						시즌·모집·시리즈·게임·MMR·경매·가져오기 이력을 비우고 빈 활성 시즌을 만듭니다. 서버
+						멤버, 설정, Discord 카탈로그와 Riot 계정은 유지됩니다. 이미 전송된 Discord 메시지는
+						삭제하지 않습니다.
+					</p>
+				</div>
+			</div>
+		</div>
+
+		<div class="space-y-4 px-4 py-4">
+			<div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+				<label class="grid gap-1.5">
+					<span class="text-xs font-semibold text-slate-300">Discord 서버 ID</span>
+					<input
+						bind:value={resetGuildId}
+						inputmode="numeric"
+						autocomplete="off"
+						placeholder="1525851181157580861"
+						disabled={resetPreviewing || resetting}
+						class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm tabular-nums text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/50 disabled:opacity-50"
+					/>
+				</label>
+				<button
+					type="button"
+					onclick={inspectResetTarget}
+					disabled={resetGuildId.trim().length < 10 || resetPreviewing || resetting}
+					class="inline-flex h-10 items-center justify-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-4 text-xs font-semibold text-slate-200 hover:border-cyan-400/40 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+				>
+					<RefreshCw size={14} class={resetPreviewing ? 'animate-spin' : ''} aria-hidden="true" />
+					{resetPreviewing ? '확인 중' : '초기화 대상 확인'}
+				</button>
+			</div>
+
+			{#if resetError}
+				<div
+					class="border border-red-400/25 bg-red-500/[0.07] px-3 py-2.5 text-xs leading-5 text-red-100"
+					role="alert"
+				>
+					{resetError}
+				</div>
+			{/if}
+
+			{#if resetResult}
+				<div
+					class="border border-emerald-400/25 bg-emerald-500/[0.07] px-3 py-3"
+					aria-live="polite"
+				>
+					<div class="flex items-center gap-2 text-emerald-100">
+						<CheckCircle2 size={16} aria-hidden="true" />
+						<strong class="text-sm">{resetResult.displayName} 초기화 완료</strong>
+					</div>
+					<p class="mt-1.5 text-xs text-emerald-100/70">
+						{resetResult.deleted.totalRows.toLocaleString()}개 row를 삭제하고 ‘{resetResult
+							.freshSeason.name}’ 빈 시즌을 만들었습니다.
+					</p>
+				</div>
+			{/if}
+
+			{#if resetPreview}
+				<div class="border border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)]">
+					<div class="border-b border-[var(--color-app-border-muted)] px-3 py-3">
+						<strong class="block text-sm text-slate-100">{resetPreview.displayName}</strong>
+						<p class="mt-1 text-xs tabular-nums text-slate-500">
+							{resetPreview.guildId} · 활성 멤버 {resetPreview.memberCount.toLocaleString()}명 ·
+							{resetPreview.activeSeasonName}
+						</p>
+					</div>
+					<dl
+						class="grid grid-cols-2 divide-x divide-y divide-[var(--color-app-border-muted)] sm:grid-cols-4"
+					>
+						<div class="px-3 py-2.5">
+							<dt class="text-[11px] text-slate-500">전체 삭제 row</dt>
+							<dd class="mt-1 text-sm font-semibold tabular-nums text-slate-200">
+								{resetPreview.counts.totalRows.toLocaleString()}
+							</dd>
+						</div>
+						<div class="px-3 py-2.5">
+							<dt class="text-[11px] text-slate-500">모집 / 시리즈</dt>
+							<dd class="mt-1 text-sm font-semibold tabular-nums text-slate-200">
+								{resetPreview.counts.recruitments.toLocaleString()} / {resetPreview.counts.series.toLocaleString()}
+							</dd>
+						</div>
+						<div class="px-3 py-2.5">
+							<dt class="text-[11px] text-slate-500">게임 / MMR row</dt>
+							<dd class="mt-1 text-sm font-semibold tabular-nums text-slate-200">
+								{resetPreview.counts.games.toLocaleString()} / {resetPreview.counts.mmrRows.toLocaleString()}
+							</dd>
+						</div>
+						<div class="px-3 py-2.5">
+							<dt class="text-[11px] text-slate-500">경매 대회 / import</dt>
+							<dd class="mt-1 text-sm font-semibold tabular-nums text-slate-200">
+								{resetPreview.counts.auctionTournaments.toLocaleString()} / {resetPreview.counts.importJobs.toLocaleString()}
+							</dd>
+						</div>
+					</dl>
+				</div>
+
+				<label class="grid gap-1.5">
+					<span class="text-xs font-semibold text-slate-300">
+						계속하려면 <code class="select-all text-red-200">{resetPreview.confirmation}</code> 입력
+					</span>
+					<input
+						bind:value={resetConfirmation}
+						autocomplete="off"
+						spellcheck="false"
+						disabled={resetting}
+						class="h-10 w-full border border-red-300/25 bg-red-950/20 px-3 font-mono text-sm text-red-50 outline-none placeholder:text-red-200/25 focus:border-red-300/55 disabled:opacity-50"
+					/>
+				</label>
+				<button
+					type="button"
+					onclick={executeReset}
+					disabled={!canReset}
+					class="inline-flex h-10 w-full items-center justify-center gap-2 border border-red-300/35 bg-red-500/10 px-4 text-xs font-semibold text-red-50 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-35 sm:w-auto"
+				>
+					<Trash2 size={15} aria-hidden="true" />
+					{resetting ? '전체 기록 삭제 중' : '전체 기록 삭제'}
+				</button>
+			{/if}
+		</div>
+	</Panel>
 </div>

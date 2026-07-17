@@ -1748,7 +1748,8 @@ Rules:
   값으로 갱신한다. row의 정확한 tail은 timestamp가 아니라 lane_revision으로 판정한다.
 - `mmr_after = mmr_before + delta`는 Rust domain calculation 결과를 그대로 저장한다. float
   equality를 임의 rounding한 SQL CHECK로 강제하지 않는다.
-- runtime role에는 ledger UPDATE/DELETE 권한을 주지 않는다.
+- runtime role에는 ledger UPDATE/DELETE 권한을 직접 주지 않는다. 개발 환경의 service-admin 전체 기록
+  초기화만 guild-scoped security-definer 함수로 해당 guild의 append-only row를 제거할 수 있다.
 
 MMR revert는 마지막 confirmed game만 대상으로 한다. 모든 참가자 lane의 현재 summary가 대상 game의
 `mmr_after`/count를 그대로 가리키고, 이후 ledger가 있다면 이미 `GAME_REVERSAL`로 상쇄된 후속 game 결과만
@@ -1799,6 +1800,44 @@ account/PUUID, privacy, Discord role/channel, dummy profile, game/series/auction
 `conflict_count`는 검토 결과를 재현하는 저장값이다. Applied import는 archive payload를 즉시 제거하고 다시
 실행할 수 없다. API process의 60초 retention task는 만료된 `PREVIEWED` row를 삭제한다. Preview/apply audit에는
 digest, source/target 식별자와 count만 넣고 archive payload를 넣지 않는다.
+
+### `guild_full_data_imports`
+
+```text
+guild_id           text        NOT NULL
+id                 uuid        NOT NULL
+actor_id           text        NOT NULL
+status             text        NOT NULL CHECK PREVIEWED|APPLIED
+archive_digest     bytea       NOT NULL CHECK octet_length=32
+archive_payload    jsonb       NULL for APPLIED, otherwise NOT NULL
+source_guild_id    text        NOT NULL CHECK Discord snowflake
+target_state_digest bytea      NOT NULL CHECK octet_length=32
+summary            jsonb       NOT NULL
+conflicts          jsonb       NOT NULL CHECK JSON array
+conflict_count     integer     NOT NULL CHECK >= 0 and array length와 동일
+request_id         text        NOT NULL CHECK length 1..128
+created_at         timestamptz NOT NULL
+expires_at         timestamptz NOT NULL CHECK > created_at
+applied_at         timestamptz NULL
+
+PK (guild_id, id)
+FK (guild_id) -> guilds.guild_id RESTRICT
+FK (guild_id, actor_id) -> guild_members(guild_id, user_id) RESTRICT
+CHECK ((status='PREVIEWED' AND archive_payload IS NOT NULL AND applied_at IS NULL)
+    OR (status='APPLIED' AND archive_payload IS NULL AND applied_at IS NOT NULL))
+index (guild_id, actor_id, status, expires_at DESC)
+partial index (expires_at) WHERE status='PREVIEWED'
+```
+
+이 table은 `GUILD_FULL_SNAPSHOT` V1 preview를 apply와 묶는다. Target guild의 기존 bootstrap/member/config와
+season snapshot은 target state digest에 포함한다. `source_guild_id`가 target `guild_id`와 달라도 허용하며 import
+시 archive tenant 참조를 target으로 재매핑한다. 이때 source guild의 모집글/결과 카드 Discord channel/message
+연결은 제거한다. Target에 단 하나의 active season만 있고 그 외
+모집·시리즈·경매·게임·MMR domain row가 없으면 archive active season ID를 현재 target season ID로 매핑한다.
+Archive의 closed season row는 원래 ID로 보존하고, 그 외 domain row가 하나라도 있으면 apply를 막는다. Preview는
+SAVEPOINT 안에서 매핑한 archive를 insert해 모든 FK/CHECK/UNIQUE 제약을 확인한 뒤 rollback하며, preview audit과
+이 row만 commit한다. Apply transaction은 digest, actor, expiry, conflict, target digest와 target importability를
+다시 확인한다. 성공하면 archive payload를 즉시 NULL로 만들어 PII 보존 시간을 최소화한다.
 
 ## Safety와 전달 원장
 
@@ -2401,6 +2440,13 @@ FK dependency가 성립하는 순서로 migration을 고정한다.
 
 0020_guild_data_transfer.sql
   DATA_IMPORT_SEED ledger source and short-lived guild data import previews
+
+0021_guild_full_data_transfer.sql
+  full guild snapshot preview/apply command records
+
+0022_service_admin_record_reset.sql
+0023_service_admin_record_reset_order.sql
+  development-only service-admin guild record reset capability; 0023 fixes the complete FK order
 ```
 
 `games.auction_match_id`가 참조할 table보다 먼저 games를 생성하지 않는다. migration file은
@@ -2423,9 +2469,10 @@ SQLx 운영 기준:
 
 ## mookbot_v3 migration
 
-이 절의 one-time platform cutover는 `/g/{guildId}/admin/data`의 guild operator data transfer와 완전히
-분리한다. `MEMBER_SEASON_MMR_SEED` archive는 현재 ACTIVE target member의 current-season MMR만 옮기며,
-아래 legacy staging/import support table이나 mookbot_v3 D1/Valkey dump를 사용하거나 대체하지 않는다.
+이 절의 one-time platform cutover는 D1/Valkey raw snapshot을 직접 runtime DB에 넣지 않는다. 먼저 아래
+정제·reconciliation 규칙으로 API가 받는 `GUILD_FULL_SNAPSHOT` V1 파일을 만들고 preview-only PostgreSQL
+검증을 통과시킨다. 실제 apply는 operator가 checksum/report/target guild를 확인해 별도로 승인한 뒤
+`/g/{guildId}/admin/data`에서 수행한다. `MEMBER_SEASON_MMR_SEED`는 현재 시즌 MMR만 옮기는 하위 호환 규격이다.
 
 Source:
 
@@ -2692,14 +2739,15 @@ Additional rules:
   못 채웠으면 EARLY_WIN, winner가 NULL이고 score가 동률이면 EARLY_DRAW로 mapping한다. NULL winner
   비동률은 ERROR다. CANCELLED는 terminal_reason=CANCELLED다. terminal `ended_at`이 source에 없으면
   matching audit 시각, 없으면 import run started_at을 합성해 report한다.
-- v3에서 `deleted_at IS NOT NULL`인 series/tournament와 그 child match/game/stat/pick/ban은
-  runtime schema로 가져오지 않는다. 시즌 결과 reset과 운영 삭제가 이미 사용자 조회에서 숨긴
-  계층이며, 일부는 `mmr_changes`가 hard-delete되어 APPLIED ledger를 재구성할 수 없다. raw row와
-  parent-child count는 staging 및 `LEGACY_SOFT_DELETED_OMITTED` report에 보존한다. 이 parent를
-  잃은 recruitment가 CONVERTED이면 CLOSED, `converted_at=NULL`로 mapping한다.
-- live 일반 game은 참가자별 v3 `mmr_changes`가 완전할 때만 `mmr_status=APPLIED`로 import한다.
-  누락/중복 원장이 있는 live game은 임의 재계산하지 않고 quarantine한다. soft-deleted 계층을
-  제외한 뒤 live GAME_RESULT 사이의 before/after gap과 source current summary의 tail 차이는
+- v3에서 `deleted_at IS NOT NULL`인 series/tournament와 그 child match/game/stat/pick/ban도 과거 시즌성
+  이력으로 간주해 runtime archive의 단일 active season에 포함한다. 삭제 당시 `IN_PROGRESS`였던 series,
+  tournament, match는 삭제 시각을 terminal time으로 삼아 `CANCELLED`로 닫아 현재 workflow를 다시 열지 않는다.
+  Parent recruitment/participant가 이미 hard-delete된 경우 frozen series roster 또는 auction team member에서
+  최소 부모를 합성하고 `SYNTHESIZED_HISTORICAL_*` reconciliation 근거를 남긴다.
+- 일반 game은 참가자별 v3 `mmr_changes`가 완전할 때만 `mmr_status=APPLIED`로 import한다.
+  Soft-delete된 과거 game처럼 MMR 원장이 전부 사라졌지만 roster/game 결과가 유효하면 game과 10명 roster를
+  `LEGACY_NOT_APPLIED`로 보존하고 현재 MMR을 재계산하지 않는다. 일부만 남은 불완전 원장은 quarantine한다.
+  APPLIED GAME_RESULT 사이의 before/after gap과 source current summary의 tail 차이는
   `MIGRATION_SEED`로 명시적으로 연결한다.
 - v3 일반 모집/경매 모집 participant는 모두 `JOINED`로 옮긴다. withdraw 이력이 source에 없으므로
   임의로 복원하지 않는다. `recruitment_participant_roles`는 source에 우선순위가 없으므로
@@ -2862,14 +2910,14 @@ ERROR이면 transaction 전체를 rollback하고 unit root와 모든 원본 chil
 기록과 함께 `ACCEPTED_OMISSION`할 수 있지만 records 누락 count에 포함한다. active recruitment,
 series, setup, tournament/match는 omission을 허용하지 않는다. 변환 불가능한 transient draft만
 aggregate 원장을 유지한 채 `ACCEPTED_REENTRY`로 승인할 수 있으며 UI에서 재입력이 필요하다는
-cutover checklist를 남긴다. soft-deleted hierarchy의 의도적 제외는 앞의 별도 omission report를
-따르며 quarantine unit으로 되살리지 않는다.
+cutover checklist를 남긴다. Soft-deleted hierarchy는 의도적으로 제외하지 않으며 report의
+`includedSoftDeleted`와 `omittedSoftDeleted=0`으로 완전성을 확인한다.
 
 ### Cutover 검증
 
 ```text
 source/target table별 row count
-legacy soft-deleted hierarchy included=0, omitted count/checksum report
+legacy soft-deleted hierarchy included count = source count, omitted count = 0
 partial aggregate import count = 0
 active aggregate OPEN/ACCEPTED_OMISSION quarantine count = 0
 all OPEN ERROR quarantine count = 0

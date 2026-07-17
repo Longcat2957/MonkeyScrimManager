@@ -14,7 +14,8 @@
 		"lint": "prettier --check package.json tsconfig.json tsconfig.build.json \"src/**/*.ts\" && eslint src",
 		"test": "vitest run",
 		"commands:register:guild": "tsx src/register-commands.ts guild",
-		"commands:register:global": "tsx src/register-commands.ts global"
+		"commands:register:global": "tsx src/register-commands.ts global",
+		"commands:clear:legacy-global": "tsx src/clear-legacy-global-commands.ts"
 	},
 	"dependencies": {
 		"@resvg/resvg-js": "^2.6.2",

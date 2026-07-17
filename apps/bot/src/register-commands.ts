@@ -1,6 +1,7 @@
 import { REST, Routes } from 'discord.js';
 import { commands } from './commands/index.js';
-import { loadBotConfig } from './config.js';
+import { assertCommandRegistrationScope, loadBotConfig } from './config.js';
+import { verifyRestApplicationIdentity } from './discord/application-identity.js';
 import { createLogger } from './log.js';
 
 type RegistrationMode = 'guild' | 'global';
@@ -8,8 +9,10 @@ type RegistrationMode = 'guild' | 'global';
 async function main(): Promise<void> {
 	const mode = registrationMode(process.argv[2]);
 	const config = loadBotConfig();
+	assertCommandRegistrationScope(config, mode);
 	const logger = createLogger(config);
 	const rest = new REST({ version: '10' }).setToken(config.discordToken);
+	await verifyRestApplicationIdentity(rest, config.applicationId);
 	const body = commands.map((command) => command.data.toJSON());
 
 	const route =

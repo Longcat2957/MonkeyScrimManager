@@ -25,7 +25,7 @@ use crate::{
         riot::{ReqwestRiotClient, RiotClientError},
     },
     realtime::{RealtimeRuntime, RealtimeRuntimeError},
-    repository::{auth::AuthRepository, guild_data_transfer},
+    repository::{auth::AuthRepository, guild_data_transfer, guild_full_data_transfer},
     state::{AppState, AuthRuntime},
 };
 
@@ -118,6 +118,20 @@ fn start_data_transfer_retention(pool: sqlx::PgPool) -> JoinHandle<()> {
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(%error, "failed to remove expired guild data transfer previews");
+                }
+            }
+            match guild_full_data_transfer::cleanup_expired_previews(
+                &pool,
+                OffsetDateTime::now_utc(),
+            )
+            .await
+            {
+                Ok(removed) if removed > 0 => {
+                    tracing::info!(removed, "removed expired guild full data transfer previews");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to remove expired guild full data transfer previews");
                 }
             }
         }

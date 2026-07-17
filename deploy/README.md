@@ -29,14 +29,17 @@ Main uses the separate `monkeybot_main` database, `monkeybot_migrator_main` migr
 `monkeybot_runtime_main` application role. Do not copy test or dummy data from `monkeybot_dev` into main.
 
 Copy `deploy/main.env.example` to `/root/monkeybot-main/deploy/main.env`. The four referenced runtime
-env files belong under `/root/monkeybot-infra` with mode `600`. Main always uses
-`MONKEYBOT_PUBLIC_ORIGIN=https://monkeybot.lol`, `MONKEYBOT_ENV=production`, and dummy users disabled.
+env files belong under `/root/monkeybot-infra/main` with mode `600`. Main always uses
+`MONKEYBOT_PUBLIC_ORIGIN=https://monkeybot.lol`, the `MonkeyBot` application ID,
+`MONKEYBOT_BOT_COMMAND_SCOPE=global`, `MONKEYBOT_ENV=production`, and dummy users disabled.
+`MONKEYBOT_BOT_DEV_GUILD_ID` is empty.
 
 Main release order:
 
 1. Build and push all four images with the same full Git SHA.
 2. Provision the separate main database and roles, set passwords, and create the main runtime env files.
-3. Run `scripts/vps-main-preflight.sh`, then the one-shot `migrate-main` profile and `runtime-grants.sql`.
+3. Run `scripts/vps-main-preflight.sh` and `scripts/vps-environment-isolation-audit.sh`, then the one-shot
+   `migrate-main` profile and `runtime-grants.sql`.
 4. Start `valkey-main`, `riot-api-main`, `api-main`, `web-main`, and `bot-main`; register global Discord commands.
 5. Install `deploy/nginx/sites/monkeybot.conf`, run `docker exec nginx nginx -t`, then reload nginx.
 6. Run `scripts/vps-main-smoke.sh` and complete a real Discord OAuth callback.
@@ -91,10 +94,10 @@ PUSH=1 pnpm docker:build
 
 ```text
 /root/monkeybot-dev/deploy/dev.env
-/root/monkeybot-infra/api/runtime.env
-/root/monkeybot-infra/api/migration.env
-/root/monkeybot-infra/riot-api/runtime.env
-/root/monkeybot-infra/bot/runtime.env
+/root/monkeybot-infra/dev/api/runtime.env
+/root/monkeybot-infra/dev/api/migration.env
+/root/monkeybot-infra/dev/riot-api/runtime.env
+/root/monkeybot-infra/dev/bot/runtime.env
 ```
 
 `deploy/dev.env.example`을 `/root/monkeybot-dev/deploy/dev.env`로 복사하고 다음을 채운다.
@@ -102,17 +105,20 @@ PUSH=1 pnpm docker:build
 - `MONKEYBOT_RELEASE_TAG`: release commit의 40자리 SHA
 - image repository 네 개
 - `MONKEYBOT_PUBLIC_ORIGIN=https://dev.monkeybot.lol`
+- `MONKEYBOT_DISCORD_APPLICATION_ID`: `MonkeyBot[dev]`의 public application ID
+- `MONKEYBOT_BOT_COMMAND_SCOPE=guild`와 전용 `MONKEYBOT_BOT_DEV_GUILD_ID`
+- `MONKEYBOT_BOT_INSTANCE_ID=monkeybot-dev-<unique instance>`
 - `30010`, `30020`, `30030` loopback port
 - `deploy_default`, `deploy_data` network 이름
 - 네 runtime env의 absolute path
 
 각 secret file은 인접한 `*.example`을 기초로 만든다.
 
-- Axum runtime: DB runtime role, Discord OAuth client ID/secret, session encryption key, service-admin
+- Axum runtime: DB runtime role, Discord OAuth client secret, session encryption key, service-admin
   IDs, Bot service token, Riot internal token
 - migration runtime: migration role DB URL만
 - Riot runtime: Riot production key, same internal token, explicit season start timestamp
-- Bot runtime: Discord bot token/application ID, same Bot service token, unique instance ID
+- Bot runtime: Discord Bot token과 같은 환경의 Bot service token
 
 `MONKEYBOT_RIOT_SERVICE_TOKEN`과 Riot service의 `MONKEYBOT_RIOT_INTERNAL_TOKEN`은 같은 32자 이상
 secret이다. `MONKEYBOT_BOT_SERVICE_TOKEN`과 Bot runtime token도 같은 값이어야 한다. Riot developer
@@ -120,6 +126,9 @@ key는 Riot runtime file 외에는 절대 넣지 않는다.
 
 dev Compose는 dummy-user route를 켜므로 `MONKEYBOT_SERVICE_ADMIN_IDS`에는 최소 한 명의 MonkeyBot
 운영자 Discord ID를 넣는다. 빈 값 또는 `replace-with-*` 예시 값은 preflight가 배포 전에 거부한다.
+Application ID, command scope와 guild ID는 secret file이 아니라 `deploy/dev.env` 한 곳에서 관리하며 API와
+Bot에 동일하게 주입한다. 전체 Discord 환경 계약과 credential 회전 순서는
+[Discord Application 환경 분리](../docs/15-discord-environment-operations.md)를 따른다.
 
 ## Nginx Contract
 
@@ -159,12 +168,16 @@ Preflight는 external network, runtime file 존재/권한, Compose interpolation
 확인되어 있다. 새 release가 migration을 추가하면 backup/restore rehearsal과 migration compatibility
 판단을 다시 수행한다.
 
+dev와 main runtime file을 모두 만든 뒤 `scripts/vps-environment-isolation-audit.sh`를 실행한다. 이 감사는
+application ID와 runtime file 재사용, symlink 경계 이탈, Discord/OAuth/internal token 및 DB URL 공유를
+비밀값 출력 없이 거부한다.
+
 ## First Dev Rollout
 
 아래는 실제 배포 승인 후에만 실행한다. 아직 배포 명령은 실행하지 않는다.
 
 1. Git checkout을 `/root/monkeybot-dev`에 배치하고 `deploy/dev.env`만 checkout 밖의 secret file을
-   가리키게 설정한다. secret file은 `/root/monkeybot-infra`에만 둔다.
+   가리키게 설정한다. dev secret file은 `/root/monkeybot-infra/dev`에만 둔다.
 2. preflight를 통과시킨다.
 3. migration이 추가된 release면 backup/restore rehearsal을 통과하고, breaking migration이면
    `monkeybot-api-dev`만 중지한 뒤 one-shot migration과 runtime grant를 적용한다. 기존 mookbot API는
@@ -178,6 +191,8 @@ Preflight는 external network, runtime file 존재/권한, Compose interpolation
    app container를 recreate하는 모든 release/rollback 뒤에도 이 검증+reload를 반드시 수행한다.
 7. [vps-dev-smoke.sh](../scripts/vps-dev-smoke.sh)를 실행하고 브라우저에서 Discord OAuth callback을
    한 번 완료한다.
+8. `MonkeyBot[dev]`에는 개발 guild command만 등록한다. 과거 global command cleanup은 별도 승인 후 한 번만
+   실행한다.
 
 실제 앱 start command 예시:
 
@@ -190,6 +205,19 @@ docker compose --env-file /root/monkeybot-dev/deploy/dev.env \
   valkey-dev riot-api-dev api-dev web-dev bot-dev
 ```
 
+개발 guild command 등록과 과거 global command 제거는 같은 dev image/runtime으로 실행한다.
+
+```bash
+docker compose --env-file /root/monkeybot-dev/deploy/dev.env \
+  -f /root/monkeybot-dev/deploy/docker-compose.dev.yml \
+  run --rm --no-deps --entrypoint node bot-dev dist/register-commands.js guild
+
+# Explicit one-time cleanup only; this mutates Discord external state.
+docker compose --env-file /root/monkeybot-dev/deploy/dev.env \
+  -f /root/monkeybot-dev/deploy/docker-compose.dev.yml \
+  run --rm --no-deps --entrypoint node bot-dev dist/clear-legacy-global-commands.js
+```
+
 Migration command는 release가 DB 변경을 포함할 때만 쓴다.
 
 ```bash
@@ -200,8 +228,12 @@ docker compose --env-file /root/monkeybot-dev/deploy/dev.env \
 docker exec -i monkeybot-postgres \
   psql -v ON_ERROR_STOP=1 -U monkeybot_migrator_dev -d monkeybot_dev \
   -v runtime_role=monkeybot_runtime_dev \
+  -v service_admin_reset_enabled=true \
   < /root/monkeybot-dev/deploy/postgres/runtime-grants.sql
 ```
+
+`service_admin_reset_enabled`는 개발 DB에서만 `true`로 넘긴다. 생략하면 기본값은 `false`이며 runtime role의
+전체 기록 초기화 함수 실행 권한을 회수한다.
 
 ## Smoke And Rollback
 

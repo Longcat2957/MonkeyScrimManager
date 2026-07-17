@@ -1,0 +1,19 @@
+[Unit]
+Description=MonkeyBot local Discord Bot
+Wants=network-online.target
+After=network-online.target monkeybot-api-local.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/MonkeyScrimManager
+Environment=NODE_ENV=development
+EnvironmentFile=%h/workspace/MonkeyScrimManager/.local/env/dev/discord.env
+EnvironmentFile=%h/workspace/MonkeyScrimManager/.local/env/dev/bot.env
+ExecStartPre=/usr/bin/test -f %h/workspace/MonkeyScrimManager/apps/bot/dist/index.js
+ExecStart=/usr/bin/bash -c '. %h/.nvm/nvm.sh; nvm use --silent default >/dev/null; exec node %h/workspace/MonkeyScrimManager/apps/bot/dist/index.js'
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
