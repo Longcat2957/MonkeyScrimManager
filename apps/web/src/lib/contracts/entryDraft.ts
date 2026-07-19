@@ -77,6 +77,7 @@ export const entryDraftCapabilitiesSchema = z
 		canEdit: z.boolean(),
 		canReset: z.boolean(),
 		canCreateSeries: z.boolean(),
+		canCreateAuctionRecruitment: z.boolean(),
 		canReopen: z.boolean(),
 		canCancel: z.boolean()
 	})

@@ -847,6 +847,8 @@ pub enum RiotCacheState {
 pub enum RiotClientError {
     #[error("Riot integration configuration is invalid")]
     InvalidConfiguration,
+    #[error("Riot integration service authentication failed")]
+    ServiceUnauthorized,
     #[error("Riot request input is invalid")]
     InvalidInput,
     #[error("Riot platform is unsupported")]
@@ -857,6 +859,12 @@ pub enum RiotClientError {
     RateLimited { retry_after_seconds: Option<u64> },
     #[error("Riot integration request timed out")]
     Timeout,
+    #[error("Riot API credentials were rejected")]
+    CredentialsRejected,
+    #[error("Riot API is temporarily unavailable")]
+    ProviderUnavailable,
+    #[error("Riot API returned an unusable response")]
+    ProviderBadGateway,
     #[error("Riot integration request failed")]
     Request(#[source] reqwest::Error),
     #[error("Riot integration rejected the request with HTTP {status}")]
@@ -869,23 +877,57 @@ async fn decode_response<T: DeserializeOwned>(
     response: reqwest::Response,
 ) -> Result<T, RiotClientError> {
     let status = response.status();
-    if status == StatusCode::NOT_FOUND {
-        return Err(RiotClientError::NotFound);
-    }
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        return Err(RiotClientError::RateLimited {
-            retry_after_seconds: parse_retry_after(response.headers().get(RETRY_AFTER)),
-        });
-    }
     if !status.is_success() {
-        return Err(RiotClientError::Rejected {
-            status: status.as_u16(),
-        });
+        let retry_after_seconds = parse_retry_after(response.headers().get(RETRY_AFTER));
+        let upstream_error = response.json::<InternalRiotErrorEnvelope>().await.ok();
+        return Err(classify_error_response(
+            status,
+            retry_after_seconds,
+            upstream_error.as_ref(),
+        ));
     }
     response
         .json::<T>()
         .await
         .map_err(|_| RiotClientError::MalformedResponse)
+}
+
+#[derive(Debug, Deserialize)]
+struct InternalRiotErrorEnvelope {
+    error: InternalRiotErrorData,
+}
+
+#[derive(Debug, Deserialize)]
+struct InternalRiotErrorData {
+    code: String,
+}
+
+fn classify_error_response(
+    status: StatusCode,
+    retry_after_seconds: Option<u64>,
+    upstream_error: Option<&InternalRiotErrorEnvelope>,
+) -> RiotClientError {
+    match upstream_error.map(|value| value.error.code.as_str()) {
+        Some("unauthorized") => RiotClientError::ServiceUnauthorized,
+        Some("invalid_request") => RiotClientError::InvalidInput,
+        Some("riot_account_not_found") => RiotClientError::NotFound,
+        Some("riot_rate_limited") => RiotClientError::RateLimited {
+            retry_after_seconds,
+        },
+        Some("riot_timeout") => RiotClientError::Timeout,
+        Some("riot_credentials_rejected") => RiotClientError::CredentialsRejected,
+        Some("riot_unavailable") => RiotClientError::ProviderUnavailable,
+        Some("riot_bad_gateway") => RiotClientError::ProviderBadGateway,
+        _ => match status {
+            StatusCode::NOT_FOUND => RiotClientError::NotFound,
+            StatusCode::TOO_MANY_REQUESTS => RiotClientError::RateLimited {
+                retry_after_seconds,
+            },
+            _ => RiotClientError::Rejected {
+                status: status.as_u16(),
+            },
+        },
+    }
 }
 
 fn map_request_error(error: reqwest::Error) -> RiotClientError {
@@ -1001,6 +1043,54 @@ mod tests {
         assert_eq!(parse_retry_after(Some(&seconds)), Some(12));
         assert_eq!(parse_retry_after(Some(&date)), None);
         assert_eq!(parse_retry_after(None), None);
+    }
+
+    #[test]
+    fn internal_error_envelope_preserves_safe_riot_failure_cause() {
+        let envelope = |code: &str| InternalRiotErrorEnvelope {
+            error: InternalRiotErrorData {
+                code: code.to_owned(),
+            },
+        };
+
+        assert!(matches!(
+            classify_error_response(
+                StatusCode::UNAUTHORIZED,
+                None,
+                Some(&envelope("unauthorized"))
+            ),
+            RiotClientError::ServiceUnauthorized
+        ));
+        assert!(matches!(
+            classify_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                None,
+                Some(&envelope("riot_credentials_rejected"))
+            ),
+            RiotClientError::CredentialsRejected
+        ));
+        assert!(matches!(
+            classify_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                Some(7),
+                Some(&envelope("riot_rate_limited"))
+            ),
+            RiotClientError::RateLimited {
+                retry_after_seconds: Some(7)
+            }
+        ));
+        assert!(matches!(
+            classify_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                None,
+                Some(&envelope("riot_unavailable"))
+            ),
+            RiotClientError::ProviderUnavailable
+        ));
+        assert!(matches!(
+            classify_error_response(StatusCode::BAD_GATEWAY, None, Some(&envelope("unknown"))),
+            RiotClientError::Rejected { status: 502 }
+        ));
     }
 
     #[test]

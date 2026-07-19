@@ -129,10 +129,11 @@ async fn run_workflow_read_flow() -> TestResult {
     assert_actionable_recruitment(&app, &member_cookie).await?;
     assert_series(&app, &member_cookie).await?;
     assert_auction_recruitment_cursor(&app, &member_cookie).await?;
+    seed_operator_permissions(&pool).await?;
     assert_auction_tournaments(&app, &member_cookie).await?;
     assert_cancelled_auction_tournament_archive(&app, &member_cookie).await?;
     assert_bidding_auction_tournament_bracket_is_unavailable(&app, &pool, &member_cookie).await?;
-    assert_auction_tournament_cancel_preview(&app).await?;
+    assert_auction_tournament_cancel_preview(&app, &member_cookie, &outsider_cookie).await?;
     assert_twenty_person_semifinal_game_requires_both_lineups(&app, &pool).await?;
     assert_legacy_auction_match_lock_exemption(&pool).await?;
     assert_active_auction_tournament_result_ignores_cancelled_match_history(
@@ -142,6 +143,7 @@ async fn run_workflow_read_flow() -> TestResult {
         &member_cookie,
     )
     .await?;
+    assert_browser_auction_tournament_cancel(&app).await?;
 
     pool.close().await;
     drop(server);
@@ -345,6 +347,7 @@ async fn assert_auction_tournaments(app: &Router, cookie: &str) -> TestResult {
     let draft = body_json(draft).await?;
     assert!(draft["data"]["permissions"]["canManageDraft"].is_boolean());
     assert!(draft["data"]["permissions"]["canRevertLast"].is_boolean());
+    assert_eq!(draft["data"]["permissions"]["canCancel"], true);
 
     let bracket_path =
         format!("/api/guilds/{GUILD_A}/auction-tournaments/{ACTIVE_TOURNAMENT}/bracket");
@@ -352,6 +355,7 @@ async fn assert_auction_tournaments(app: &Router, cookie: &str) -> TestResult {
     assert_eq!(bracket.status(), StatusCode::OK);
     let bracket = body_json(bracket).await?;
     assert!(bracket["data"]["permissions"]["canRevertDraft"].is_boolean());
+    assert_eq!(bracket["data"]["permissions"]["canCancel"], true);
 
     let bot_active = bot_get(app, &active_path).await?;
     assert_eq!(bot_active.status(), StatusCode::OK);
@@ -409,6 +413,7 @@ async fn assert_cancelled_auction_tournament_archive(app: &Router, cookie: &str)
     assert_eq!(body["data"]["players"].as_array().map(Vec::len), Some(0));
     assert_eq!(body["data"]["permissions"]["canRevertResults"], false);
     assert_eq!(body["data"]["permissions"]["canRecoverBracket"], false);
+    assert_eq!(body["data"]["permissions"]["canCancel"], false);
     Ok(())
 }
 
@@ -515,7 +520,11 @@ async fn assert_bidding_auction_tournament_bracket_is_unavailable(
     Ok(())
 }
 
-async fn assert_auction_tournament_cancel_preview(app: &Router) -> TestResult {
+async fn assert_auction_tournament_cancel_preview(
+    app: &Router,
+    member_cookie: &str,
+    outsider_cookie: &str,
+) -> TestResult {
     let path =
         format!("/api/guilds/{GUILD_A}/auction-tournaments/{CANCELLED_TOURNAMENT}/cancel-preview");
     let response = bot_get(app, &path).await?;
@@ -525,13 +534,58 @@ async fn assert_auction_tournament_cancel_preview(app: &Router) -> TestResult {
     assert_eq!(body["data"]["tournament"]["displayNumber"], 116);
     assert_eq!(body["data"]["tournament"]["status"], "CANCELLED");
     assert_eq!(body["data"]["tournament"]["revision"], 6);
+
+    let active_path =
+        format!("/api/guilds/{GUILD_A}/auction-tournaments/{ACTIVE_TOURNAMENT}/cancel-preview");
+    let browser_preview = get(app, &active_path, Some(member_cookie)).await?;
+    assert_eq!(browser_preview.status(), StatusCode::OK);
+    let browser_preview = body_json(browser_preview).await?;
+    assert_eq!(browser_preview["data"]["tournament"]["id"], ACTIVE_TOURNAMENT);
+    assert_eq!(browser_preview["data"]["tournament"]["status"], "IN_GAME");
+    assert_eq!(browser_preview["data"]["tournament"]["revision"], 7);
+
+    assert_error(
+        get(app, &active_path, Some(outsider_cookie)).await?,
+        StatusCode::FORBIDDEN,
+        "operator_required",
+    )
+    .await?;
     Ok(())
 }
 
-async fn assert_twenty_person_semifinal_game_requires_both_lineups(
-    app: &Router,
-    pool: &PgPool,
-) -> TestResult {
+async fn assert_browser_auction_tournament_cancel(app: &Router) -> TestResult {
+    let path = format!("/api/guilds/{GUILD_A}/auction-tournaments/{ACTIVE_TOURNAMENT}/cancel");
+    let body = json!({
+        "expectedRevision": 7,
+        "reason": "운영자 요청으로 경매 내전을 조기 종료합니다."
+    });
+    let response = browser_post(
+        app,
+        &path,
+        "01900000-0000-7000-8000-000000000911",
+        body.clone(),
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = body_json(response).await?;
+    assert_eq!(response["data"]["tournamentId"], ACTIVE_TOURNAMENT);
+    assert_eq!(response["data"]["tournamentStatus"], "CANCELLED");
+    assert_eq!(response["data"]["sourceRecruitmentId"], AUCTION_ACTIVE_SOURCE);
+    assert_eq!(response["data"]["reversedGameCount"], 0);
+
+    let replay = browser_post(
+        app,
+        &path,
+        "01900000-0000-7000-8000-000000000911",
+        body,
+    )
+    .await?;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(body_json(replay).await?["data"], response["data"]);
+    Ok(())
+}
+
+async fn seed_operator_permissions(pool: &PgPool) -> TestResult {
     sqlx::query(
         "INSERT INTO guild_config (
              guild_id, display_name, operator_role_id, recruitment_channel_id,
@@ -553,7 +607,13 @@ async fn assert_twenty_person_semifinal_game_requires_both_lineups(
     .bind(OPERATOR_ROLE_ID)
     .execute(pool)
     .await?;
+    Ok(())
+}
 
+async fn assert_twenty_person_semifinal_game_requires_both_lineups(
+    app: &Router,
+    pool: &PgPool,
+) -> TestResult {
     let path = format!("/api/guilds/{GUILD_A}/auction-matches/{ACTIVE_MATCH}/games");
     let response = browser_post(
         app,
@@ -1259,6 +1319,12 @@ async fn bot_get(app: &Router, uri: &str) -> TestResult<Response<Body>> {
         .header(header::AUTHORIZATION, format!("Bearer {BOT_TOKEN}"))
         .body(Body::empty())?;
     Ok(app.clone().oneshot(request).await?)
+}
+
+async fn assert_error(response: Response<Body>, status: StatusCode, code: &str) -> TestResult {
+    assert_eq!(response.status(), status);
+    assert_eq!(body_json(response).await?["error"]["code"], code);
+    Ok(())
 }
 
 async fn body_json(response: Response<Body>) -> TestResult<Value> {

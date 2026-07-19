@@ -10,6 +10,7 @@
 	} from '$lib/api/auctionTournamentBracket';
 	import { createOperationIdempotencyKeys } from '$lib/api/operationIdempotency';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
+	import AuctionTournamentCancelControl from '$lib/components/workflow/AuctionTournamentCancelControl.svelte';
 	import AuctionTournamentBracketResultBoard from '$lib/components/workflow/AuctionTournamentBracketResultBoard.svelte';
 	import type {
 		AuctionTournamentResultMatch,
@@ -124,6 +125,12 @@
 		description={`${tournament.title} · 토너먼트 #${tournament.displayNumber} · ${formatLabel} · ${rulesLabel} · ${statusLabel}`}
 	>
 		{#snippet actions()}
+			<AuctionTournamentCancelControl
+				guildId={data.guildId}
+				{tournament}
+				canCancel={data.snapshot.permissions.canCancel}
+				busy={recoveringBracket}
+			/>
 			{#if canRecoverBracket}
 				<button
 					type="button"

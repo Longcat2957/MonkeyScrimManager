@@ -196,6 +196,7 @@
 	}
 
 	function hasExplicitSideSelection(game: ScrimPickBanResultInputGame): boolean {
+		if (game.sideSelected !== undefined) return game.sideSelected;
 		return (
 			game.sidePreset === 'SWAPPED' ||
 			game.winner !== null ||
@@ -208,6 +209,7 @@
 		return JSON.stringify({
 			id: game.id,
 			sidePreset: game.sidePreset,
+			sideSelected: game.sideSelected,
 			winner: game.winner,
 			bans: game.bans,
 			picks: Object.entries(game.picks).sort(([left], [right]) => left.localeCompare(right))
@@ -326,7 +328,7 @@
 	async function selectSide(preset: ScrimPickBanResultInputSidePreset) {
 		if (!canEditDraft) return;
 		if (onDraftOperation) {
-			if (sidePreset !== preset) {
+			if (!sideSelected || sidePreset !== preset) {
 				await onDraftOperation({ type: 'SET_SIDE', sidePreset: preset });
 			}
 			sidePreset = preset;

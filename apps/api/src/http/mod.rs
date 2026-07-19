@@ -180,6 +180,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             post(bot_routes::reopen_recruitment),
         )
         .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}/auction-recruitment",
+            post(bot_routes::convert_entry_draft_to_auction_recruitment),
+        )
+        .route(
             "/api/guilds/{guild_id}/series",
             get(workflow_routes::series).post(bot_routes::create_series),
         )

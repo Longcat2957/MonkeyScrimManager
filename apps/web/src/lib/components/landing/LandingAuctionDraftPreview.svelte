@@ -197,7 +197,7 @@
 			unsold: [],
 			recentAction: null
 		},
-		permissions: { canManageDraft: true, canManageBracket: false, canRevertLast: false }
+		permissions: { canManageDraft: true, canManageBracket: false, canRevertLast: false, canCancel: true }
 	};
 
 	let snapshot = $state<AuctionTournamentDraftSnapshot>(initialSnapshot);

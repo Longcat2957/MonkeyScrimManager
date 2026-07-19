@@ -690,6 +690,7 @@
 			id: `${snapshot.series.id}-set-${snapshot.currentGame.setNumber}`,
 			label: `${snapshot.currentGame.setNumber}세트`,
 			sidePreset: snapshot.currentGame.sidePreset,
+			sideSelected: snapshot.currentGame.sideSelected,
 			winner: snapshot.currentGame.winner,
 			bans: {
 				BLUE: [...snapshot.currentGame.bans.BLUE],

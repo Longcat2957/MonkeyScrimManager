@@ -106,7 +106,7 @@ function snapshot(
 				mmrDelta: null
 			}
 		],
-		permissions: { canRevertResults: true, canRecoverBracket: false },
+		permissions: { canRevertResults: true, canRecoverBracket: false, canCancel: true },
 		...overrides
 	};
 }
@@ -281,7 +281,19 @@ describe('AuctionTournamentOverviewBoard', () => {
 		expect(
 			auctionTournamentResultSnapshotSchema.safeParse({
 				...completed,
-				permissions: { canRevertResults: true }
+				matches: [
+					{
+						...completed.matches[0]!,
+						lineups: lineups.map((lineup, index) =>
+							index === 0
+								? {
+										...lineup,
+										teamMemberId: '01900000-0000-7000-8000-000000009999'
+									}
+								: lineup
+						)
+					}
+				]
 			}).success
 		).toBe(false);
 	});

@@ -28,6 +28,7 @@ export interface ScrimPickBanResultInputGame {
 	id: string;
 	label: string;
 	sidePreset?: ScrimPickBanResultInputSidePreset;
+	sideSelected?: boolean;
 	winner: ScrimPickBanResultInputSide | null;
 	bans: Record<ScrimPickBanResultInputSide, Array<string | null>>;
 	picks: Record<string, string | null>;

@@ -77,6 +77,7 @@
 			id: `${snapshot.match.id}:set:${nextSetNumber}`,
 			label: `${nextSetNumber}세트`,
 			sidePreset: 'DEFAULT',
+			sideSelected: false,
 			winner: null,
 			bans: emptyBans(),
 			picks: Object.fromEntries(snapshot.lineups.map((lineup) => [lineup.userId, null]))

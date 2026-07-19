@@ -698,11 +698,39 @@ pub(super) fn riot_client_error(source: RiotClientError, request_id: &RequestId)
             "Riot 조회 요청이 제한되었습니다.",
             retry_after_seconds.map(|seconds| serde_json::json!({ "retryAfterSeconds": seconds })),
         ),
+        RiotClientError::ServiceUnauthorized => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "riot_service_auth_failed",
+            "Riot 검색 서비스 인증 설정이 일치하지 않습니다.",
+            None,
+        ),
         RiotClientError::Timeout => ApiError::new(
             StatusCode::BAD_GATEWAY,
             request_id,
             "riot_upstream_timeout",
             "Riot 조회 응답 시간이 초과되었습니다.",
+            None,
+        ),
+        RiotClientError::CredentialsRejected => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "riot_credentials_rejected",
+            "Riot API 인증 정보가 거부되었습니다.",
+            None,
+        ),
+        RiotClientError::ProviderUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request_id,
+            "riot_unavailable",
+            "Riot API를 일시적으로 사용할 수 없습니다.",
+            None,
+        ),
+        RiotClientError::ProviderBadGateway => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            request_id,
+            "riot_upstream_invalid_response",
+            "Riot API 응답을 처리할 수 없습니다.",
             None,
         ),
         RiotClientError::Request(_) => ApiError::new(
@@ -805,7 +833,22 @@ fn internal(request_id: &RequestId) -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use axum::{body::to_bytes, response::IntoResponse};
+    use serde_json::Value;
+
     use super::*;
+
+    async fn error_body(error: ApiError) -> (StatusCode, Value) {
+        let response = error.into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error body");
+        (
+            status,
+            serde_json::from_slice(&body).expect("error envelope"),
+        )
+    }
 
     #[test]
     fn account_create_contract_rejects_client_identity_fields() {
@@ -823,5 +866,35 @@ mod tests {
             "puuid": "untrusted"
         }));
         assert!(injected.is_err());
+    }
+
+    #[tokio::test]
+    async fn riot_client_errors_preserve_diagnostic_codes() {
+        let request_id = RequestId("01900000-0000-7000-8000-000000000001".to_owned());
+
+        let (status, body) = error_body(riot_client_error(
+            RiotClientError::ServiceUnauthorized,
+            &request_id,
+        ))
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "riot_service_auth_failed");
+        assert_eq!(body["error"]["requestId"], request_id.0.as_str());
+
+        let (status, body) = error_body(riot_client_error(
+            RiotClientError::CredentialsRejected,
+            &request_id,
+        ))
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "riot_credentials_rejected");
+
+        let (status, body) = error_body(riot_client_error(
+            RiotClientError::ProviderUnavailable,
+            &request_id,
+        ))
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "riot_unavailable");
     }
 }

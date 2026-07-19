@@ -17,6 +17,7 @@ describe('pick-ban page integration', () => {
 
 	it('maps roster teams through the current side preset and connects the board to server commands', () => {
 		expect(source).toContain("sidePreset === 'DEFAULT' ? 'BLUE' : 'RED'");
+		expect(source).toContain('sideSelected: snapshot.currentGame.sideSelected');
 		expect(source).toContain("teamFor(snapshot, 'TEAM_1', 'BLUE')");
 		expect(source).toContain("teamFor(snapshot, 'TEAM_2', 'BLUE')");
 		expect(source).toContain('teamsAreGameSides');

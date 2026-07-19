@@ -86,7 +86,7 @@ const snapshot: AuctionTournamentResultSnapshot = {
 		}
 	],
 	players: [],
-	permissions: { canRevertResults: false, canRecoverBracket: false }
+	permissions: { canRevertResults: false, canRecoverBracket: false, canCancel: false }
 };
 
 describe('AuctionTournamentBracketResultBoard', () => {

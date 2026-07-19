@@ -2,12 +2,14 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
-	import { LoaderCircle, Play, RefreshCw, Trash2, X } from 'lucide-svelte';
+	import { Gavel, LoaderCircle, Play, RefreshCw, Trash2, X } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import {
+		createAuctionRecruitmentFromEntryDraft,
 		createSeriesFromEntryDraft,
 		entryDraftErrorText,
 		fetchEntryDraft,
+		isEntryDraftAuthoritativeStateError,
 		isEntryDraftRevisionConflict,
 		moveEntryDraftParticipant,
 		reopenRecruitmentForEntry,
@@ -40,7 +42,13 @@
 	import type { PageProps } from './$types';
 
 	type EntryView = 'draft' | 'preview';
-	type EntryMutation = 'move' | 'reset' | 'createSeries' | 'reopen' | 'cancel';
+	type EntryMutation =
+		| 'move'
+		| 'reset'
+		| 'createSeries'
+		| 'createAuctionRecruitment'
+		| 'reopen'
+		| 'cancel';
 	type SnapshotRefreshSource = 'manual' | 'realtime';
 	const defaultRealtimeOfflineMessage = '변경 알림을 받을 수 없습니다.';
 	type EntryRoute = {
@@ -83,10 +91,14 @@
 	const canEdit = $derived(Boolean(snapshot?.capabilities.canEdit));
 	const canReset = $derived(Boolean(snapshot?.capabilities.canReset));
 	const canCreateSeries = $derived(Boolean(snapshot?.capabilities.canCreateSeries));
+	const canCreateAuctionRecruitment = $derived(
+		Boolean(snapshot?.capabilities.canCreateAuctionRecruitment)
+	);
 	const canReopen = $derived(Boolean(snapshot?.capabilities.canReopen));
 	const canCancel = $derived(Boolean(snapshot?.capabilities.canCancel));
 	const hasCompleteAssignments = $derived(snapshot ? hasCompleteEntryAssignments(snapshot) : false);
 	const canShowCreateSeries = $derived(canEdit || canCreateSeries);
+	const canShowCreateAuctionRecruitment = $derived(canEdit || canCreateAuctionRecruitment);
 	const mutationLocked = $derived(isMutating || recoveryRequired);
 	const realtimeSaveState = $derived(
 		realtimeConflict ? 'conflict' : isMutating ? 'saving' : 'saved'
@@ -232,6 +244,7 @@
 		idempotencyKeys.invalidate('entry-draft-move');
 		idempotencyKeys.invalidate('entry-draft-reset');
 		idempotencyKeys.invalidate('entry-draft-create-series');
+		idempotencyKeys.invalidate('entry-draft-create-auction-recruitment');
 		idempotencyKeys.invalidate('entry-draft-reopen');
 	}
 
@@ -326,9 +339,17 @@
 		operation: EntryMutation,
 		route: EntryRoute
 	) {
-		idempotencyKeys.invalidate(`entry-draft-${operation}`);
+		idempotencyKeys.invalidate(entryMutationIdempotencyScope(operation));
 		realtimeConflict = true;
 		await recoverAuthoritativeSnapshot(entryDraftErrorText(cause), route);
+	}
+
+	function entryMutationIdempotencyScope(operation: EntryMutation): string {
+		if (operation === 'createSeries') return 'entry-draft-create-series';
+		if (operation === 'createAuctionRecruitment') {
+			return 'entry-draft-create-auction-recruitment';
+		}
+		return `entry-draft-${operation}`;
 	}
 
 	async function retryAuthoritativeSnapshot() {
@@ -434,8 +455,59 @@
 			await goto(series.href);
 		} catch (cause) {
 			if (!isCurrentRoute(route)) return;
-			if (isEntryDraftRevisionConflict(cause)) {
+			if (isEntryDraftAuthoritativeStateError(cause)) {
 				await recoverAfterRevisionConflict(cause, 'createSeries', route);
+			} else {
+				mutationError = entryDraftErrorText(cause);
+			}
+		} finally {
+			if (isCurrentRoute(route)) {
+				mutation = null;
+				void flushRealtimeSnapshotRefresh(route);
+			}
+		}
+	}
+
+	async function createAuctionRecruitment() {
+		const route = currentEntryRoute();
+		const currentSnapshot = snapshot;
+		if (
+			!isCurrentRoute(route) ||
+			!currentSnapshot ||
+			!canCreateAuctionRecruitment ||
+			!hasCompleteAssignments ||
+			mutationLocked
+		) {
+			return;
+		}
+
+		const operation = {
+			sourceRecruitmentId: currentSnapshot.recruitment.id,
+			expectedRevision: currentSnapshot.recruitment.revision
+		};
+		const idempotencyKey = idempotencyKeys.keyFor(
+			'entry-draft-create-auction-recruitment',
+			operation
+		);
+		mutation = 'createAuctionRecruitment';
+		mutationError = '';
+		mutationNotice = '';
+		try {
+			const auctionRecruitment = await createAuctionRecruitmentFromEntryDraft(
+				route.guildId,
+				route.recruitmentId,
+				{
+					expectedRevision: operation.expectedRevision,
+					idempotencyKey
+				}
+			);
+			if (!isCurrentRoute(route)) return;
+			idempotencyKeys.complete('entry-draft-create-auction-recruitment');
+			await goto(auctionRecruitment.links.draft ?? auctionRecruitment.recruitment.href);
+		} catch (cause) {
+			if (!isCurrentRoute(route)) return;
+			if (isEntryDraftAuthoritativeStateError(cause)) {
+				await recoverAfterRevisionConflict(cause, 'createAuctionRecruitment', route);
 			} else {
 				mutationError = entryDraftErrorText(cause);
 			}
@@ -568,6 +640,20 @@
 							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 시리즈 시작 중
 						{:else}
 							<Play size={14} aria-hidden="true" /> 시리즈 시작
+						{/if}
+					</button>
+				{/if}
+				{#if canShowCreateAuctionRecruitment}
+					<button
+						type="button"
+						disabled={mutationLocked || !canCreateAuctionRecruitment || !hasCompleteAssignments}
+						onclick={createAuctionRecruitment}
+						class="inline-flex h-10 items-center gap-1.5 border border-emerald-300/35 bg-emerald-400/10 px-3 text-xs font-semibold text-emerald-50 enabled:hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+					>
+						{#if mutation === 'createAuctionRecruitment'}
+							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 전환 중
+						{:else}
+							<Gavel size={14} aria-hidden="true" /> 경매 모집 전환
 						{/if}
 					</button>
 				{/if}

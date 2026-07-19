@@ -175,7 +175,8 @@ export const auctionTournamentDraftSnapshotSchema = z
 			.object({
 				canManageDraft: z.boolean(),
 				canManageBracket: z.boolean(),
-				canRevertLast: z.boolean()
+				canRevertLast: z.boolean(),
+				canCancel: z.boolean()
 			})
 			.strict()
 	})

@@ -623,7 +623,7 @@ draft
   assignments[]
     participantId, team TEAM_1|TEAM_2, lane
 capabilities
-  canEdit, canReset, canCreateSeries, canReopen, canCancel
+  canEdit, canReset, canCreateSeries, canCreateAuctionRecruitment, canReopen, canCancel
 ```
 
 `capabilities`는 현재 viewer와 상태에서 계산한 snapshot hint다. `canCancel`은 생성자 또는 active
@@ -631,7 +631,9 @@ operator가 `OPEN|CLOSED` 모집을 취소할 수 있을 때 true다. 취소는 
 entry-draft route 자체는 취소 후 `404`가 된다. `canCreateSeries`는 current active operator가 `CLOSED`
 모집의 정확히 10명 JOINED 참가자를 `TEAM_1|TEAM_2`의 `TOP|JUNGLE|MID|BOTTOM|SUPPORT` 10개 slot에 각각
 한 번씩 배치했을 때만 true다. 이 값은 UI hint이므로 시리즈 시작 command는 transaction 안에서 같은
-조건을 다시 검증한다.
+조건을 다시 검증한다. `canCreateAuctionRecruitment`는 같은 완성 조건에 더해 해당 일반 모집에 active
+series가 없을 때만 true다. 경매 전환 command도 source 모집 revision과 상태, 완성된 엔트리, 기존 전환
+불가 상태를 transaction 안에서 다시 검증한다.
 
 `riotTier`는 참가자의 `origin=RIOT` 주 계정과 일치하는 캐시 전적 snapshot의
 `RANKED_SOLO_5x5`만 compact 표기(`P3`, `E2` 등)로 투영한다. 이 read는 Riot API를 호출하거나 Riot ID,

@@ -102,7 +102,8 @@ function bracketSnapshot(format: 'TEN_PERSON' | 'TWENTY_PERSON' = 'TWENTY_PERSON
 			canManageBracket: true,
 			canManageMatches: true,
 			canRecoverBracket: false,
-			canRevertDraft: false
+			canRevertDraft: false,
+			canCancel: true
 		}
 	};
 }

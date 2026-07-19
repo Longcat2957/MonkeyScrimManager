@@ -28,6 +28,7 @@
 	} from '$lib/realtime/auctionTournamentDraft';
 	import type { RealtimeConnectionState } from '$lib/realtime/types';
 	import { formatAuctionRules } from '$lib/workflow/auctionRules';
+	import AuctionTournamentCancelControl from '$lib/components/workflow/AuctionTournamentCancelControl.svelte';
 	import type { PageProps } from './$types';
 
 	type AuctionDraftRoute = {
@@ -242,6 +243,12 @@
 		description={`${tournament.title} · 토너먼트 #${tournament.displayNumber} · ${formatLabel} · ${rulesLabel}`}
 	>
 		{#snippet actions()}
+			<AuctionTournamentCancelControl
+				guildId={data.guildId}
+				{tournament}
+				canCancel={snapshot.permissions.canCancel}
+				busy={submitting}
+			/>
 			{#if tournament.status !== 'BIDDING'}
 				<a
 					href={resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {

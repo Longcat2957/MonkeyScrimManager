@@ -40,6 +40,18 @@ describe('entry draft page route binding', () => {
 		expect(source).toContain('시리즈 시작');
 	});
 
+	it('converts a complete entry draft into an auction recruitment draft from a dedicated capability', () => {
+		expect(source).toContain('canCreateAuctionRecruitment = $derived(');
+		expect(source).toContain('snapshot?.capabilities.canCreateAuctionRecruitment');
+		expect(source).toContain('createAuctionRecruitmentFromEntryDraft(');
+		expect(source).toContain("'entry-draft-create-auction-recruitment'");
+		expect(source).toContain('expectedRevision: currentSnapshot.recruitment.revision');
+		expect(source).toContain(
+			'await goto(auctionRecruitment.links.draft ?? auctionRecruitment.recruitment.href);'
+		);
+		expect(source).toContain('경매 모집 전환');
+	});
+
 	it('requires confirmation before reopening recruitment and explains that the entry draft is preserved', () => {
 		expect(source).toContain("let reopenDialogOpen = $state(false)");
 		expect(source).toContain('function openReopenDialog()');

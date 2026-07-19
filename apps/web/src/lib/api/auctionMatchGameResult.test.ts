@@ -155,6 +155,7 @@ describe('auction match game result API client', () => {
 		expect(JSON.parse(String(submitInit?.body))).toMatchObject({
 			expectedRevision: 7,
 			setNumber: 1,
+			sidePreset: 'DEFAULT',
 			winner: 'BLUE'
 		});
 
@@ -238,6 +239,29 @@ describe('auction match game result API client', () => {
 		expect(auctionMatchGameResultErrorText(error)).toBe(
 			`다른 운영자가 먼저 게임 결과를 기록했습니다. (요청 ID: ${requestId})`
 		);
+	});
+
+	it('rejects auction game submit commands without an explicit side preset before fetching', async () => {
+		const fetcher = vi.fn();
+		installBrowser(fetcher);
+
+		const error = await submitAuctionMatchGameResult(
+			guildId,
+			matchId,
+			{
+				expectedRevision: 7,
+				setNumber: 1,
+				sidePreset: undefined,
+				winner: 'BLUE',
+				picks: emptyPicks,
+				bans: emptyBans,
+				patchVersion: '16.13.1'
+			} as never,
+			idempotencyKey
+		).catch((cause) => cause);
+
+		expect(error).toMatchObject({ code: 'invalid_game_result' });
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	it('does not classify a non-revision conflict as a revision conflict', async () => {

@@ -132,6 +132,7 @@ same-origin proxy 값만 둔다. 전체 Discord application 경계는
 install -d -m 700 .local/env/dev
 install -m 600 deploy/local/discord.env.example .local/env/dev/discord.env
 install -m 600 deploy/local/api.env.example .local/env/dev/api.env
+install -m 600 deploy/local/riot-api.env.example .local/env/dev/riot-api.env
 install -m 600 deploy/local/bot.env.example .local/env/dev/bot.env
 install -m 600 deploy/local/migration.env.example .local/env/dev/migration.env
 ```
@@ -153,11 +154,29 @@ scripts/local-discord-preflight.sh
 cargo run --locked -p monkeybot-api --bin monkeybot-api
 ```
 
-로컬 API user service도 분리된 두 runtime 파일만 읽는다. 파일 입력과 preflight가 끝난 뒤 예제 unit을
+Riot 전적 조회는 별도 local adapter process가 필요하다. Riot 개발 key는 24시간 단위로 만료되므로
+`riot_credentials_rejected`가 보이면 `.local/env/dev/riot-api.env`의 key를 갱신하고 adapter를 다시 시작한다.
+
+```bash
+set -a
+. ./.local/env/dev/riot-api.env
+set +a
+cargo run --locked -p monkeybot-riot-api --bin monkeybot-riot-api
+
+scripts/local-riot-smoke.sh
+
+MONKEYBOT_RIOT_SMOKE_GAME_NAME=Longcat \
+MONKEYBOT_RIOT_SMOKE_TAG_LINE=KR1 \
+  scripts/local-riot-smoke.sh
+```
+
+로컬 systemd user service도 process별 runtime 파일만 읽는다. 파일 입력과 preflight가 끝난 뒤 예제 unit을
 설치한다.
 
 ```bash
 install -d -m 700 "$HOME/.config/systemd/user"
+install -m 644 deploy/systemd/monkeybot-riot-api-local.service.example \
+  "$HOME/.config/systemd/user/monkeybot-riot-api-local.service"
 install -m 644 deploy/systemd/monkeybot-api-local.service.example \
   "$HOME/.config/systemd/user/monkeybot-api-local.service"
 systemctl --user daemon-reload

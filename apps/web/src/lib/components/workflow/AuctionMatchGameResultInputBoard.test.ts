@@ -22,6 +22,7 @@ describe('AuctionMatchGameResultInputBoard', () => {
 		expect(source).toContain('allowLocalBulkInput');
 		expect(source).toContain('expectedRevision: snapshot.match.revision');
 		expect(source).toContain('setNumber: nextSetNumber');
+		expect(source).toContain('sideSelected: false');
 		expect(source).toContain('patchVersion: catalog.version');
 	});
 

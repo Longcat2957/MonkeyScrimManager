@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AuctionRecruitmentSnapshot } from '$lib/contracts/auctionRecruitmentSnapshot';
 import type { EntryDraftSnapshot } from '$lib/contracts/entryDraft';
 import {
+	EntryDraftApiError,
+	createAuctionRecruitmentFromEntryDraft,
 	createSeriesFromEntryDraft,
 	entryDraftErrorText,
 	fetchEntryDraft,
+	isEntryDraftAuthoritativeStateError,
 	isEntryDraftRevisionConflict,
 	moveEntryDraftParticipant,
 	reopenRecruitmentForEntry,
@@ -15,6 +19,7 @@ const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const participantId = '1525847677542207548';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const idempotencyKey = '01900000-0000-7000-8000-000000000002';
+const auctionRecruitmentId = '01900000-0000-7000-8000-000000000501';
 
 const snapshot: EntryDraftSnapshot = {
 	recruitment: {
@@ -52,9 +57,40 @@ const snapshot: EntryDraftSnapshot = {
 		canEdit: true,
 		canReset: true,
 		canCreateSeries: false,
+		canCreateAuctionRecruitment: false,
 		canReopen: true,
 		canCancel: true
 	}
+};
+
+const auctionSnapshot: AuctionRecruitmentSnapshot = {
+	recruitment: {
+		id: auctionRecruitmentId,
+		displayNumber: 42,
+		title: '10인 경매 내전 모집 #42',
+		format: 'TEN_PERSON',
+		rules: {
+			hardFearless: true,
+			semifinalBestOf: null,
+			finalBestOf: 3
+		},
+		participantCount: 10,
+		joinedParticipantCount: 10,
+		teamCount: 2,
+		status: 'CLOSED',
+		revision: 1,
+		channelId: null,
+		messageId: null,
+		createdById: participantId,
+		updatedAt: '2026-07-14T12:02:00Z',
+		href: `/g/${guildId}/auction/recruitments/${auctionRecruitmentId}`
+	},
+	participants: [
+		{ id: participantId, displayName: 'Longcat', declaredLane: 'MID' },
+		{ id: '1525847677542207549', displayName: 'Top Cat', declaredLane: 'TOP' }
+	],
+	links: { draft: `/g/${guildId}/auction/recruitments/${auctionRecruitmentId}/draft` },
+	permissions: { canManageMembers: false, canClose: false, canCancel: true }
 };
 
 function envelope(data: EntryDraftSnapshot = snapshot): Response {
@@ -176,6 +212,100 @@ describe('entry draft API client', () => {
 		const headers = new Headers(init?.headers);
 		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
 		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
+	});
+
+	it('converts a complete entry draft into an auction recruitment with the recruitment revision', async () => {
+		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return Response.json({ data: auctionSnapshot, meta: { requestId } }, { status: 201 });
+		});
+		installBrowser(fetcher, 'theme=dark; monkeybot_csrf=csrf-token');
+
+		await expect(
+			createAuctionRecruitmentFromEntryDraft(guildId, recruitmentId, {
+				expectedRevision: 3,
+				idempotencyKey
+			})
+		).resolves.toEqual(auctionSnapshot);
+
+		const [path, init] = fetcher.mock.calls[0]!;
+		expect(path).toBe(
+			`/api/guilds/${guildId}/recruitments/${recruitmentId}/auction-recruitment`
+		);
+		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 3 });
+		const headers = new Headers(init?.headers);
+		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
+		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
+	});
+
+	it('preserves backend revision conflict details for auction conversion', async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json(
+				{
+					error: {
+						code: 'recruitment_revision_conflict',
+						message: '모집 상태가 변경되었습니다. 최신 상태를 확인해 주세요.',
+						requestId,
+						details: { expectedRevision: 3, actualRevision: 4 }
+					}
+				},
+				{ status: 409 }
+			)
+		);
+		installBrowser(fetcher);
+
+		const error = await createAuctionRecruitmentFromEntryDraft(guildId, recruitmentId, {
+			expectedRevision: 3,
+			idempotencyKey
+		}).catch((cause) => cause);
+
+		expect(error).toMatchObject({
+			status: 409,
+			code: 'recruitment_revision_conflict',
+			requestId,
+			details: { expectedRevision: 3, actualRevision: 4 }
+		});
+		expect(isEntryDraftAuthoritativeStateError(error)).toBe(true);
+		expect(entryDraftErrorText(error)).toBe(
+			`모집 상태가 변경되었습니다. 최신 상태를 확인해 주세요. (요청 ID: ${requestId})`
+		);
+	});
+
+	it('marks source-state and incomplete-entry errors as requiring an authoritative refresh', () => {
+		expect(
+			isEntryDraftAuthoritativeStateError(
+				new EntryDraftApiError(
+					'참가자 10명을 양 팀의 모든 라인에 배치한 뒤 경매 모집으로 전환할 수 있습니다.',
+					422,
+					'entry_draft_incomplete',
+					requestId
+				)
+			)
+		).toBe(true);
+		expect(
+			isEntryDraftAuthoritativeStateError(
+				new EntryDraftApiError(
+					'Discord 모집 채널을 먼저 설정해야 경매 모집으로 전환할 수 있습니다.',
+					409,
+					'recruitment_channel_not_configured',
+					requestId
+				)
+			)
+		).toBe(false);
+	});
+
+	it('rejects auction conversion before mutation when the CSRF cookie is missing', async () => {
+		const fetcher = vi.fn();
+		installBrowser(fetcher, 'other=value');
+
+		await expect(
+			createAuctionRecruitmentFromEntryDraft(guildId, recruitmentId, {
+				expectedRevision: 3,
+				idempotencyKey
+			})
+		).rejects.toMatchObject({ status: 0, code: 'csrf_token_missing' });
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	it('keeps the backend reason and request ID on a revision conflict', async () => {

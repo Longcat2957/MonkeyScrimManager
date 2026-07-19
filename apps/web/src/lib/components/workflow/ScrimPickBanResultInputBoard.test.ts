@@ -14,6 +14,7 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 		);
 		expect(syncEffect).toContain('lastSyncedGameFingerprint');
 		expect(syncEffect).toContain('sidePreset = initialGame.sidePreset');
+		expect(syncEffect).toContain('sideSelected = hasExplicitSideSelection(initialGame);');
 		expect(syncEffect).toContain('picks = { ...initialGame.picks }');
 		expect(syncEffect).not.toContain('inputStep =');
 	});
@@ -46,6 +47,7 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 
 	it('keeps the default game-side value visually and functionally unselected until an operator chooses a side', () => {
 		expect(source).toContain('const sideDone = $derived(sideSelected);');
+		expect(source).toContain('if (game.sideSelected !== undefined) return game.sideSelected;');
 		expect(source).toContain('sideSelected && sidePreset === preset');
 		expect(source).toContain("{#if (!sideSelected && preset === 'DEFAULT') || (sideSelected && sidePreset === preset)}");
 		expect(source).toContain("sideSelected ? sidePanelClass(side) : 'bg-slate-950/20'");
@@ -71,6 +73,7 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 		expect(source).toContain(
 			"inputStep === 'PICKBAN' && sideSelected && (serverDraft || allowLocalBulkInput)"
 		);
+		expect(source).toContain('if (!sideSelected || sidePreset !== preset)');
 		expect(source).toContain('{#if canUseBulkInput}');
 		expect(source).toContain('if (!canUseBulkInput || !canEditDraft || items.length === 0) return;');
 		expect(source).toContain('bind:open={bulkInputOpen}');

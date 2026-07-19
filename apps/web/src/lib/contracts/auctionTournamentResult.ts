@@ -84,7 +84,11 @@ export const auctionTournamentResultSnapshotSchema = z
 		matches: z.array(auctionTournamentResultMatchSchema).max(3),
 		players: z.array(auctionTournamentResultPlayerSchema).max(20),
 		permissions: z
-			.object({ canRevertResults: z.boolean(), canRecoverBracket: z.boolean() })
+			.object({
+				canRevertResults: z.boolean(),
+				canRecoverBracket: z.boolean(),
+				canCancel: z.boolean()
+			})
 			.strict()
 	})
 	.strict()
@@ -115,10 +119,12 @@ export const auctionTournamentResultSnapshotSchema = z
 			const lineupSlots = new Set<string>();
 			const lineupMemberIds = new Set<string>();
 			const lineupUserIds = new Set<string>();
+			let lineupsMatchRoster = true;
 
 			for (const [lineupIndex, lineup] of match.lineups.entries()) {
 				const team = teamsById.get(lineup.teamId);
 				if (!team || !matchTeamIds.has(lineup.teamId)) {
+					lineupsMatchRoster = false;
 					context.addIssue({
 						code: 'custom',
 						path: ['matches', match.id, 'lineups', lineupIndex, 'teamId'],
@@ -131,6 +137,7 @@ export const auctionTournamentResultSnapshotSchema = z
 					(candidate) => candidate.teamMemberId === lineup.teamMemberId
 				);
 				if (!member || member.userId !== lineup.userId) {
+					lineupsMatchRoster = false;
 					context.addIssue({
 						code: 'custom',
 						path: ['matches', match.id, 'lineups', lineupIndex],
@@ -159,10 +166,15 @@ export const auctionTournamentResultSnapshotSchema = z
 				lineupUserIds.add(lineup.userId);
 			}
 
-			if (
+			const hasCompleteLockedLineups =
 				match.lineupsLocked &&
-				(matchTeamIds.size !== 2 || match.lineups.length !== 10 || lineupSlots.size !== 10)
-			) {
+				matchTeamIds.size === 2 &&
+				match.lineups.length === 10 &&
+				lineupSlots.size === 10 &&
+				lineupMemberIds.size === 10 &&
+				lineupUserIds.size === 10 &&
+				lineupsMatchRoster;
+			if ((match.lineupsLocked || match.games.length > 0) && !hasCompleteLockedLineups) {
 				context.addIssue({
 					code: 'custom',
 					path: ['matches', match.id, 'lineups'],

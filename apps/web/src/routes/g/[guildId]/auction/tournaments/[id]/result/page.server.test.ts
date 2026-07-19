@@ -58,7 +58,7 @@ function snapshot() {
 			}
 		],
 		players: [],
-		permissions: { canRevertResults: true, canRecoverBracket: false }
+		permissions: { canRevertResults: true, canRecoverBracket: false, canCancel: true }
 	};
 }
 

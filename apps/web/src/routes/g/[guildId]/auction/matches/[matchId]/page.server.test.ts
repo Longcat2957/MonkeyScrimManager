@@ -160,7 +160,8 @@ function twentyPersonBracketWithPendingSemifinal() {
 			canManageBracket: true,
 			canManageMatches: true,
 			canRecoverBracket: false,
-			canRevertDraft: false
+			canRevertDraft: false,
+			canCancel: true
 		}
 	};
 }

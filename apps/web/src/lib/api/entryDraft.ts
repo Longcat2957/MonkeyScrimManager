@@ -4,6 +4,10 @@ import {
 	type EntryDraftSlot,
 	type EntryDraftSnapshot
 } from '$lib/contracts/entryDraft';
+import {
+	auctionRecruitmentSnapshotSchema,
+	type AuctionRecruitmentSnapshot
+} from '$lib/contracts/auctionRecruitmentSnapshot';
 import { apiErrorEnvelopeSchema, responseMetaSchema, userIdSchema } from '$lib/contracts/workflow';
 import { apiRoute } from '$lib/routing';
 import { z } from 'zod';
@@ -19,6 +23,9 @@ const createdSeriesSchema = z
 		href: z.string().startsWith('/g/')
 	})
 	.strict();
+const auctionRecruitmentSnapshotEnvelopeSchema = z
+	.object({ data: auctionRecruitmentSnapshotSchema, meta: responseMetaSchema })
+	.strict();
 const createSeriesEnvelopeSchema = z
 	.object({
 		data: z.object({ series: createdSeriesSchema }).strict(),
@@ -26,7 +33,13 @@ const createSeriesEnvelopeSchema = z
 	})
 	.strict();
 
-type EntryDraftAction = 'load' | 'move' | 'reset' | 'create_series' | 'reopen';
+type EntryDraftAction =
+	| 'load'
+	| 'move'
+	| 'reset'
+	| 'create_series'
+	| 'create_auction_recruitment'
+	| 'reopen';
 export type EntryDraftCreatedSeries = z.infer<typeof createdSeriesSchema>;
 
 export class EntryDraftApiError extends Error {
@@ -34,7 +47,8 @@ export class EntryDraftApiError extends Error {
 		message: string,
 		readonly status: number,
 		readonly code: string,
-		readonly requestId: string | null
+		readonly requestId: string | null,
+		readonly details?: unknown
 	) {
 		super(message);
 		this.name = 'EntryDraftApiError';
@@ -46,6 +60,23 @@ export function isEntryDraftRevisionConflict(cause: unknown): cause is EntryDraf
 		cause instanceof EntryDraftApiError &&
 		cause.status === 409 &&
 		cause.code === 'entry_draft_revision_conflict'
+	);
+}
+
+export function isEntryDraftAuthoritativeStateError(
+	cause: unknown
+): cause is EntryDraftApiError {
+	if (!(cause instanceof EntryDraftApiError)) return false;
+	return (
+		(cause.status === 409 &&
+			[
+				'entry_draft_revision_conflict',
+				'recruitment_revision_conflict',
+				'series_source_not_ready',
+				'entry_draft_auction_source_not_ready',
+				'entry_draft_already_converted_to_series'
+			].includes(cause.code)) ||
+		(cause.status === 422 && cause.code === 'entry_draft_incomplete')
 	);
 }
 
@@ -88,6 +119,7 @@ function actionLabel(action: EntryDraftAction): string {
 	if (action === 'move') return '엔트리 배치 변경';
 	if (action === 'reset') return '엔트리 초기화';
 	if (action === 'create_series') return '시리즈 시작';
+	if (action === 'create_auction_recruitment') return '경매 모집 전환';
 	if (action === 'reopen') return '모집 재개';
 	return '엔트리 조회';
 }
@@ -118,7 +150,8 @@ function responseError(
 			parsed.data.error.message,
 			response.status,
 			parsed.data.error.code,
-			parsed.data.error.requestId
+			parsed.data.error.requestId,
+			parsed.data.error.details
 		);
 	}
 	return new EntryDraftApiError(
@@ -297,6 +330,59 @@ export async function createSeriesFromEntryDraft(
 		);
 	}
 	return parsed.data.data.series;
+}
+
+export async function createAuctionRecruitmentFromEntryDraft(
+	guildId: string,
+	recruitmentId: string,
+	command: { expectedRevision: number; idempotencyKey: string }
+): Promise<AuctionRecruitmentSnapshot> {
+	if (!z.uuid().safeParse(recruitmentId).success) {
+		throw new EntryDraftApiError(
+			'내전 모집 정보가 올바르지 않습니다.',
+			0,
+			'invalid_recruitment_id',
+			null
+		);
+	}
+	if (!revisionSchema.safeParse(command.expectedRevision).success) {
+		throw new EntryDraftApiError(
+			'모집 버전 정보가 올바르지 않습니다.',
+			0,
+			'invalid_revision',
+			null
+		);
+	}
+
+	let response: Response;
+	try {
+		response = await globalThis.fetch(
+			apiRoute(['guilds', guildId, 'recruitments', recruitmentId, 'auction-recruitment']),
+			{
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: mutationHeaders(command.idempotencyKey),
+				body: JSON.stringify({ expectedRevision: command.expectedRevision })
+			}
+		);
+	} catch (cause) {
+		if (cause instanceof EntryDraftApiError) throw cause;
+		throw new EntryDraftApiError('API 서버에 연결할 수 없습니다.', 0, 'network_error', null);
+	}
+
+	const payload = await responsePayload(response);
+	if (!response.ok) throw responseError(response, payload, 'create_auction_recruitment');
+
+	const parsed = auctionRecruitmentSnapshotEnvelopeSchema.safeParse(payload);
+	if (!parsed.success) {
+		throw new EntryDraftApiError(
+			'경매 모집 전환 응답 형식이 올바르지 않습니다.',
+			response.status,
+			'invalid_response',
+			null
+		);
+	}
+	return parsed.data.data;
 }
 
 export async function reopenRecruitmentForEntry(

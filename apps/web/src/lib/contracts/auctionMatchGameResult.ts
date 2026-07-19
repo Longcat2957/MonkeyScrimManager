@@ -67,10 +67,12 @@ export const auctionMatchGameResultSnapshotSchema = z
 
 		const occupiedSlots = new Set<string>();
 		const lineupUserIds = new Set<string>();
+		let lineupsMatchRoster = true;
 		for (const [index, lineup] of snapshot.lineups.entries()) {
 			const team = teamById.get(lineup.teamId);
 			const slotKey = `${lineup.teamId}:${lineup.lane}`;
 			if (!team) {
+				lineupsMatchRoster = false;
 				context.addIssue({
 					code: 'custom',
 					path: ['lineups', index, 'teamId'],
@@ -91,6 +93,7 @@ export const auctionMatchGameResultSnapshotSchema = z
 				(candidate) => candidate.teamMemberId === lineup.teamMemberId
 			);
 			if (!member || member.userId !== lineup.userId) {
+				lineupsMatchRoster = false;
 				context.addIssue({
 					code: 'custom',
 					path: ['lineups', index],
@@ -107,7 +110,13 @@ export const auctionMatchGameResultSnapshotSchema = z
 			lineupUserIds.add(lineup.userId);
 		}
 
-		if (snapshot.match.lineupsLocked && occupiedSlots.size !== 10) {
+		const hasCompleteLockedLineups =
+			snapshot.match.lineupsLocked &&
+			snapshot.lineups.length === 10 &&
+			occupiedSlots.size === 10 &&
+			lineupUserIds.size === 10 &&
+			lineupsMatchRoster;
+		if ((snapshot.match.lineupsLocked || snapshot.games.length > 0) && !hasCompleteLockedLineups) {
 			context.addIssue({
 				code: 'custom',
 				path: ['lineups'],

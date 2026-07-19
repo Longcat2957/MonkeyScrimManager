@@ -88,6 +88,15 @@ async fn active_operator_can_convert_a_complete_entry_draft_into_a_series() -> T
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_operator_can_convert_a_complete_entry_draft_into_auction_recruitment(
+) -> TestResult {
+    tokio::time::timeout(Duration::from_secs(120), run_entry_to_auction_conversion_flow())
+        .await
+        .map_err(|_| "entry-to-auction conversion endpoint test exceeded 120 seconds")??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn locking_an_auction_match_lineup_enqueues_entry_channel_confirmation() -> TestResult {
     tokio::time::timeout(
         Duration::from_secs(120),
@@ -95,6 +104,385 @@ async fn locking_an_auction_match_lineup_enqueues_entry_channel_confirmation() -
     )
     .await
     .map_err(|_| "auction match lineup confirmation endpoint test exceeded 120 seconds")??;
+    Ok(())
+}
+
+async fn run_entry_to_auction_conversion_flow() -> TestResult {
+    let server = TestPostgres::start().await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&server.database_url())
+        .await?;
+    MIGRATOR.run(&pool).await?;
+
+    let config = test_config(server.database_url())?;
+    let auth_config = config.auth().cloned().expect("auth config");
+    let auth_service = Arc::new(AuthService::new(
+        auth_config.oauth_encryption_key(),
+        CookiePolicy::new(auth_config.secure_cookies(), auth_config.session_ttl()),
+    )?);
+    let auth_repository = Arc::new(AuthRepository::new(pool.clone()));
+    create_login(
+        &auth_repository,
+        MEMBER_ID,
+        "Active Member",
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+    )
+    .await?;
+    create_login(
+        &auth_repository,
+        CANDIDATE_ID,
+        "Eligible Candidate",
+        CANDIDATE_SESSION,
+        CANDIDATE_CSRF,
+    )
+    .await?;
+    for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().skip(2).enumerate() {
+        let session = format!("web-entry-auction-full-roster-{index}-session");
+        let csrf = format!("web-entry-auction-full-roster-{index}-csrf");
+        create_login(
+            &auth_repository,
+            user_id,
+            &format!("Full Roster Member {}", index + 3),
+            &session,
+            &csrf,
+        )
+        .await?;
+    }
+    seed_guild(&pool).await?;
+    set_recruitment_channel(&pool, Some(RECRUITMENT_CHANNEL_ID)).await?;
+    seed_cross_guild_operator_context(&pool).await?;
+
+    let state = AppState::with_postgres(
+        config,
+        pool.clone(),
+        Arc::new(PostgresReadinessProbe::new(
+            pool.clone(),
+            Duration::from_secs(1),
+        )),
+    )
+    .with_auth(AuthRuntime::new(
+        auth_service,
+        auth_repository,
+        Arc::new(FakeDiscordClient),
+    ));
+    let app = build_router(state);
+
+    let recruitment_id = seed_closed_entry_recruitment(&pool, 1, 5, true).await?;
+    let path =
+        format!("/api/guilds/{GUILD_ID}/recruitments/{recruitment_id}/auction-recruitment");
+    let request_body = || json!({ "expectedRevision": 7 });
+
+    let cross_guild = browser_mutation(
+        &app,
+        Method::POST,
+        &format!(
+            "/api/guilds/{}/recruitments/{recruitment_id}/auction-recruitment",
+            cross_guild_id()
+        ),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "entry-auction-cross-guild",
+        true,
+        request_body(),
+        None,
+    )
+    .await?;
+    assert_eq!(cross_guild.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(cross_guild).await?["error"]["code"], "not_found");
+
+    let non_operator = browser_mutation(
+        &app,
+        Method::POST,
+        &path,
+        CANDIDATE_SESSION,
+        CANDIDATE_CSRF,
+        "entry-auction-non-operator",
+        true,
+        request_body(),
+        None,
+    )
+    .await?;
+    assert_eq!(non_operator.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(non_operator).await?["error"]["code"],
+        "operator_required"
+    );
+
+    let incomplete = browser_mutation(
+        &app,
+        Method::POST,
+        &path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "entry-auction-incomplete",
+        true,
+        request_body(),
+        None,
+    )
+    .await?;
+    assert_eq!(incomplete.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let incomplete = body_json(incomplete).await?;
+    assert_eq!(incomplete["error"]["code"], "entry_draft_incomplete");
+    assert_eq!(incomplete["error"]["details"]["joinedCount"], 10);
+    assert_eq!(incomplete["error"]["details"]["assignedCount"], 0);
+    assert_eq!(incomplete["error"]["details"]["targetCount"], 10);
+
+    let series_converted_recruitment_id =
+        seed_closed_entry_recruitment(&pool, 2, 3, false).await?;
+    seed_complete_entry_assignments(&pool, &series_converted_recruitment_id).await?;
+    seed_active_series_for_recruitment(&pool, &series_converted_recruitment_id).await?;
+    let already_series_entry = browser_get(
+        &app,
+        &format!(
+            "/api/guilds/{GUILD_ID}/recruitments/{series_converted_recruitment_id}/entry-draft"
+        ),
+        MEMBER_SESSION,
+    )
+    .await?;
+    assert_eq!(already_series_entry.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(already_series_entry).await?["data"]["capabilities"]
+            ["canCreateAuctionRecruitment"],
+        false
+    );
+    let already_series = browser_mutation(
+        &app,
+        Method::POST,
+        &format!(
+            "/api/guilds/{GUILD_ID}/recruitments/{series_converted_recruitment_id}/auction-recruitment"
+        ),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "entry-auction-already-series",
+        true,
+        request_body(),
+        None,
+    )
+    .await?;
+    assert_eq!(already_series.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(already_series).await?["error"]["code"],
+        "entry_draft_already_converted_to_series"
+    );
+
+    seed_complete_entry_assignments(&pool, &recruitment_id).await?;
+    let created = browser_mutation(
+        &app,
+        Method::POST,
+        &path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "entry-auction-create",
+        true,
+        request_body(),
+        None,
+    )
+    .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = body_json(created).await?;
+    let auction_recruitment_id = created["data"]["recruitment"]["id"]
+        .as_str()
+        .ok_or("auction conversion response did not contain an ID")?
+        .to_owned();
+    assert_eq!(created["data"]["recruitment"]["format"], "TEN_PERSON");
+    assert_eq!(created["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(created["data"]["recruitment"]["revision"], 1);
+    assert_eq!(created["data"]["recruitment"]["participantCount"], 10);
+    assert_eq!(created["data"]["recruitment"]["joinedParticipantCount"], 10);
+    assert_eq!(created["data"]["recruitment"]["teamCount"], 2);
+    assert_eq!(created["data"]["recruitment"]["rules"]["finalBestOf"], 5);
+    assert_eq!(
+        created["data"]["recruitment"]["rules"]["semifinalBestOf"],
+        Value::Null
+    );
+    assert_eq!(
+        created["data"]["recruitment"]["rules"]["hardFearless"],
+        true
+    );
+    assert_eq!(
+        created["data"]["links"]["draft"],
+        format!("/g/{GUILD_ID}/auction/recruitments/{auction_recruitment_id}/draft")
+    );
+    let participants = created["data"]["participants"]
+        .as_array()
+        .ok_or("auction conversion response did not contain participants")?;
+    assert_eq!(participants.len(), 10);
+    assert_eq!(participants[0]["id"], MEMBER_ID);
+    assert_eq!(participants[0]["declaredLane"], "TOP");
+
+    let replay = browser_mutation(
+        &app,
+        Method::POST,
+        &path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "entry-auction-create",
+        true,
+        request_body(),
+        None,
+    )
+    .await?;
+    assert_eq!(replay.status(), StatusCode::CREATED);
+    assert_eq!(body_json(replay).await?["data"], created["data"]);
+
+    let stale = browser_mutation(
+        &app,
+        Method::POST,
+        &path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "entry-auction-stale",
+        true,
+        request_body(),
+        None,
+    )
+    .await?;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let stale = body_json(stale).await?;
+    assert_eq!(stale["error"]["code"], "recruitment_revision_conflict");
+    assert_eq!(stale["error"]["details"]["expectedRevision"], 7);
+    assert_eq!(stale["error"]["details"]["actualRevision"], 8);
+
+    let source_state = sqlx::query_as::<_, (String, i64, bool)>(
+        "SELECT status, revision, converted_at IS NOT NULL
+         FROM recruitments
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&recruitment_id)?)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(source_state, ("CONVERTED".to_owned(), 8, true));
+
+    let auction_state = sqlx::query_as::<_, (Uuid, String, i16, Option<i16>, i16, bool, String, i64, bool, String)>(
+        "SELECT season_id, format, target_count, semifinal_best_of, final_best_of,
+                hard_fearless, status, revision, closed_at IS NOT NULL, created_by
+         FROM auction_recruitments
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&auction_recruitment_id)?)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(auction_state.0, Uuid::parse_str(SEASON_ID)?);
+    assert_eq!(auction_state.1, "TEN_PERSON");
+    assert_eq!(auction_state.2, 10);
+    assert_eq!(auction_state.3, None);
+    assert_eq!(auction_state.4, 5);
+    assert!(auction_state.5);
+    assert_eq!(auction_state.6, "CLOSED");
+    assert_eq!(auction_state.7, 1);
+    assert!(auction_state.8);
+    assert_eq!(auction_state.9, MEMBER_ID);
+
+    let copied_participants = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        "SELECT
+             count(*),
+             count(*) FILTER (
+                 WHERE status = 'JOINED'
+                   AND declared_lane IS NOT NULL
+                   AND mmr_at_join = 1500
+                   AND snapshot_origin = 'CAPTURED'
+             ),
+             count(*) FILTER (WHERE user_id = $3 AND declared_lane = 'TOP'),
+             count(*) FILTER (WHERE user_id = $4 AND declared_lane = 'JUNGLE')
+         FROM auction_recruitment_participants
+         WHERE guild_id = $1 AND recruitment_id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&auction_recruitment_id)?)
+    .bind(MEMBER_ID)
+    .bind(FULL_ROSTER_MEMBER_IDS[1])
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(copied_participants, (10, 10, 1, 1));
+
+    let initialized_mmr_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)
+         FROM user_lane_mmr
+         WHERE guild_id = $1 AND season_id = $2 AND mmr = 1500",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(SEASON_ID)?)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(initialized_mmr_rows, 10);
+
+    let setup_state = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT
+             (SELECT revision FROM auction_setup_drafts WHERE guild_id = $1 AND recruitment_id = $2),
+             (SELECT count(*) FROM auction_setup_teams WHERE guild_id = $1 AND recruitment_id = $2)",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&auction_recruitment_id)?)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(setup_state, (0, 2));
+
+    let auction_notification = sqlx::query_as::<_, (String, String, Value)>(
+        "SELECT channel_id, deduplication_key, payload
+         FROM bot_notification_outbox
+         WHERE guild_id = $1
+           AND notification_type = 'AUCTION_RECRUITMENT_MESSAGE_CREATE'
+           AND payload ->> 'auctionRecruitmentId' = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(&auction_recruitment_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(auction_notification.0, RECRUITMENT_CHANNEL_ID);
+    assert_eq!(
+        auction_notification.1,
+        format!("auction-recruitment:{auction_recruitment_id}:initial-message")
+    );
+    assert_eq!(
+        auction_notification.2["snapshot"]["recruitment"]["status"],
+        "CLOSED"
+    );
+    assert_eq!(
+        auction_notification.2["snapshot"]["links"]["draft"],
+        format!("/g/{GUILD_ID}/auction/recruitments/{auction_recruitment_id}/draft")
+    );
+
+    let source_notification = sqlx::query_scalar::<_, Value>(
+        "SELECT payload
+         FROM bot_notification_outbox
+         WHERE guild_id = $1
+           AND notification_type = 'RECRUITMENT_MESSAGE_UPDATE'
+           AND payload ->> 'recruitmentId' = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(&recruitment_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        source_notification["snapshot"]["recruitment"]["status"],
+        "CONVERTED"
+    );
+
+    let side_effects = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        "SELECT
+             (SELECT count(*) FROM admin_audit_log
+                WHERE guild_id = $1 AND action = 'AUCTION_RECRUITMENT_CREATED_FROM_ENTRY_DRAFT'),
+             (SELECT count(*) FROM outbox_events
+                WHERE guild_id = $1 AND event_type = 'RECRUITMENT_CONVERTED'),
+             (SELECT count(*) FROM outbox_events
+                WHERE guild_id = $1 AND event_type = 'AUCTION_RECRUITMENT_CREATED'),
+             (SELECT count(*) FROM idempotency_records
+                WHERE guild_id = $1
+                  AND principal_type = 'USER'
+                  AND principal_id = $2
+                  AND method = 'POST'
+                  AND route_template = '/api/guilds/{guildId}/recruitments/{id}/auction-recruitment')",
+    )
+    .bind(GUILD_ID)
+    .bind(MEMBER_ID)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(side_effects, (1, 1, 1, 1));
+
     Ok(())
 }
 
@@ -402,7 +790,7 @@ async fn run_series_conversion_flow() -> TestResult {
         Arc::new(FakeDiscordClient),
     ));
     let app = build_router(state);
-    let recruitment_id = seed_closed_entry_recruitment(&pool, 3, true).await?;
+    let recruitment_id = seed_closed_entry_recruitment(&pool, 1, 3, true).await?;
     let series_path = format!("/api/guilds/{GUILD_ID}/series");
     let request_body = || {
         json!({
@@ -491,12 +879,22 @@ async fn run_series_conversion_flow() -> TestResult {
         body_json(before_assignments).await?["data"]["capabilities"]["canCreateSeries"],
         false
     );
+    let before_assignments = browser_get(&app, &entry_path, MEMBER_SESSION).await?;
+    assert_eq!(before_assignments.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(before_assignments).await?["data"]["capabilities"]["canCreateAuctionRecruitment"],
+        false
+    );
 
     seed_complete_entry_assignments(&pool, &recruitment_id).await?;
     let ready_entry = browser_get(&app, &entry_path, MEMBER_SESSION).await?;
     assert_eq!(ready_entry.status(), StatusCode::OK);
     let ready_entry = body_json(ready_entry).await?;
     assert_eq!(ready_entry["data"]["capabilities"]["canCreateSeries"], true);
+    assert_eq!(
+        ready_entry["data"]["capabilities"]["canCreateAuctionRecruitment"],
+        true
+    );
     assert_eq!(ready_entry["data"]["recruitment"]["bestOf"], 3);
     assert_eq!(ready_entry["data"]["recruitment"]["hardFearless"], true);
 
@@ -877,7 +1275,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(side_effects, (1, 1, 1, 1));
 
     let pick_ban_update_path = format!("{pick_ban_path}/pickban");
-    let draft_updated = browser_mutation(
+    let pick_before_side = browser_mutation(
         &app,
         Method::PATCH,
         &pick_ban_update_path,
@@ -896,9 +1294,57 @@ async fn run_series_conversion_flow() -> TestResult {
         None,
     )
     .await?;
+    assert_eq!(pick_before_side.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let pick_before_side = body_json(pick_before_side).await?;
+    assert_eq!(
+        pick_before_side["error"]["code"],
+        "series_game_side_required"
+    );
+
+    let side_selected = browser_mutation(
+        &app,
+        Method::PATCH,
+        &pick_ban_update_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-pickban-side-1",
+        true,
+        json!({
+            "expectedRevision": 0,
+            "operation": { "type": "SET_SIDE", "sidePreset": "DEFAULT" }
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(side_selected.status(), StatusCode::OK);
+    let side_selected = body_json(side_selected).await?;
+    assert_eq!(side_selected["data"]["series"]["revision"], 1);
+    assert_eq!(side_selected["data"]["currentGame"]["sidePreset"], "DEFAULT");
+    assert_eq!(side_selected["data"]["currentGame"]["sideSelected"], true);
+
+    let draft_updated = browser_mutation(
+        &app,
+        Method::PATCH,
+        &pick_ban_update_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-pickban-update-1",
+        true,
+        json!({
+            "expectedRevision": 1,
+            "operation": {
+                "type": "SET_PICK",
+                "playerId": MEMBER_ID,
+                "championId": "Ahri"
+            }
+        }),
+        None,
+    )
+    .await?;
     assert_eq!(draft_updated.status(), StatusCode::OK);
     let draft_updated = body_json(draft_updated).await?;
-    assert_eq!(draft_updated["data"]["series"]["revision"], 1);
+    assert_eq!(draft_updated["data"]["series"]["revision"], 2);
+    assert_eq!(draft_updated["data"]["currentGame"]["sideSelected"], true);
     assert_eq!(
         draft_updated["data"]["currentGame"]["picks"][MEMBER_ID],
         "Ahri"
@@ -922,14 +1368,14 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-game-1",
         true,
-        game_command(1, 1),
+        game_command(1, 2),
         None,
     )
     .await?;
     assert_eq!(first_game.status(), StatusCode::CREATED);
     let first_game = body_json(first_game).await?;
     assert_eq!(first_game["data"]["series"]["status"], "IN_PROGRESS");
-    assert_eq!(first_game["data"]["series"]["revision"], 2);
+    assert_eq!(first_game["data"]["series"]["revision"], 3);
     assert_eq!(first_game["data"]["confirmedGameCount"], 1);
     assert_eq!(
         first_game["data"]["nextHref"],
@@ -945,7 +1391,59 @@ async fn run_series_conversion_flow() -> TestResult {
         "web-series-hard-fearless-repeated-pick",
         true,
         json!({
-            "expectedRevision": 2,
+            "expectedRevision": 3,
+            "operation": {
+                "type": "SET_PICK",
+                "playerId": MEMBER_ID,
+                "championId": "Ahri"
+            }
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(
+        repeated_hard_fearless_pick.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let repeated_hard_fearless_pick = body_json(repeated_hard_fearless_pick).await?;
+    assert_eq!(
+        repeated_hard_fearless_pick["error"]["code"],
+        "series_game_side_required"
+    );
+
+    let second_set_side_selected = browser_mutation(
+        &app,
+        Method::PATCH,
+        &pick_ban_update_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-pickban-side-2",
+        true,
+        json!({
+            "expectedRevision": 3,
+            "operation": { "type": "SET_SIDE", "sidePreset": "DEFAULT" }
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(second_set_side_selected.status(), StatusCode::OK);
+    let second_set_side_selected = body_json(second_set_side_selected).await?;
+    assert_eq!(second_set_side_selected["data"]["series"]["revision"], 4);
+    assert_eq!(
+        second_set_side_selected["data"]["currentGame"]["sideSelected"],
+        true
+    );
+
+    let repeated_hard_fearless_pick = browser_mutation(
+        &app,
+        Method::PATCH,
+        &pick_ban_update_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-hard-fearless-repeated-pick-after-side",
+        true,
+        json!({
+            "expectedRevision": 4,
             "operation": {
                 "type": "SET_PICK",
                 "playerId": MEMBER_ID,
@@ -974,7 +1472,7 @@ async fn run_series_conversion_flow() -> TestResult {
     );
 
     let duplicate_bulk_side_effects = series_pick_ban_draft_side_effects(&pool, series_id).await?;
-    assert_eq!(duplicate_bulk_side_effects, (1, 1));
+    assert_eq!(duplicate_bulk_side_effects, (3, 3));
 
     let duplicate_bulk = browser_mutation(
         &app,
@@ -985,7 +1483,7 @@ async fn run_series_conversion_flow() -> TestResult {
         "web-series-pickban-bulk-duplicate",
         true,
         json!({
-            "expectedRevision": 2,
+            "expectedRevision": 4,
             "operation": {
                 "type": "APPLY_BULK",
                 "items": [
@@ -1012,7 +1510,11 @@ async fn run_series_conversion_flow() -> TestResult {
     let after_duplicate_bulk = browser_get(&app, &pick_ban_path, MEMBER_SESSION).await?;
     assert_eq!(after_duplicate_bulk.status(), StatusCode::OK);
     let after_duplicate_bulk = body_json(after_duplicate_bulk).await?;
-    assert_eq!(after_duplicate_bulk["data"]["series"]["revision"], 2);
+    assert_eq!(after_duplicate_bulk["data"]["series"]["revision"], 4);
+    assert_eq!(
+        after_duplicate_bulk["data"]["currentGame"]["sideSelected"],
+        true
+    );
     assert!(after_duplicate_bulk["data"]["currentGame"]["picks"][CANDIDATE_ID].is_null());
     assert!(after_duplicate_bulk["data"]["currentGame"]["bans"]["BLUE"][0].is_null());
     assert_eq!(
@@ -1035,7 +1537,7 @@ async fn run_series_conversion_flow() -> TestResult {
         true,
         json!({
             "setNumber": 2,
-            "expectedRevision": 2,
+            "expectedRevision": 4,
             "sidePreset": "DEFAULT",
             "winner": "BLUE",
             "patchVersion": "15.14",
@@ -1063,7 +1565,7 @@ async fn run_series_conversion_flow() -> TestResult {
         "web-series-pickban-bulk-applied",
         true,
         json!({
-            "expectedRevision": 2,
+            "expectedRevision": 4,
             "operation": {
                 "type": "APPLY_BULK",
                 "items": [
@@ -1077,8 +1579,9 @@ async fn run_series_conversion_flow() -> TestResult {
     .await?;
     assert_eq!(bulk_applied.status(), StatusCode::OK);
     let bulk_applied = body_json(bulk_applied).await?;
-    assert_eq!(bulk_applied["data"]["series"]["revision"], 3);
+    assert_eq!(bulk_applied["data"]["series"]["revision"], 5);
     assert_eq!(bulk_applied["data"]["series"]["hardFearless"], true);
+    assert_eq!(bulk_applied["data"]["currentGame"]["sideSelected"], true);
     assert_eq!(
         bulk_applied["data"]["currentGame"]["picks"][CANDIDATE_ID],
         "Lux"
@@ -1098,14 +1601,14 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-game-2",
         true,
-        game_command(2, 3),
+        game_command(2, 5),
         None,
     )
     .await?;
     assert_eq!(second_game.status(), StatusCode::CREATED);
     let second_game = body_json(second_game).await?;
     assert_eq!(second_game["data"]["series"]["status"], "COMPLETED");
-    assert_eq!(second_game["data"]["series"]["revision"], 4);
+    assert_eq!(second_game["data"]["series"]["revision"], 6);
     assert_eq!(second_game["data"]["confirmedGameCount"], 2);
     assert_eq!(
         second_game["data"]["nextHref"],
@@ -1116,7 +1619,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(normal_result_notifications.len(), 1);
     let (channel_id, deduplication_key, payload) = &normal_result_notifications[0];
     assert_eq!(channel_id, RESULT_CHANNEL_ID);
-    assert_eq!(deduplication_key, &format!("series:{series_id}:result:4"));
+    assert_eq!(deduplication_key, &format!("series:{series_id}:result:6"));
     assert_eq!(payload["schemaVersion"], 2);
     assert_eq!(payload["seriesId"], series_id.to_string());
     assert_eq!(
@@ -1246,7 +1749,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-game-2-revert",
         true,
-        json!({ "expectedRevision": 4 }),
+        json!({ "expectedRevision": 6 }),
         None,
     )
     .await?;
@@ -1256,7 +1759,7 @@ async fn run_series_conversion_flow() -> TestResult {
         reverted_last_game["data"]["series"]["status"],
         "IN_PROGRESS"
     );
-    assert_eq!(reverted_last_game["data"]["series"]["revision"], 5);
+    assert_eq!(reverted_last_game["data"]["series"]["revision"], 7);
     assert_eq!(reverted_last_game["data"]["confirmedGameCount"], 1);
 
     set_result_channel(&pool, None).await?;
@@ -1270,14 +1773,14 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-game-2-restored",
         true,
-        game_command(2, 5),
+        game_command(2, 7),
         None,
     )
     .await?;
     assert_eq!(restored_second_game.status(), StatusCode::CREATED);
     assert_eq!(
         body_json(restored_second_game).await?["data"]["series"]["revision"],
-        6
+        8
     );
     assert_eq!(
         series_result_notifications(&pool, &series_id.to_string())
@@ -1295,7 +1798,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-revert-1",
         true,
-        json!({ "expectedRevision": 6 }),
+        json!({ "expectedRevision": 8 }),
         None,
     )
     .await?;
@@ -1313,7 +1816,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-revert-1",
         true,
-        json!({ "expectedRevision": 6 }),
+        json!({ "expectedRevision": 8 }),
         None,
     )
     .await?;
@@ -1339,7 +1842,7 @@ async fn run_series_conversion_flow() -> TestResult {
     .await?;
     assert_eq!(
         reverted_state,
-        ("CLOSED".to_owned(), 9, "CANCELLED".to_owned(), 7, true)
+        ("CLOSED".to_owned(), 9, "CANCELLED".to_owned(), 9, true)
     );
     let reverted_mmr = sqlx::query_as::<_, (i64, i64, i64, i64)>(
         "SELECT count(*),
@@ -1406,9 +1909,36 @@ async fn run_series_conversion_flow() -> TestResult {
         recreated_snapshot["data"]["capabilities"]["canEarlyComplete"],
         false
     );
+    assert_eq!(
+        recreated_snapshot["data"]["currentGame"]["sideSelected"],
+        false
+    );
 
     let recreated_pick_ban_update_path = format!("{recreated_pick_ban_path}/pickban");
     let recreated_game_path = format!("{recreated_pick_ban_path}/games");
+    let recreated_first_side = browser_mutation(
+        &app,
+        Method::PATCH,
+        &recreated_pick_ban_update_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-non-hard-fearless-side-1",
+        true,
+        json!({
+            "expectedRevision": 0,
+            "operation": { "type": "SET_SIDE", "sidePreset": "DEFAULT" }
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(recreated_first_side.status(), StatusCode::OK);
+    let recreated_first_side = body_json(recreated_first_side).await?;
+    assert_eq!(recreated_first_side["data"]["series"]["revision"], 1);
+    assert_eq!(
+        recreated_first_side["data"]["currentGame"]["sideSelected"],
+        true
+    );
+
     let recreated_first_pick = browser_mutation(
         &app,
         Method::PATCH,
@@ -1418,7 +1948,7 @@ async fn run_series_conversion_flow() -> TestResult {
         "web-series-non-hard-fearless-pick-1",
         true,
         json!({
-            "expectedRevision": 0,
+            "expectedRevision": 1,
             "operation": {
                 "type": "SET_PICK",
                 "playerId": MEMBER_ID,
@@ -1429,6 +1959,8 @@ async fn run_series_conversion_flow() -> TestResult {
     )
     .await?;
     assert_eq!(recreated_first_pick.status(), StatusCode::OK);
+    let recreated_first_pick = body_json(recreated_first_pick).await?;
+    assert_eq!(recreated_first_pick["data"]["series"]["revision"], 2);
     let recreated_first_game = browser_mutation(
         &app,
         Method::POST,
@@ -1437,11 +1969,37 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-non-hard-fearless-game-1",
         true,
-        game_command(1, 1),
+        game_command(1, 2),
         None,
     )
     .await?;
     assert_eq!(recreated_first_game.status(), StatusCode::CREATED);
+    let recreated_first_game = body_json(recreated_first_game).await?;
+    assert_eq!(recreated_first_game["data"]["series"]["revision"], 3);
+
+    let recreated_second_side = browser_mutation(
+        &app,
+        Method::PATCH,
+        &recreated_pick_ban_update_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-non-hard-fearless-side-2",
+        true,
+        json!({
+            "expectedRevision": 3,
+            "operation": { "type": "SET_SIDE", "sidePreset": "DEFAULT" }
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(recreated_second_side.status(), StatusCode::OK);
+    let recreated_second_side = body_json(recreated_second_side).await?;
+    assert_eq!(recreated_second_side["data"]["series"]["revision"], 4);
+    assert_eq!(
+        recreated_second_side["data"]["currentGame"]["sideSelected"],
+        true
+    );
+
     let recreated_repeated_pick = browser_mutation(
         &app,
         Method::PATCH,
@@ -1451,7 +2009,7 @@ async fn run_series_conversion_flow() -> TestResult {
         "web-series-non-hard-fearless-pick-2",
         true,
         json!({
-            "expectedRevision": 2,
+            "expectedRevision": 4,
             "operation": {
                 "type": "SET_PICK",
                 "playerId": MEMBER_ID,
@@ -1462,6 +2020,8 @@ async fn run_series_conversion_flow() -> TestResult {
     )
     .await?;
     assert_eq!(recreated_repeated_pick.status(), StatusCode::OK);
+    let recreated_repeated_pick = body_json(recreated_repeated_pick).await?;
+    assert_eq!(recreated_repeated_pick["data"]["series"]["revision"], 5);
 
     let recreated_after_first_game =
         browser_get(&app, &recreated_pick_ban_path, MEMBER_SESSION).await?;
@@ -1488,7 +2048,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-early-draw-invalid",
         true,
-        json!({ "expectedRevision": 3, "outcome": "DRAW" }),
+        json!({ "expectedRevision": 5, "outcome": "DRAW" }),
         None,
     )
     .await?;
@@ -1503,7 +2063,7 @@ async fn run_series_conversion_flow() -> TestResult {
         json!({ "team1Score": 1, "team2Score": 0 })
     );
 
-    let early_complete_body = json!({ "expectedRevision": 3, "outcome": "TEAM_1" });
+    let early_complete_body = json!({ "expectedRevision": 5, "outcome": "TEAM_1" });
     let early_complete = browser_mutation(
         &app,
         Method::POST,
@@ -1519,7 +2079,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(early_complete.status(), StatusCode::OK);
     let early_complete = body_json(early_complete).await?;
     assert_eq!(early_complete["data"]["series"]["status"], "COMPLETED");
-    assert_eq!(early_complete["data"]["series"]["revision"], 4);
+    assert_eq!(early_complete["data"]["series"]["revision"], 6);
     assert_eq!(early_complete["data"]["confirmedGameCount"], 1);
     assert_eq!(
         early_complete["data"]["nextHref"],
@@ -1604,7 +2164,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-early-win-revert-last",
         true,
-        json!({ "expectedRevision": 4 }),
+        json!({ "expectedRevision": 6 }),
         None,
     )
     .await?;
@@ -1614,7 +2174,7 @@ async fn run_series_conversion_flow() -> TestResult {
         restored_after_early_win["data"]["series"]["status"],
         "IN_PROGRESS"
     );
-    assert_eq!(restored_after_early_win["data"]["series"]["revision"], 5);
+    assert_eq!(restored_after_early_win["data"]["series"]["revision"], 7);
 
     set_result_channel(&pool, Some(RESULT_CHANNEL_ID)).await?;
     let resubmitted_for_result = browser_mutation(
@@ -1625,14 +2185,14 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-early-win-result-game-1",
         true,
-        game_command(1, 5),
+        game_command(1, 7),
         None,
     )
     .await?;
     assert_eq!(resubmitted_for_result.status(), StatusCode::CREATED);
     assert_eq!(
         body_json(resubmitted_for_result).await?["data"]["series"]["revision"],
-        6
+        8
     );
     let early_win_with_result = browser_mutation(
         &app,
@@ -1642,7 +2202,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-early-complete-with-result",
         true,
-        json!({ "expectedRevision": 6, "outcome": "TEAM_1" }),
+        json!({ "expectedRevision": 8, "outcome": "TEAM_1" }),
         None,
     )
     .await?;
@@ -1652,7 +2212,7 @@ async fn run_series_conversion_flow() -> TestResult {
         early_win_with_result["data"]["series"]["status"],
         "COMPLETED"
     );
-    assert_eq!(early_win_with_result["data"]["series"]["revision"], 7);
+    assert_eq!(early_win_with_result["data"]["series"]["revision"], 9);
 
     let early_win_notifications = series_result_notifications(&pool, &recreated_series_id).await?;
     assert_eq!(early_win_notifications.len(), 1);
@@ -1660,7 +2220,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(channel_id, RESULT_CHANNEL_ID);
     assert_eq!(
         deduplication_key,
-        &format!("series:{recreated_series_id}:result:7")
+        &format!("series:{recreated_series_id}:result:9")
     );
     assert_eq!(payload["schemaVersion"], 2);
     assert_eq!(payload["snapshot"]["series"]["terminalReason"], "EARLY_WIN");
@@ -1710,7 +2270,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-early-win-result-revert-last",
         true,
-        json!({ "expectedRevision": 7 }),
+        json!({ "expectedRevision": 9 }),
         None,
     )
     .await?;
@@ -1722,7 +2282,7 @@ async fn run_series_conversion_flow() -> TestResult {
     );
     assert_eq!(
         restored_after_result_notification["data"]["series"]["revision"],
-        8
+        10
     );
 
     let tied_first_game = browser_mutation(
@@ -1733,14 +2293,14 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-tied-game-1",
         true,
-        game_command(1, 8),
+        game_command(1, 10),
         None,
     )
     .await?;
     assert_eq!(tied_first_game.status(), StatusCode::CREATED);
     assert_eq!(
         body_json(tied_first_game).await?["data"]["series"]["revision"],
-        9
+        11
     );
 
     let tied_second_game = browser_mutation(
@@ -1753,7 +2313,7 @@ async fn run_series_conversion_flow() -> TestResult {
         true,
         json!({
             "setNumber": 2,
-            "expectedRevision": 9,
+            "expectedRevision": 11,
             "sidePreset": "DEFAULT",
             "winner": "RED",
             "patchVersion": "15.14"
@@ -1764,7 +2324,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(tied_second_game.status(), StatusCode::CREATED);
     let tied_second_game = body_json(tied_second_game).await?;
     assert_eq!(tied_second_game["data"]["series"]["status"], "IN_PROGRESS");
-    assert_eq!(tied_second_game["data"]["series"]["revision"], 10);
+    assert_eq!(tied_second_game["data"]["series"]["revision"], 12);
     assert_eq!(tied_second_game["data"]["confirmedGameCount"], 2);
 
     set_result_channel(&pool, Some(RESULT_CHANNEL_ID)).await?;
@@ -1777,20 +2337,20 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-early-draw-1",
         true,
-        json!({ "expectedRevision": 10, "outcome": "DRAW" }),
+        json!({ "expectedRevision": 12, "outcome": "DRAW" }),
         None,
     )
     .await?;
     assert_eq!(early_draw.status(), StatusCode::OK);
     let early_draw = body_json(early_draw).await?;
     assert_eq!(early_draw["data"]["series"]["status"], "COMPLETED");
-    assert_eq!(early_draw["data"]["series"]["revision"], 11);
+    assert_eq!(early_draw["data"]["series"]["revision"], 13);
     assert_eq!(early_draw["data"]["confirmedGameCount"], 2);
     let result_notifications = series_result_notifications(&pool, &recreated_series_id).await?;
     assert_eq!(result_notifications.len(), 2);
     let (channel_id, _deduplication_key, payload) = result_notifications
         .iter()
-        .find(|(_, key, _)| key == &format!("series:{recreated_series_id}:result:11"))
+        .find(|(_, key, _)| key == &format!("series:{recreated_series_id}:result:13"))
         .ok_or("early-draw result notification was not enqueued")?;
     assert_eq!(channel_id, RESULT_CHANNEL_ID);
     assert_eq!(payload["schemaVersion"], 2);
@@ -1892,7 +2452,7 @@ async fn run_series_conversion_flow() -> TestResult {
         MEMBER_CSRF,
         "web-series-delete-1",
         true,
-        json!({ "expectedRevision": 11 }),
+        json!({ "expectedRevision": 13 }),
         None,
     )
     .await?;
@@ -3095,6 +3655,19 @@ async fn set_entry_channel(pool: &PgPool, channel_id: Option<&str>) -> TestResul
     Ok(())
 }
 
+async fn set_recruitment_channel(pool: &PgPool, channel_id: Option<&str>) -> TestResult {
+    sqlx::query(
+        "UPDATE guild_config
+         SET recruitment_channel_id = $1
+         WHERE guild_id = $2",
+    )
+    .bind(channel_id)
+    .bind(GUILD_ID)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn set_result_channel(pool: &PgPool, channel_id: Option<&str>) -> TestResult {
     sqlx::query(
         "UPDATE guild_config
@@ -3234,25 +3807,29 @@ async fn seed_recruitment_participants(
 
 async fn seed_closed_entry_recruitment(
     pool: &PgPool,
+    display_number: i64,
     best_of: i16,
     hard_fearless: bool,
 ) -> TestResult<String> {
     let now = OffsetDateTime::now_utc();
     let recruitment_id = Uuid::now_v7();
+    let title = format!("일반 내전 모집 #{display_number}");
     sqlx::query(
         "INSERT INTO recruitments (
              guild_id, id, season_id, display_number, title, target_count, best_of, hard_fearless, status,
              revision, channel_id, message_id, created_by, created_at, updated_by, updated_at,
              closed_at, converted_at, cancelled_at
          ) VALUES (
-             $1, $2, $3, 1, '일반 내전 모집 #1', 10, $4, $5, 'CLOSED',
-             7, $6, $7, $8, $9, $8, $9,
-             $9, NULL, NULL
+             $1, $2, $3, $4, $5, 10, $6, $7, 'CLOSED',
+             7, $8, $9, $10, $11, $10, $11,
+             $11, NULL, NULL
          )",
     )
     .bind(GUILD_ID)
     .bind(recruitment_id)
     .bind(Uuid::parse_str(SEASON_ID)?)
+    .bind(display_number)
+    .bind(title)
     .bind(best_of)
     .bind(hard_fearless)
     .bind(RECRUITMENT_CHANNEL_ID)
@@ -3275,6 +3852,30 @@ async fn seed_closed_entry_recruitment(
     seed_recruitment_participants(pool, &recruitment_id.to_string(), &FULL_ROSTER_MEMBER_IDS)
         .await?;
     Ok(recruitment_id.to_string())
+}
+
+async fn seed_active_series_for_recruitment(pool: &PgPool, recruitment_id: &str) -> TestResult {
+    let now = OffsetDateTime::now_utc();
+    sqlx::query(
+        "INSERT INTO series (
+             guild_id, id, season_id, source_recruitment_id, display_number, title,
+             best_of, hard_fearless, status, winning_team, terminal_reason, revision,
+             started_at, ended_at, created_by, updated_by, updated_at, deleted_at
+         ) VALUES (
+             $1, $2, $3, $4, 91, '이미 전환된 일반 내전',
+             3, false, 'IN_PROGRESS', NULL, NULL, 0,
+             $5, NULL, $6, $6, $5, NULL
+         )",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::now_v7())
+    .bind(Uuid::parse_str(SEASON_ID)?)
+    .bind(Uuid::parse_str(recruitment_id)?)
+    .bind(now)
+    .bind(MEMBER_ID)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn seed_bidding_auction_tournament(pool: &PgPool) -> TestResult<Uuid> {
@@ -3797,6 +4398,93 @@ async fn seed_guild(pool: &PgPool) -> TestResult {
         .execute(pool)
         .await?;
     }
+    Ok(())
+}
+
+fn cross_guild_id() -> &'static str {
+    "200000000000000099"
+}
+
+async fn seed_cross_guild_operator_context(pool: &PgPool) -> TestResult {
+    let now = OffsetDateTime::now_utc();
+    let guild_id = cross_guild_id();
+    let operator_role_id = "300000000000000099";
+    let recruitment_channel_id = "400000000000000099";
+    let season_id = Uuid::parse_str("01900000-0000-7000-8000-000000000099")?;
+
+    sqlx::query(
+        "INSERT INTO guilds (
+             guild_id, discord_name, icon_hash, status, installed_by,
+             installed_at, activated_at, left_at, updated_at
+         ) VALUES ($1, 'Cross Guild', NULL, 'ACTIVE', $2, $3, $3, NULL, $3)",
+    )
+    .bind(guild_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_members (
+             guild_id, user_id, display_name, status, main_lane, first_seen_at,
+             registered_at, discord_joined_at, last_active_at, last_synced_at, inactivated_at
+         ) VALUES ($1, $2, 'Cross Operator', 'ACTIVE', NULL, $3, $3, $3, $3, $3, NULL)",
+    )
+    .bind(guild_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_member_discord_roles (guild_id, user_id, role_id, last_synced_at)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(guild_id)
+    .bind(MEMBER_ID)
+    .bind(operator_role_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO guild_config (
+             guild_id, display_name, operator_role_id, recruitment_channel_id,
+             entry_channel_id, result_channel_id, log_channel_id, is_externally_public, revision,
+             updated_by, updated_at
+         ) VALUES ($1, 'Cross Guild', $2, $3, NULL, NULL, NULL, false, 0, $4, $5)",
+    )
+    .bind(guild_id)
+    .bind(operator_role_id)
+    .bind(recruitment_channel_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO seasons (
+             guild_id, id, name, status, started_at, ended_at, created_by, created_at
+         ) VALUES ($1, $2, 'Cross Season', 'ACTIVE', $3, NULL, $4, $3)",
+    )
+    .bind(guild_id)
+    .bind(season_id)
+    .bind(now)
+    .bind(MEMBER_ID)
+    .execute(pool)
+    .await?;
+    for counter_key in [
+        "RECRUITMENT",
+        "SERIES",
+        "AUCTION_RECRUITMENT",
+        "AUCTION_TOURNAMENT",
+    ] {
+        sqlx::query(
+            "INSERT INTO guild_counters (guild_id, counter_key, next_value)
+             VALUES ($1, $2, 1)",
+        )
+        .bind(guild_id)
+        .bind(counter_key)
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }
 

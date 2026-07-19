@@ -64,6 +64,7 @@ export const seriesPickBanCurrentGameSchema = z
 	.object({
 		setNumber: z.number().int().min(1).max(5),
 		sidePreset: seriesPickBanSidePresetSchema,
+		sideSelected: z.boolean(),
 		winner: seriesPickBanSideSchema.nullable(),
 		picks: z.record(z.string(), championIdSchema.nullable()),
 		bans: z
@@ -195,6 +196,18 @@ export const seriesPickBanSnapshotSchema = z
 
 		const pickIds = Object.keys(snapshot.currentGame.picks);
 		if (
+			!snapshot.currentGame.sideSelected &&
+			(snapshot.currentGame.winner !== null ||
+				Object.values(snapshot.currentGame.picks).some(Boolean) ||
+				[...snapshot.currentGame.bans.BLUE, ...snapshot.currentGame.bans.RED].some(Boolean))
+		) {
+			context.addIssue({
+				code: 'custom',
+				path: ['currentGame', 'sideSelected'],
+				message: 'Current game side must be selected before pick-ban input'
+			});
+		}
+		if (
 			pickIds.length !== rosterIds.length ||
 			pickIds.some((playerId) => !rosterIds.includes(playerId)) ||
 			rosterIds.some((playerId) => !(playerId in snapshot.currentGame.picks))
@@ -207,6 +220,13 @@ export const seriesPickBanSnapshotSchema = z
 		}
 
 		for (const [index, game] of snapshot.games.entries()) {
+			if (!game.sideSelected) {
+				context.addIssue({
+					code: 'custom',
+					path: ['games', index, 'sideSelected'],
+					message: 'Confirmed game side must be selected'
+				});
+			}
 			const gamePickIds = Object.keys(game.picks);
 			if (
 				gamePickIds.length !== rosterIds.length ||

@@ -63,6 +63,7 @@ const snapshot: SeriesPickBanSnapshot = {
 	currentGame: {
 		setNumber: 1,
 		sidePreset: 'DEFAULT',
+		sideSelected: false,
 		winner: null,
 		picks: Object.fromEntries([...teamOneIds, ...teamTwoIds].map((id) => [id, null])),
 		bans: { BLUE: [null, null, null, null, null], RED: [null, null, null, null, null] },
@@ -113,6 +114,7 @@ describe('series pick-ban API client', () => {
 			games: [
 				{
 					...snapshot.currentGame,
+					sideSelected: true,
 					winner: 'BLUE'
 				}
 			],
@@ -167,6 +169,7 @@ describe('series pick-ban API client', () => {
 			series: { ...snapshot.series, revision: 8 },
 			currentGame: {
 				...snapshot.currentGame,
+				sideSelected: true,
 				bans: { ...snapshot.currentGame.bans, BLUE: ['Aatrox', null, null, null, null] }
 			}
 		};
@@ -201,6 +204,7 @@ describe('series pick-ban API client', () => {
 			series: { ...snapshot.series, revision: 8 },
 			currentGame: {
 				...snapshot.currentGame,
+				sideSelected: true,
 				picks: { ...snapshot.currentGame.picks, [teamOneIds[0]!]: 'Gnar' },
 				bans: { ...snapshot.currentGame.bans, RED: ['Yone', null, null, null, null] }
 			}
@@ -282,6 +286,7 @@ describe('series pick-ban API client', () => {
 		expect(JSON.parse(String(submitInit?.body))).toMatchObject({
 			setNumber: 1,
 			expectedRevision: 7,
+			sidePreset: 'DEFAULT',
 			winner: 'BLUE'
 		});
 
@@ -326,6 +331,22 @@ describe('series pick-ban API client', () => {
 		const headers = new Headers(init?.headers);
 		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
 		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
+	});
+
+	it('rejects submit commands without an explicit side preset before fetching', async () => {
+		const fetcher = vi.fn();
+		installBrowser(fetcher);
+
+		const error = await submitSeriesPickBanGame(guildId, seriesId, {
+			setNumber: 1,
+			expectedRevision: 7,
+			sidePreset: undefined,
+			winner: 'BLUE',
+			idempotencyKey
+		} as never).catch((cause) => cause);
+
+		expect(error).toMatchObject({ code: 'invalid_side_preset' });
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	it('preserves a lifecycle conflict reason and request ID from the API', async () => {
@@ -392,5 +413,26 @@ describe('series pick-ban API client', () => {
 		expect(seriesPickBanErrorText(error)).toBe(
 			`시리즈 정보 조회 응답 형식이 올바르지 않습니다. (요청 ID: ${requestId})`
 		);
+	});
+
+	it('rejects current pick-ban data when the side was not selected by the server', async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json({
+				data: {
+					...snapshot,
+					currentGame: {
+						...snapshot.currentGame,
+						sideSelected: false,
+						picks: { ...snapshot.currentGame.picks, [teamOneIds[0]!]: 'Aatrox' }
+					}
+				},
+				meta: { requestId }
+			})
+		);
+		installBrowser(fetcher);
+
+		const error = await fetchSeriesPickBan(guildId, seriesId).catch((cause) => cause);
+
+		expect(error).toMatchObject({ code: 'invalid_response', requestId });
 	});
 });

@@ -56,7 +56,8 @@ const lockedSnapshot: AuctionTournamentBracketSnapshot = {
 		canManageBracket: true,
 		canManageMatches: true,
 		canRecoverBracket: true,
-		canRevertDraft: false
+		canRevertDraft: false,
+		canCancel: true
 	}
 };
 

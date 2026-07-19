@@ -243,8 +243,10 @@ MONKEYBOT_DEV_ENV_FILE=/root/monkeybot-dev/deploy/dev.env \
 scripts/vps-dev-smoke.sh
 ```
 
-Smoke는 API liveness/readiness, Bot/Riot health, public landing/install, unauthenticated `/api/me`, `/ws`
-route를 확인한다. Discord OAuth는 real browser callback으로 별도 확인한다.
+Smoke는 API liveness/readiness, Bot/Riot health와 internal Riot auth, public landing/install,
+unauthenticated `/api/me`, `/ws` route를 확인한다. Live Riot provider까지 확인할 때만
+`MONKEYBOT_RIOT_SMOKE_GAME_NAME`, `MONKEYBOT_RIOT_SMOKE_TAG_LINE`, 선택적으로
+`MONKEYBOT_RIOT_SMOKE_PLATFORM`을 지정한다. Discord OAuth는 real browser callback으로 별도 확인한다.
 
 Rollback은 `deploy/dev.env`의 `MONKEYBOT_RELEASE_TAG`를 직전 검증 SHA로 바꾼 뒤 app services만 다시 `up -d`하고,
 `nginx -t`와 `nginx -s reload`를 수행하는 방식이다. schema down migration은 하지 않는다. migration이 이미
