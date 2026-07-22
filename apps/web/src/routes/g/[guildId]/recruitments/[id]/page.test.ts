@@ -61,7 +61,9 @@ describe('recruitment stage page', () => {
 		expect(source).toContain("from '$lib/realtime/recruitment'");
 		expect(source).toContain('if (!isOperator) return;');
 		expect(source).toContain('topics: [topic]');
-		expect(source).toContain('onInvalidate: (event) => handleRealtimeInvalidation(event, route, topic)');
+		expect(source).toContain(
+			'onInvalidate: (event) => handleRealtimeInvalidation(event, route, topic)'
+		);
 		expect(source).toContain('fetchRecruitmentSnapshot(route.guildId, route.recruitmentId)');
 	});
 

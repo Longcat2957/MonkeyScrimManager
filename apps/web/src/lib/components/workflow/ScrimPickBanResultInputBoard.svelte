@@ -173,11 +173,11 @@
 			...nextBans.BLUE.filter((championId): championId is string => championId !== null),
 			...nextBans.RED.filter((championId): championId is string => championId !== null)
 		];
-		const counts = new Map<string, number>();
+		const counts: Record<string, number> = {};
 		for (const championId of selectedChampionIds) {
-			counts.set(championId, (counts.get(championId) ?? 0) + 1);
+			counts[championId] = (counts[championId] ?? 0) + 1;
 		}
-		const duplicateChampionIds = [...counts].flatMap(([championId, count]) =>
+		const duplicateChampionIds = Object.entries(counts).flatMap(([championId, count]) =>
 			count > 1 ? [championId] : []
 		);
 		const priorPickIds = new Set(priorPickChampionIds);
@@ -393,11 +393,11 @@
 		if (!next) return;
 
 		activeCell = next;
-		if (typeof window === 'undefined') return;
-		window.requestAnimationFrame(() => {
-			const input = document.getElementById(
+		if (typeof globalThis.window === 'undefined') return;
+		globalThis.window.requestAnimationFrame(() => {
+			const input = globalThis.document.getElementById(
 				scrimPickBanResultInputCellId(next)
-			) as HTMLInputElement | null;
+			) as globalThis.HTMLInputElement | null;
 			input?.focus({ preventScroll: true });
 			input?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 		});
@@ -529,7 +529,7 @@
 							>
 								{preset === 'DEFAULT' ? '왼쪽 팀 블루' : '오른쪽 팀 블루'}
 							</button>
-					{/each}
+						{/each}
 					</div>
 
 					{#each sidePresets as preset (preset)}
@@ -628,14 +628,20 @@
 					{#if draftConflicts.duplicateChampionIds.length > 0}
 						<p>
 							같은 세트에서 중복 선택된 챔피언: {draftConflicts.duplicateChampionIds
-								.map((championId) => champions.find((champion) => champion.id === championId)?.name ?? championId)
+								.map(
+									(championId) =>
+										champions.find((champion) => champion.id === championId)?.name ?? championId
+								)
 								.join(', ')}
 						</p>
 					{/if}
 					{#if draftConflicts.hardFearlessChampionIds.length > 0}
 						<p>
 							하드 피어리스에서 이전 세트에 픽한 챔피언: {draftConflicts.hardFearlessChampionIds
-								.map((championId) => champions.find((champion) => champion.id === championId)?.name ?? championId)
+								.map(
+									(championId) =>
+										champions.find((champion) => champion.id === championId)?.name ?? championId
+								)
 								.join(', ')}
 						</p>
 					{/if}

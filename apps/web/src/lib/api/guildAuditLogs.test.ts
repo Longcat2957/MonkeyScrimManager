@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GuildAuditLogsSnapshot } from '$lib/contracts/workflow';
-import { fetchGuildAuditLogs } from './guildAuditLogs';
+import { fetchGuildAuditLogs, guildAuditLogsErrorText } from './guildAuditLogs';
 
 const guildId = '1525851181157580861';
 const requestId = '01900000-0000-7000-8000-000000000001';
@@ -68,11 +68,16 @@ describe('guild audit logs API client', () => {
 				{ status: 403 }
 			)
 		);
-		await expect(fetchGuildAuditLogs(guildId)).rejects.toMatchObject({
+		const forbiddenError = await fetchGuildAuditLogs(guildId).catch((cause) => cause);
+		expect(forbiddenError).toMatchObject({
 			status: 403,
 			code: 'guild_operator_required',
-			message: '권한이 없습니다.'
+			message: '권한이 없습니다.',
+			requestId
 		});
+		expect(guildAuditLogsErrorText(forbiddenError)).toBe(
+			`권한이 없습니다. (요청 ID: ${requestId})`
+		);
 
 		forbidden.mockImplementationOnce(async () =>
 			Response.json({ data: { ...snapshot, unexpected: true }, meta: { requestId } })

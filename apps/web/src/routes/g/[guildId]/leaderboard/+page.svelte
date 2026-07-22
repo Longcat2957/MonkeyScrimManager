@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { SvelteURLSearchParams } from 'svelte/reactivity';
 	import LeaderboardBoard from '$lib/components/workflow/LeaderboardBoard.svelte';
 	import type { PageProps } from './$types';
 
@@ -8,7 +9,7 @@
 
 	function openPlayerRecords(playerId: string) {
 		const path = resolve('/g/[guildId]/records', { guildId: data.guildId });
-		const query = new globalThis.URLSearchParams({ q: playerId });
+		const query = new SvelteURLSearchParams({ q: playerId });
 		if (data.snapshot?.season?.id) query.set('seasonId', data.snapshot.season.id);
 		void goto(`${path}?${query.toString()}`);
 	}

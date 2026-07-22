@@ -62,15 +62,15 @@ function snapshot() {
 					}
 				]
 			}
-	],
-	lineups: [],
-	games: [],
-	permissions: {
-		canManageLineup: true,
-		canEnterResults: false,
-		canUnlockLineup: false,
-		canRevertLastGame: false
-	}
+		],
+		lineups: [],
+		games: [],
+		permissions: {
+			canManageLineup: true,
+			canEnterResults: false,
+			canUnlockLineup: false,
+			canRevertLastGame: false
+		}
 	};
 }
 
@@ -111,12 +111,7 @@ function twentyPersonBracketWithPendingSemifinal() {
 			revision: 8,
 			href: `/g/${guildId}/auction/tournaments/${tournamentId}`
 		},
-		teams: [
-			team(leftTeamId, 1),
-			team(rightTeamId, 2),
-			team(teamThreeId, 3),
-			team(teamFourId, 4)
-		],
+		teams: [team(leftTeamId, 1), team(rightTeamId, 2), team(teamThreeId, 3), team(teamFourId, 4)],
 		bracket: {
 			locked: true,
 			slots: [
@@ -190,7 +185,7 @@ describe('auction match result page server load', () => {
 			url: new URL(`http://localhost:5173/g/${guildId}/auction/matches/${matchId}`)
 		} as never);
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher.mock.calls.map(([path]) => path)).toContain(
 			`/api/guilds/${guildId}/auction-matches/${matchId}`
 		);

@@ -18,7 +18,8 @@ export class GuildLeaderboardApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'GuildLeaderboardApiError';
@@ -57,9 +58,19 @@ export async function fetchGuildLeaderboard(
 function responseError(status: number, payload: unknown): GuildLeaderboardApiError {
 	const parsed = apiErrorEnvelopeSchema.safeParse(payload);
 	if (parsed.success) {
-		return new GuildLeaderboardApiError(parsed.data.error.message, status, parsed.data.error.code);
+		return new GuildLeaderboardApiError(
+			parsed.data.error.message,
+			status,
+			parsed.data.error.code,
+			parsed.data.error.requestId
+		);
 	}
 	return new GuildLeaderboardApiError(fallbackErrorMessage(status), status, `http_${status}`);
+}
+
+export function guildLeaderboardErrorText(cause: unknown): string {
+	if (!(cause instanceof GuildLeaderboardApiError)) return '리더보드 요청을 처리하지 못했습니다.';
+	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }
 
 function fallbackErrorMessage(status: number): string {

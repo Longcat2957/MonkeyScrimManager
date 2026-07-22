@@ -43,7 +43,7 @@ describe('server API client', () => {
 		await expect(apiGet(notFound, '/api/me', meDataSchema, { url: pageUrl })).rejects.toMatchObject(
 			{
 				status: 404,
-				body: { message: '요청한 길드를 찾을 수 없습니다.' }
+				body: { message: `요청한 길드를 찾을 수 없습니다. (요청 ID: ${requestId})` }
 			}
 		);
 
@@ -69,14 +69,19 @@ describe('server API client', () => {
 				apiGet(fetcher, '/api/me', meDataSchema, { url: pageUrl })
 			).rejects.toMatchObject({
 				status,
-				body: { message }
+				body: { message: `${message} (요청 ID: ${requestId})` }
 			});
 		}
 	});
 
 	it('exposes a typed API error to route-specific lifecycle handling', async () => {
 		const fetcher = vi.fn(async () => errorResponse(409, '선행 단계가 완료되지 않았습니다.'));
-		let observed: { status: number; code: string | null; message: string | null } | null = null;
+		let observed: {
+			status: number;
+			code: string | null;
+			message: string | null;
+			requestId: string | null;
+		} | null = null;
 
 		await expect(
 			apiGet(fetcher, '/api/me', meDataSchema, {
@@ -87,13 +92,14 @@ describe('server API client', () => {
 			})
 		).rejects.toMatchObject({
 			status: 409,
-			body: { message: '선행 단계가 완료되지 않았습니다.' }
+			body: { message: `선행 단계가 완료되지 않았습니다. (요청 ID: ${requestId})` }
 		});
 
 		expect(observed).toEqual({
 			status: 409,
 			code: 'test_error',
-			message: '선행 단계가 완료되지 않았습니다.'
+			message: '선행 단계가 완료되지 않았습니다.',
+			requestId
 		});
 	});
 

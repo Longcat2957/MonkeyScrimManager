@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Check, ChevronDown, RotateCcw, Save, Server } from 'lucide-svelte';
 	import { untrack } from 'svelte';
+	import { defaultGuildErrorText } from '$lib/api/defaultGuild';
 	import type { GuildAccessSummary } from '$lib/contracts/workflow';
 
 	interface Props {
@@ -16,26 +17,26 @@
 	let draftGuildId = $state(startingDraftGuildId);
 	let savedNotice = $state(false);
 	let submitting = $state(false);
-	let saveError = $state(false);
+	let saveError = $state('');
 
 	const dirty = $derived(Boolean(draftGuildId) && draftGuildId !== savedGuildId);
 
 	function reset() {
 		draftGuildId = savedGuildId;
 		savedNotice = false;
-		saveError = false;
+		saveError = '';
 	}
 
 	async function save() {
 		if (!dirty || submitting) return;
 		submitting = true;
-		saveError = false;
+		saveError = '';
 		try {
 			await onSave(draftGuildId);
 			savedGuildId = draftGuildId;
 			savedNotice = true;
-		} catch {
-			saveError = true;
+		} catch (cause) {
+			saveError = defaultGuildErrorText(cause);
 		} finally {
 			submitting = false;
 		}
@@ -62,7 +63,7 @@
 				</span>
 			{/if}
 			{#if saveError}
-				<span class="text-xs font-semibold text-red-300">저장 실패</span>
+				<span role="alert" class="max-w-sm text-xs font-semibold text-red-300">{saveError}</span>
 			{/if}
 			<button
 				type="button"

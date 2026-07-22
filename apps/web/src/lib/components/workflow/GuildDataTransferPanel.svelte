@@ -88,18 +88,18 @@
 		notice = '';
 		try {
 			const { archive, fileName, summary } = await exportGuildFullSnapshot(guildId);
-			const blob = new Blob([serializeGuildFullSnapshotArchive(archive)], {
+			const blob = new globalThis.Blob([serializeGuildFullSnapshotArchive(archive)], {
 				type: 'application/json;charset=utf-8'
 			});
-			const url = URL.createObjectURL(blob);
-			const anchor = document.createElement('a');
+			const url = globalThis.URL.createObjectURL(blob);
+			const anchor = globalThis.document.createElement('a');
 			anchor.href = url;
 			anchor.download = fileName;
 			anchor.style.display = 'none';
-			document.body.append(anchor);
+			globalThis.document.body.append(anchor);
 			anchor.click();
 			anchor.remove();
-			URL.revokeObjectURL(url);
+			globalThis.URL.revokeObjectURL(url);
 			notice = `전적과 MMR 이력을 포함한 ${formatCount(summary.totalRows)}개 행의 전체 백업을 준비했습니다.`;
 		} catch (cause) {
 			exportError = errorText(cause, '전체 데이터 백업을 만들지 못했습니다.');
@@ -121,8 +121,8 @@
 		applyIdempotencyKey = '';
 	}
 
-	async function loadArchiveFile(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
+	async function loadArchiveFile(event: globalThis.Event) {
+		const input = event.currentTarget as globalThis.HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
 
@@ -174,7 +174,7 @@
 		applyDialogOpen = true;
 	}
 
-	function preventCloseWhileApplying(event: Event) {
+	function preventCloseWhileApplying(event: globalThis.Event) {
 		if (applying) event.preventDefault();
 	}
 

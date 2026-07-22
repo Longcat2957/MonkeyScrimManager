@@ -9,6 +9,19 @@ export const DEFAULT_DATA_DRAGON_LOCALE = 'ko_KR';
 export const DATA_DRAGON_PROXY_ROOT = '/dd';
 export const STATIC_CHAMPION_FIXTURE_URL = '/fixtures/datadragon/champion-ko_KR.fixture.json';
 
+const championCatalogCacheTtlMs = 5 * 60 * 1_000;
+const championCatalogCache = new Map<
+	string,
+	{ expiresAt: number; promise: Promise<ChampionCatalog> }
+>();
+
+export interface ChampionCatalogLoadOptions {
+	version?: string;
+	locale?: string;
+	proxyRoot?: string;
+	fixtureUrl?: string;
+}
+
 const slugTokenPattern = /[a-z0-9]+/g;
 
 export function normalizeChampionSlug(value: string): string {
@@ -89,12 +102,7 @@ export async function loadLatestDataDragonVersion(
 
 export async function loadChampionCatalog(
 	fetcher: typeof fetch,
-	options: {
-		version?: string;
-		locale?: string;
-		proxyRoot?: string;
-		fixtureUrl?: string;
-	} = {}
+	options: ChampionCatalogLoadOptions = {}
 ): Promise<ChampionCatalog> {
 	const locale = options.locale ?? DEFAULT_DATA_DRAGON_LOCALE;
 	const proxyRoot = options.proxyRoot ?? DATA_DRAGON_PROXY_ROOT;
@@ -113,6 +121,36 @@ export async function loadChampionCatalog(
 
 		return fetchChampionCatalog(fetcher, options.fixtureUrl, locale);
 	}
+}
+
+function championCatalogCacheKey(options: ChampionCatalogLoadOptions): string {
+	return JSON.stringify([
+		options.version ?? 'latest',
+		options.locale ?? DEFAULT_DATA_DRAGON_LOCALE,
+		options.proxyRoot ?? DATA_DRAGON_PROXY_ROOT,
+		options.fixtureUrl ?? null
+	]);
+}
+
+export function loadCachedChampionCatalog(
+	fetcher: typeof fetch,
+	options: ChampionCatalogLoadOptions = {}
+): Promise<ChampionCatalog> {
+	const key = championCatalogCacheKey(options);
+	const now = Date.now();
+	const cached = championCatalogCache.get(key);
+
+	if (cached && cached.expiresAt > now) return cached.promise;
+	if (cached) championCatalogCache.delete(key);
+
+	const promise = loadChampionCatalog(fetcher, options);
+	championCatalogCache.set(key, { expiresAt: now + championCatalogCacheTtlMs, promise });
+	void promise.catch(() => {
+		if (championCatalogCache.get(key)?.promise === promise) {
+			championCatalogCache.delete(key);
+		}
+	});
+	return promise;
 }
 
 export function createChampionCatalog(

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
 	import {
 		Archive,
@@ -393,12 +392,7 @@
 			);
 			createIdempotencyKey = null;
 			createDialogOpen = false;
-			await goto(
-				resolve('/g/[guildId]/auction/recruitments/[id]', {
-					guildId: data.guildId,
-					id: created.recruitment.id
-				})
-			);
+			await goto(created.recruitment.href);
 		} catch (cause) {
 			createError = auctionRecruitmentErrorText(cause);
 		} finally {
@@ -411,7 +405,7 @@
 	}
 </script>
 
-{#snippet AuctionRow(item: AuctionWorkItem, actionLabel: string)}
+{#snippet AuctionRow(item: AuctionWorkItem)}
 	{@const Icon = iconByKind[item.iconKind]}
 	<div
 		class="grid gap-3 px-4 py-3 md:grid-cols-[minmax(220px,1fr)_100px_minmax(180px,1fr)_minmax(116px,15rem)] md:items-center"
@@ -441,7 +435,7 @@
 				href={item.href}
 				class="inline-flex h-9 items-center justify-center gap-1.5 border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
 			>
-				{item.kind === '보관' ? '기록 보기' : actionLabel}
+				{item.actionLabel}
 				<ArrowRight size={14} aria-hidden="true" />
 			</a>
 		</div>
@@ -490,7 +484,7 @@
 		</div>
 		<div class="divide-y divide-[var(--color-app-border-muted)]">
 			{#each activeAuctionWork as item (item.id)}
-				{@render AuctionRow(item, '작업 열기')}
+				{@render AuctionRow(item)}
 			{:else}
 				<div class="grid min-h-28 place-items-center px-4 py-8 text-sm text-slate-600">
 					진행 중인 경매 작업이 없습니다.
@@ -540,7 +534,7 @@
 		</div>
 		<div class="divide-y divide-[var(--color-app-border-muted)]">
 			{#each completedAuctionWork as item (item.id)}
-				{@render AuctionRow(item, '결과 보기')}
+				{@render AuctionRow(item)}
 			{:else}
 				<div class="grid min-h-28 place-items-center px-4 py-8 text-sm text-slate-600">
 					완료된 경매가 없습니다.

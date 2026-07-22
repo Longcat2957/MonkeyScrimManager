@@ -139,7 +139,10 @@
 		}
 	}
 
-	async function handleLock(matchId: string, command: AuctionMatchLineupLockCommand): Promise<void> {
+	async function handleLock(
+		matchId: string,
+		command: AuctionMatchLineupLockCommand
+	): Promise<void> {
 		const current = semifinalSnapshots.find((snapshot) => snapshot.match.id === matchId);
 		if (!current || busy || !mutationAllowed(current)) return;
 		if (command.expectedRevision !== current.match.revision) {
@@ -257,7 +260,8 @@
 
 	{#if busy}
 		<div class="flex items-center gap-2 text-xs font-medium text-slate-400">
-			<LoaderCircle size={15} class="animate-spin" aria-hidden="true" /> {mutationLabel()}
+			<LoaderCircle size={15} class="animate-spin" aria-hidden="true" />
+			{mutationLabel()}
 		</div>
 	{/if}
 
@@ -265,7 +269,7 @@
 		{#each semifinalSnapshots as semifinal (semifinal.match.id)}
 			<AuctionMatchStartingLineupInputBoard
 				snapshot={semifinal}
-				busy={busy}
+				{busy}
 				onAssign={(command) => handleAssign(semifinal.match.id, command)}
 				onLock={(command) => handleLock(semifinal.match.id, command)}
 				onUnlock={(command) => handleUnlock(semifinal.match.id, command)}
@@ -274,7 +278,9 @@
 	</div>
 
 	{#if allSemifinalLineupsLocked}
-		<section class="grid gap-2 border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] p-3">
+		<section
+			class="grid gap-2 border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)] p-3"
+		>
 			<p class="text-sm font-semibold text-slate-100">준결승 픽밴 입력</p>
 			<div class="grid gap-2 sm:grid-cols-2">
 				{#each semifinalSnapshots as semifinal (semifinal.match.id)}

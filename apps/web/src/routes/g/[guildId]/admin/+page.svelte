@@ -16,7 +16,7 @@
 		GuildAdminSettingsApiError,
 		updateGuildAdminSettings
 	} from '$lib/api/guildAdminSettings';
-	import { fetchGuildAuditLogs, GuildAuditLogsApiError } from '$lib/api/guildAuditLogs';
+	import { fetchGuildAuditLogs, guildAuditLogsErrorText } from '$lib/api/guildAuditLogs';
 	import type {
 		GuildAdminSettingsSnapshot,
 		GuildAuditEntry,
@@ -154,10 +154,7 @@
 				entries: existingEntries,
 				nextCursor: cursor,
 				loading: false,
-				error:
-					cause instanceof GuildAuditLogsApiError
-						? cause.message
-						: '감사 로그를 더 불러오지 못했습니다.'
+				error: guildAuditLogsErrorText(cause)
 			};
 		}
 	}

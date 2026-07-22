@@ -24,11 +24,15 @@
 	import type { Snippet } from 'svelte';
 	import QuickActionFab from '$lib/components/fab/QuickActionFab.svelte';
 	import AppFooter from '$lib/components/layout/AppFooter.svelte';
-	import { fetchSearchSuggestions, type SearchSuggestion } from '$lib/api/searchSuggestions';
+	import {
+		fetchSearchSuggestions,
+		searchSuggestionsErrorText,
+		type SearchSuggestion
+	} from '$lib/api/searchSuggestions';
 
 	interface NavItem {
 		href: string;
-		match: string;
+		matches: string[];
 		label: string;
 		icon: typeof Activity;
 	}
@@ -64,6 +68,7 @@
 	let searchInputFocused = $state(false);
 	let searchSuggestions = $state<SearchSuggestion[]>([]);
 	let searchSuggestionsLoading = $state(false);
+	let searchSuggestionsError = $state<string | null>(null);
 	let highlightedSuggestion = $state(-1);
 	let loggingOut = $state(false);
 	let logoutError = $state<string | null>(null);
@@ -73,6 +78,7 @@
 		searchOpen = false;
 		searchInputFocused = false;
 		searchSuggestions = [];
+		searchSuggestionsError = null;
 		highlightedSuggestion = -1;
 	});
 
@@ -92,12 +98,11 @@
 	const activeGuildBase = $derived(
 		activeGuildId ? resolve('/g/[guildId]', { guildId: activeGuildId }) : ''
 	);
+	const homeHref = $derived(activeGuildBase || resolve('/'));
 	const staticDocumentRouteIds = ['/docs', '/terms', '/privacy'];
 	const viewportWorkspaceRouteIds = ['/g/[guildId]/recruitments/[id]'];
 	const viewportShellRouteIds = [...viewportWorkspaceRouteIds, '/g/[guildId]/leaderboard'];
-	const usesViewportWorkspace = $derived(
-		viewportWorkspaceRouteIds.includes(page.route.id ?? '')
-	);
+	const usesViewportWorkspace = $derived(viewportWorkspaceRouteIds.includes(page.route.id ?? ''));
 	const usesViewportShell = $derived(
 		viewportShellRouteIds.includes(page.route.id ?? '') ||
 			(page.route.id ?? '').startsWith('/g/[guildId]/admin')
@@ -110,19 +115,19 @@
 			? [
 					{
 						href: resolve('/g/[guildId]/series', { guildId: activeGuildId }),
-						match: `${activeGuildBase}/series`,
+						matches: [`${activeGuildBase}/series`, `${activeGuildBase}/recruitments`],
 						label: '내전',
 						icon: Swords
 					},
 					{
 						href: resolve('/g/[guildId]/auction', { guildId: activeGuildId }),
-						match: `${activeGuildBase}/auction`,
+						matches: [`${activeGuildBase}/auction`],
 						label: '경매',
 						icon: Trophy
 					},
 					{
 						href: resolve('/g/[guildId]/leaderboard', { guildId: activeGuildId }),
-						match: `${activeGuildBase}/leaderboard`,
+						matches: [`${activeGuildBase}/leaderboard`],
 						label: '랭킹',
 						icon: Activity
 					},
@@ -130,7 +135,7 @@
 						? [
 								{
 									href: resolve('/g/[guildId]/admin', { guildId: activeGuildId }),
-									match: `${activeGuildBase}/admin`,
+									matches: [`${activeGuildBase}/admin`],
 									label: '관리',
 									icon: ShieldCheck
 								}
@@ -142,7 +147,7 @@
 	const showSearchSuggestions = $derived(
 		searchInputFocused &&
 			searchQuery.trim().length >= 2 &&
-			(searchSuggestionsLoading || searchSuggestions.length > 0)
+			(searchSuggestionsLoading || searchSuggestions.length > 0 || Boolean(searchSuggestionsError))
 	);
 
 	$effect(() => {
@@ -150,6 +155,7 @@
 		const mode = searchMode;
 		const guildId = activeGuildId;
 		searchSuggestions = [];
+		searchSuggestionsError = null;
 		highlightedSuggestion = -1;
 
 		if (!searchOpen || query.length < 2 || (mode === 'custom' && !guildId)) {
@@ -170,6 +176,7 @@
 			} catch (error) {
 				if (!(error instanceof globalThis.DOMException && error.name === 'AbortError')) {
 					searchSuggestions = [];
+					searchSuggestionsError = searchSuggestionsErrorText(error);
 				}
 			} finally {
 				if (!controller.signal.aborted) searchSuggestionsLoading = false;
@@ -239,7 +246,9 @@
 		return value ? decodeURIComponent(value.slice(prefix.length)) : null;
 	}
 
-	async function logoutErrorMessage(response: Response): Promise<string> {
+	async function logoutErrorMessage(
+		response: Awaited<ReturnType<typeof globalThis.fetch>>
+	): Promise<string> {
 		const fallback =
 			response.status === 403
 				? '로그아웃 요청을 확인할 수 없습니다. 새로고침 후 다시 시도해 주세요.'
@@ -295,13 +304,9 @@
 		}
 	}
 
-	function isActive(match: string): boolean {
+	function isActive(matches: string[]): boolean {
 		const pathname = page.url.pathname;
-
-		if (match === '/') {
-			return pathname === resolve('/');
-		}
-		return pathname.startsWith(match);
+		return matches.some((match) => pathname === match || pathname.startsWith(`${match}/`));
 	}
 </script>
 
@@ -315,8 +320,8 @@
 	>
 		<div class="flex min-h-14 items-center gap-3 px-4 lg:px-5">
 			<a
-				href={resolve('/')}
-				aria-label="홈으로 이동"
+				href={homeHref}
+				aria-label={activeGuildId ? '현재 길드 대시보드로 이동' : '홈으로 이동'}
 				class="flex min-w-0 shrink-0 items-center gap-3"
 			>
 				<img src="/brand/logo.png?v=2" alt="" class="size-11 shrink-0 object-contain" />
@@ -328,12 +333,14 @@
 
 			<nav class="flex min-w-0 flex-1 gap-1 overflow-x-auto px-1 md:justify-center">
 				{#each navItems as item (item.href)}
+					{@const active = isActive(item.matches)}
 					<a
 						href={item.href}
 						aria-label={item.label}
+						aria-current={active ? 'page' : undefined}
 						title={item.label}
 						class={`flex h-10 shrink-0 items-center justify-center border px-3 text-xs font-semibold md:min-w-16 md:px-4 ${
-							isActive(item.match)
+							active
 								? 'rounded-md border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
 								: 'rounded-sm border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-100'
 						}`}
@@ -563,7 +570,7 @@
 					{#if showSearchSuggestions}
 						<div
 							id={searchSuggestionsId}
-							role="listbox"
+							role={searchSuggestionsError ? undefined : 'listbox'}
 							aria-label="검색어 자동완성"
 							class="absolute top-[calc(100%+0.625rem)] right-0 left-0 z-30 overflow-hidden rounded-md border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-1 shadow-[0_18px_42px_rgb(0_0_0_/_0.48)]"
 						>
@@ -571,6 +578,10 @@
 								<div class="flex h-11 items-center gap-2 px-3 text-xs text-slate-500">
 									<LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
 									검색 중
+								</div>
+							{:else if searchSuggestionsError}
+								<div role="alert" class="px-3 py-3 text-xs leading-5 text-rose-200">
+									{searchSuggestionsError}
 								</div>
 							{:else}
 								{#each searchSuggestions as suggestion, index (`${suggestion.kind}-${suggestion.value}`)}

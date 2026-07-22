@@ -10,6 +10,7 @@ export interface ApiGetError {
 	status: number;
 	code: string | null;
 	message: string | null;
+	requestId: string | null;
 }
 
 interface ApiGetContext {
@@ -62,12 +63,13 @@ function parseApiGetError(status: number, payload: unknown): ApiGetError {
 	return {
 		status,
 		code: parsed.success ? parsed.data.error.code : null,
-		message: parsed.success ? parsed.data.error.message : null
+		message: parsed.success ? parsed.data.error.message : null,
+		requestId: parsed.success ? parsed.data.error.requestId : null
 	};
 }
 
 function handleErrorResponse(apiError: ApiGetError, url: URL): never {
-	const { status, message: backendMessage } = apiError;
+	const { status, message: backendMessage, requestId } = apiError;
 
 	if (status === 401) {
 		const next = `${url.pathname}${url.search}`;
@@ -75,12 +77,16 @@ function handleErrorResponse(apiError: ApiGetError, url: URL): never {
 		redirect(303, `${login}?${new URLSearchParams({ next })}`);
 	}
 	if (status === 400 || status === 403 || status === 404 || status === 409 || status === 503) {
-		error(status, backendMessage ?? fallbackMessage(status));
+		error(status, withRequestId(backendMessage ?? fallbackMessage(status), requestId));
 	}
 	if (status >= 500) {
-		error(500, 'API 요청을 처리하지 못했습니다.');
+		error(500, withRequestId('API 요청을 처리하지 못했습니다.', requestId));
 	}
-	error(502, '프론트엔드와 API 요청 계약이 일치하지 않습니다.');
+	error(502, withRequestId('프론트엔드와 API 요청 계약이 일치하지 않습니다.', requestId));
+}
+
+function withRequestId(message: string, requestId: string | null): string {
+	return requestId ? `${message} (요청 ID: ${requestId})` : message;
 }
 
 function fallbackMessage(status: number): string {

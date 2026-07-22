@@ -249,7 +249,9 @@ describe('my page server load', () => {
 			} as never)
 		).rejects.toMatchObject({
 			status: 503,
-			body: { message: 'Riot 서비스를 일시적으로 사용할 수 없습니다.' }
+			body: {
+				message: `Riot 서비스를 일시적으로 사용할 수 없습니다. (요청 ID: ${requestId})`
+			}
 		});
 		expect(fetcher).toHaveBeenCalledTimes(3);
 	});

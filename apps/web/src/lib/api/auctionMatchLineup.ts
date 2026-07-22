@@ -248,8 +248,7 @@ export function isAuctionMatchLineupRevisionConflict(
 	cause: unknown
 ): cause is AuctionMatchLineupApiError {
 	return (
-		cause instanceof AuctionMatchLineupApiError &&
-		cause.code === 'auction_match_revision_conflict'
+		cause instanceof AuctionMatchLineupApiError && cause.code === 'auction_match_revision_conflict'
 	);
 }
 

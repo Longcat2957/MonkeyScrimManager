@@ -136,7 +136,9 @@
 			</Dialog.Description>
 
 			<div class="mt-4 grid gap-3">
-				<div class="border border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-3 py-2">
+				<div
+					class="border border-[var(--color-app-border)] bg-[var(--color-app-bg-soft)] px-3 py-2"
+				>
 					{#if previewing}
 						<div class="flex items-center gap-2 text-xs font-medium text-slate-400">
 							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
@@ -145,7 +147,8 @@
 					{:else if cancelPreview}
 						<div class="grid gap-1 text-xs">
 							<strong class="text-slate-100"
-								>A-{cancelPreview.tournament.displayNumber} · {cancelPreview.tournament.title}</strong
+								>A-{cancelPreview.tournament.displayNumber} · {cancelPreview.tournament
+									.title}</strong
 							>
 							<span class="text-slate-500"
 								>현재 상태 {statusLabel(cancelPreview.tournament.status)} · 버전

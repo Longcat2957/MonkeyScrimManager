@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchSearchSuggestions } from './searchSuggestions';
+import {
+	fetchSearchSuggestions,
+	searchSuggestionsErrorText,
+	SearchSuggestionsApiError
+} from './searchSuggestions';
 
 const requestId = '01900000-0000-7000-8000-000000000001';
 
@@ -55,6 +59,38 @@ describe('navbar search suggestions API client', () => {
 		const malformed = vi.fn(async () => success([{ kind: 'riotAccount', value: 'Longcat#KR1' }]));
 		await expect(
 			fetchSearchSuggestions(malformed, { mode: 'riot', query: 'Long', guildId: '' })
-		).rejects.toThrow('invalid_search_suggestions');
+		).rejects.toMatchObject({ code: 'invalid_response' });
+	});
+
+	it('preserves the public error reason and request ID', async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json(
+				{
+					error: {
+						code: 'search_rate_limited',
+						message: '검색 요청이 너무 많습니다.',
+						requestId
+					}
+				},
+				{ status: 429 }
+			)
+		);
+
+		const promise = fetchSearchSuggestions(fetcher, {
+			mode: 'riot',
+			query: 'Long',
+			guildId: ''
+		});
+		await expect(promise).rejects.toMatchObject({
+			name: 'SearchSuggestionsApiError',
+			code: 'search_rate_limited',
+			requestId
+		});
+
+		const cause = await promise.catch((error: unknown) => error);
+		expect(cause).toBeInstanceOf(SearchSuggestionsApiError);
+		expect(searchSuggestionsErrorText(cause)).toBe(
+			`검색 요청이 너무 많습니다. (요청 ID: ${requestId})`
+		);
 	});
 });

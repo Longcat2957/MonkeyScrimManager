@@ -148,7 +148,8 @@
 						href={item.href}
 						class="inline-flex h-9 items-center justify-center gap-1.5 border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
 					>
-						작업 열기 <ArrowRight size={14} aria-hidden="true" />
+						{item.actionLabel}
+						<ArrowRight size={14} aria-hidden="true" />
 					</a>
 				</div>
 			{:else}
@@ -292,7 +293,7 @@
 						role="radiogroup"
 						aria-label="시리즈 형식"
 					>
-						{#each seriesBestOfValues as bestOf}
+						{#each seriesBestOfValues as bestOf (bestOf)}
 							<button
 								type="button"
 								role="radio"
@@ -321,7 +322,8 @@
 				>
 					<span class="grid gap-0.5">
 						<strong class="text-xs font-semibold text-slate-200">하드 피어리스</strong>
-						<span class="text-[11px] text-slate-500">이전 세트의 픽은 다시 선택할 수 없습니다.</span>
+						<span class="text-[11px] text-slate-500">이전 세트의 픽은 다시 선택할 수 없습니다.</span
+						>
 					</span>
 					<span
 						class={`relative h-5 w-9 shrink-0 border transition-colors ${

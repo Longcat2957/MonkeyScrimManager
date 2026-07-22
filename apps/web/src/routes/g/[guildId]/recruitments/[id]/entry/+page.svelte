@@ -43,12 +43,7 @@
 
 	type EntryView = 'draft' | 'preview';
 	type EntryMutation =
-		| 'move'
-		| 'reset'
-		| 'createSeries'
-		| 'createAuctionRecruitment'
-		| 'reopen'
-		| 'cancel';
+		'move' | 'reset' | 'createSeries' | 'createAuctionRecruitment' | 'reopen' | 'cancel';
 	type SnapshotRefreshSource = 'manual' | 'realtime';
 	const defaultRealtimeOfflineMessage = '변경 알림을 받을 수 없습니다.';
 	type EntryRoute = {
@@ -810,8 +805,8 @@
 			</header>
 			<div class="grid gap-3 p-4">
 				<Dialog.Description class="text-xs leading-5 text-slate-400">
-					모집 #{snapshot?.recruitment.displayNumber}을 다시 열면 엔트리 편성 단계를 종료하고
-					모집 상태로 돌아갑니다. 현재 참가자와 엔트리 배치는 유지됩니다.
+					모집 #{snapshot?.recruitment.displayNumber}을 다시 열면 엔트리 편성 단계를 종료하고 모집
+					상태로 돌아갑니다. 현재 참가자와 엔트리 배치는 유지됩니다.
 				</Dialog.Description>
 				{#if reopenError}
 					<p

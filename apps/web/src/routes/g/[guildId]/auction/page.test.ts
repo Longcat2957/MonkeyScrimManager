@@ -1,12 +1,19 @@
+import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import Page from './+page.svelte';
 
+const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 const guildId = '1525851181157580861';
 const tournamentId = '01900000-0000-7000-8000-000000000601';
 const matchId = '01900000-0000-7000-8000-000000000701';
 
 describe('auction page', () => {
+	it('opens the canonical recruitment link returned by the create response', () => {
+		expect(source).toContain('await goto(created.recruitment.href)');
+		expect(source).not.toContain('id: created.recruitment.id');
+	});
+
 	it('opens the concise tournament bracket before a match workspace for in-game tournaments', () => {
 		const { body } = render(Page, {
 			props: {
@@ -49,11 +56,10 @@ describe('auction page', () => {
 			} as never
 		});
 
-		expect(body).toContain('작업 열기');
+		expect(body).toContain('경기 선택');
+		expect(body).not.toContain('작업 열기');
 		expect(body).not.toContain('토너먼트 현황');
-		expect(body).toContain(
-		`href="/g/${guildId}/auction/tournaments/${tournamentId}/result"`
-	);
+		expect(body).toContain(`href="/g/${guildId}/auction/tournaments/${tournamentId}/result"`);
 		expect(body).not.toContain(`href="/g/${guildId}/auction/matches/${matchId}"`);
 	});
 });

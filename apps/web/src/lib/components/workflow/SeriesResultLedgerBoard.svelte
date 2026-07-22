@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { Swords, Trophy } from 'lucide-svelte';
+	import { Trophy } from 'lucide-svelte';
 	import ScrimPickBanResultSetSummaryCard from '$lib/components/workflow/ScrimPickBanResultSetSummaryCard.svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
 	import type { SeriesResultGame, SeriesResultSnapshot } from '$lib/contracts/seriesResult';
 	import type { ChampionCatalog } from '$lib/datadragon';
-	import { formatSeriesRules } from '$lib/workflow/seriesRules';
 
 	type Side = 'BLUE' | 'RED';
 	type TeamId = 'TEAM_1' | 'TEAM_2';
@@ -93,16 +92,6 @@
 		return displayTeam(snapshot, teamIdForSide(game, side), side);
 	}
 
-	function completionLabel(endedAt: string | null): string {
-		return endedAt ? `${endedAt.slice(0, 10)} 종료` : '종료';
-	}
-
-	function resultStatusLabel(terminalReason: string | null): string {
-		if (terminalReason === 'EARLY_WIN') return '조기 종료 · 승리 처리';
-		if (terminalReason === 'EARLY_DRAW') return '조기 종료 · 무승부';
-		return '완료';
-	}
-
 	function gameLabel(game: SeriesResultGame): string {
 		return `${game.setNumber}세트`;
 	}
@@ -129,27 +118,7 @@
 	}
 </script>
 
-<section
-	class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]"
->
-	<header
-		class="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-app-border)] px-4 py-2"
-	>
-		<div class="flex min-w-0 items-center gap-3">
-			<Swords size={20} class="text-cyan-300" aria-hidden="true" />
-			<div class="min-w-0">
-				<h2 class="truncate text-sm font-semibold text-slate-50">{snapshot.series.title}</h2>
-				<p class="text-xs text-slate-500">
-					{formatSeriesRules(snapshot.series.bestOf, snapshot.series.hardFearless)} · #{snapshot
-						.series.displayNumber} · {resultStatusLabel(snapshot.series.terminalReason)}
-				</p>
-			</div>
-		</div>
-		<time class="text-xs text-slate-500" datetime={snapshot.series.endedAt ?? undefined}
-			>{completionLabel(snapshot.series.endedAt)}</time
-		>
-	</header>
-
+<div class="overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)]">
 	<div class="grid border-b border-[var(--color-app-border)] lg:grid-cols-[minmax(0,1fr)_460px]">
 		<div
 			class="flex min-h-24 items-center justify-center gap-5 px-4 py-3 lg:border-r lg:border-[var(--color-app-border)]"
@@ -219,7 +188,7 @@
 			>
 				<div class="flex items-center gap-2">
 					<Trophy size={15} class="text-amber-300" aria-hidden="true" />
-					<h3 class="text-xs font-semibold text-slate-200">MMR 정산</h3>
+					<h2 class="text-xs font-semibold text-slate-200">MMR 정산</h2>
 				</div>
 				<div class="flex gap-3 text-xs font-semibold">
 					<span class="text-cyan-300">{teamOne.name} {signed(teamMmr('TEAM_1'))}</span>
@@ -253,7 +222,7 @@
 			<p class="text-sm font-semibold text-slate-500">확정된 세트 결과가 없습니다.</p>
 		</section>
 	{/if}
-</section>
+</div>
 
 <style>
 	.negative {

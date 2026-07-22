@@ -206,8 +206,8 @@
 		return selectedLaneByMember.get(member.id) ?? member.mainLane ?? '';
 	}
 
-	function updateSelectedLane(memberId: string, event: Event) {
-		const value = (event.currentTarget as HTMLSelectElement).value;
+	function updateSelectedLane(memberId: string, event: globalThis.Event) {
+		const value = (event.currentTarget as globalThis.HTMLSelectElement).value;
 		if (laneOptions.includes(value as ChampionPreferenceLane)) {
 			selectedLaneByMember.set(memberId, value as ChampionPreferenceLane);
 			return;

@@ -1,11 +1,13 @@
 import { resolve } from '$app/paths';
 import { redirect } from '@sveltejs/kit';
-import { fetchGuildRecords, GuildRecordsApiError } from '$lib/api/guildRecords';
+import {
+	fetchGuildRecords,
+	guildRecordsErrorText,
+	GuildRecordsApiError
+} from '$lib/api/guildRecords';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
-	await parent();
-
+export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	const query = url.searchParams.get('q')?.trim() ?? '';
 	const seasonId = url.searchParams.get('seasonId')?.trim() || null;
 	if (!query) {
@@ -35,7 +37,7 @@ export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
 			query,
 			seasonId,
 			snapshot: null,
-			loadError: cause.message
+			loadError: guildRecordsErrorText(cause)
 		};
 	}
 };

@@ -96,8 +96,7 @@
 		bracketSnapshot: AuctionTournamentBracketSnapshot
 	): boolean {
 		const semifinalMatches = bracketSnapshot.bracket.matches.filter(
-			(candidate) =>
-				candidate.matchKey === 'SEMIFINAL_A' || candidate.matchKey === 'SEMIFINAL_B'
+			(candidate) => candidate.matchKey === 'SEMIFINAL_A' || candidate.matchKey === 'SEMIFINAL_B'
 		);
 		return (
 			bracketSnapshot.tournament.format === 'TWENTY_PERSON' &&
@@ -206,14 +205,16 @@
 		if (!canRevertDraft) return;
 
 		const command = { kind: 'REVERT_LAST', expectedRevision: tournament.revision } as const;
-		const idempotencyKey = idempotencyKeys.keyFor(
-			'auction-tournament-revert-last-draft',
-			command
-		);
+		const idempotencyKey = idempotencyKeys.keyFor('auction-tournament-revert-last-draft', command);
 		revertingDraft = true;
 		draftRecoveryError = '';
 		try {
-			await executeAuctionTournamentDraftCommand(data.guildId, tournament.id, command, idempotencyKey);
+			await executeAuctionTournamentDraftCommand(
+				data.guildId,
+				tournament.id,
+				command,
+				idempotencyKey
+			);
 			idempotencyKeys.complete('auction-tournament-revert-last-draft');
 			draftRecoveryDialogOpen = false;
 			await goto(
@@ -322,8 +323,8 @@
 				</Dialog.Close>
 			</div>
 			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
-				현재 대진과 생성된 경기는 취소 이력으로 보존하고, 팀 배치 단계로 되돌립니다. 픽밴
-				입력이나 결과가 하나라도 있으면 이 작업은 진행되지 않습니다.
+				현재 대진과 생성된 경기는 취소 이력으로 보존하고, 팀 배치 단계로 되돌립니다. 픽밴 입력이나
+				결과가 하나라도 있으면 이 작업은 진행되지 않습니다.
 			</Dialog.Description>
 			{#if recoveryError}
 				<p
@@ -364,7 +365,8 @@
 			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-4 shadow-2xl shadow-black/50 outline-none"
 		>
 			<div class="flex items-center justify-between gap-3">
-				<Dialog.Title class="text-sm font-semibold text-slate-50">입찰 단계로 되돌리기</Dialog.Title>
+				<Dialog.Title class="text-sm font-semibold text-slate-50">입찰 단계로 되돌리기</Dialog.Title
+				>
 				<Dialog.Close
 					disabled={isMutating}
 					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
@@ -374,8 +376,8 @@
 				</Dialog.Close>
 			</div>
 			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
-				마지막 입찰 작업과 해당 선수 배치·포인트를 함께 되돌리고, 토너먼트를 입찰 단계로
-				복구합니다. 아직 확정되지 않은 대진 슬롯은 비워집니다.
+				마지막 입찰 작업과 해당 선수 배치·포인트를 함께 되돌리고, 토너먼트를 입찰 단계로 복구합니다.
+				아직 확정되지 않은 대진 슬롯은 비워집니다.
 			</Dialog.Description>
 			{#if draftRecoveryError}
 				<p

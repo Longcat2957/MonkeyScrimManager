@@ -12,7 +12,8 @@ export class ChampionPreferencesApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'ChampionPreferencesApiError';
@@ -72,7 +73,8 @@ async function requestPreferences(
 			throw new ChampionPreferencesApiError(
 				parsedError.data.error.message,
 				response.status,
-				parsedError.data.error.code
+				parsedError.data.error.code,
+				parsedError.data.error.requestId
 			);
 		}
 		throw new ChampionPreferencesApiError(
@@ -91,6 +93,13 @@ async function requestPreferences(
 		);
 	}
 	return parsed.data.data.preferences;
+}
+
+export function championPreferencesErrorText(cause: unknown): string {
+	if (!(cause instanceof ChampionPreferencesApiError)) {
+		return '선호 챔피언 요청을 처리하지 못했습니다.';
+	}
+	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }
 
 function fallbackErrorMessage(status: number): string {

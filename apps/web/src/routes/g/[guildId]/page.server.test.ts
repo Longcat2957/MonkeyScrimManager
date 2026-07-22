@@ -39,7 +39,7 @@ describe('guild operations page server load', () => {
 		} as never);
 		if (!result) throw new Error('operations page load returned no data');
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher).toHaveBeenCalledWith(`/api/guilds/${guildId}/operations`, {
 			headers: { accept: 'application/json' }
 		});

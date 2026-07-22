@@ -42,7 +42,8 @@ export class GuildRecordsApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'GuildRecordsApiError';
@@ -98,9 +99,19 @@ export async function fetchGuildRecords(
 function responseError(status: number, payload: unknown): GuildRecordsApiError {
 	const parsed = apiErrorEnvelopeSchema.safeParse(payload);
 	if (parsed.success) {
-		return new GuildRecordsApiError(parsed.data.error.message, status, parsed.data.error.code);
+		return new GuildRecordsApiError(
+			parsed.data.error.message,
+			status,
+			parsed.data.error.code,
+			parsed.data.error.requestId
+		);
 	}
 	return new GuildRecordsApiError(fallbackErrorMessage(status), status, `http_${status}`);
+}
+
+export function guildRecordsErrorText(cause: unknown): string {
+	if (!(cause instanceof GuildRecordsApiError)) return '길드 전적 요청을 처리하지 못했습니다.';
+	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }
 
 function fallbackErrorMessage(status: number): string {

@@ -28,7 +28,8 @@ export class RiotRecordsApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'RiotRecordsApiError';
@@ -171,9 +172,19 @@ async function requestRiotRecords(
 function apiResponseError(status: number, payload: unknown): RiotRecordsApiError {
 	const parsed = apiErrorEnvelopeSchema.safeParse(payload);
 	if (parsed.success) {
-		return new RiotRecordsApiError(parsed.data.error.message, status, parsed.data.error.code);
+		return new RiotRecordsApiError(
+			parsed.data.error.message,
+			status,
+			parsed.data.error.code,
+			parsed.data.error.requestId
+		);
 	}
 	return new RiotRecordsApiError(fallbackErrorMessage(status), status, `http_${status}`);
+}
+
+export function riotRecordsErrorText(cause: unknown): string {
+	if (!(cause instanceof RiotRecordsApiError)) return 'Riot 전적 요청을 처리하지 못했습니다.';
+	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }
 
 function csrfHeaders(): Record<string, string> {

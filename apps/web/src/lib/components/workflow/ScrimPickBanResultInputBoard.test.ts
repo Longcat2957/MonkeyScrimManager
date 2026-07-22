@@ -49,7 +49,9 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 		expect(source).toContain('const sideDone = $derived(sideSelected);');
 		expect(source).toContain('if (game.sideSelected !== undefined) return game.sideSelected;');
 		expect(source).toContain('sideSelected && sidePreset === preset');
-		expect(source).toContain("{#if (!sideSelected && preset === 'DEFAULT') || (sideSelected && sidePreset === preset)}");
+		expect(source).toContain(
+			"{#if (!sideSelected && preset === 'DEFAULT') || (sideSelected && sidePreset === preset)}"
+		);
 		expect(source).toContain("sideSelected ? sidePanelClass(side) : 'bg-slate-950/20'");
 		expect(source).toContain("sideSelected ? sideClass(side) : 'invisible'");
 		expect(source).toContain('h-6 w-12 shrink-0');
@@ -75,7 +77,9 @@ describe('ScrimPickBanResultInputBoard server draft mode', () => {
 		);
 		expect(source).toContain('if (!sideSelected || sidePreset !== preset)');
 		expect(source).toContain('{#if canUseBulkInput}');
-		expect(source).toContain('if (!canUseBulkInput || !canEditDraft || items.length === 0) return;');
+		expect(source).toContain(
+			'if (!canUseBulkInput || !canEditDraft || items.length === 0) return;'
+		);
 		expect(source).toContain('bind:open={bulkInputOpen}');
 		expect(source).toContain("await onDraftOperation({ type: 'APPLY_BULK', items });");
 		expect(source).toContain('nextPicks[item.playerId] = item.championId;');

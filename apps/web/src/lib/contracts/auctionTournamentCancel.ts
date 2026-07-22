@@ -35,10 +35,6 @@ export const auctionTournamentCancelResultSchema = z
 	})
 	.strict();
 
-export type AuctionTournamentCancelPreview = z.infer<
-	typeof auctionTournamentCancelPreviewSchema
->;
-export type AuctionTournamentCancelCommand = z.infer<
-	typeof auctionTournamentCancelCommandSchema
->;
+export type AuctionTournamentCancelPreview = z.infer<typeof auctionTournamentCancelPreviewSchema>;
+export type AuctionTournamentCancelCommand = z.infer<typeof auctionTournamentCancelCommandSchema>;
 export type AuctionTournamentCancelResult = z.infer<typeof auctionTournamentCancelResultSchema>;

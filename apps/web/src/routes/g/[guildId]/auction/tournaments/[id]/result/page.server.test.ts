@@ -77,7 +77,7 @@ describe('auction tournament result page server load', () => {
 			url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/result`)
 		} as never);
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher.mock.calls[0]?.[0]).toBe(
 			`/api/guilds/${guildId}/auction-tournaments/${tournamentId}/result`
 		);

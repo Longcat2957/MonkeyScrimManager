@@ -42,7 +42,7 @@ describe('recruitment stage page server load', () => {
 			url: new URL(`http://localhost:5173/g/${guildId}/recruitments/${recruitmentId}`)
 		} as never);
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher).toHaveBeenCalledOnce();
 		expect(String(fetcher.mock.calls[0]?.[0])).toBe(
 			`/api/guilds/${guildId}/recruitments/${recruitmentId}`

@@ -18,7 +18,8 @@ export class PrivacySettingsApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'PrivacySettingsApiError';
@@ -71,7 +72,8 @@ async function requestPrivacySettings(
 			throw new PrivacySettingsApiError(
 				parsedError.data.error.message,
 				response.status,
-				parsedError.data.error.code
+				parsedError.data.error.code,
+				parsedError.data.error.requestId
 			);
 		}
 		throw new PrivacySettingsApiError(
@@ -90,6 +92,13 @@ async function requestPrivacySettings(
 		);
 	}
 	return parsed.data.data.settings;
+}
+
+export function privacySettingsErrorText(cause: unknown): string {
+	if (!(cause instanceof PrivacySettingsApiError)) {
+		return '개인정보 설정 요청을 처리하지 못했습니다.';
+	}
+	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }
 
 function fallbackErrorMessage(status: number): string {

@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { ArrowDown, ArrowUp, Check, Plus, RotateCcw, Save, Search, X } from 'lucide-svelte';
-	import { updateChampionPreferences } from '$lib/api/championPreferences';
+	import {
+		championPreferencesErrorText,
+		updateChampionPreferences
+	} from '$lib/api/championPreferences';
 	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
 	import type { ChampionPreferenceLane, ChampionPreferences } from '$lib/contracts/workflow';
@@ -111,8 +114,7 @@
 			draftPreferences = clonePreferences(preferences);
 			savedNotice = true;
 		} catch (saveError) {
-			error =
-				saveError instanceof Error ? saveError.message : '선호 챔피언 저장 중 오류가 발생했습니다.';
+			error = championPreferencesErrorText(saveError);
 		} finally {
 			saving = false;
 		}

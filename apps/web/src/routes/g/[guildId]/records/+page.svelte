@@ -3,7 +3,11 @@
 	import { resolve } from '$app/paths';
 	import { navigating } from '$app/state';
 	import { ChevronDown, Search, TriangleAlert, UserRound } from 'lucide-svelte';
-	import { fetchGuildRecords, GuildRecordsApiError } from '$lib/api/guildRecords';
+	import {
+		fetchGuildRecords,
+		guildRecordsErrorText,
+		GuildRecordsApiError
+	} from '$lib/api/guildRecords';
 	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
 	import type {
@@ -278,7 +282,7 @@
 			) {
 				return;
 			}
-			loadMoreError = cause instanceof Error ? cause.message : '전적을 더 불러오지 못했습니다.';
+			loadMoreError = guildRecordsErrorText(cause);
 		} finally {
 			loadingMore = false;
 		}

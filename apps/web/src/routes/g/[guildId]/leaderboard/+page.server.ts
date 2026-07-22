@@ -1,11 +1,13 @@
 import { resolve } from '$app/paths';
 import { redirect } from '@sveltejs/kit';
-import { fetchGuildLeaderboard, GuildLeaderboardApiError } from '$lib/api/guildLeaderboard';
+import {
+	fetchGuildLeaderboard,
+	guildLeaderboardErrorText,
+	GuildLeaderboardApiError
+} from '$lib/api/guildLeaderboard';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
-	await parent();
-
+export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	try {
 		const snapshot = await fetchGuildLeaderboard(fetch, params.guildId);
 		return { snapshot, loadError: null };
@@ -16,6 +18,6 @@ export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
 			const login = resolve('/oauth/[...path]', { path: 'discord/start' });
 			redirect(303, `${login}?${new URLSearchParams({ next })}`);
 		}
-		return { snapshot: null, loadError: cause.message };
+		return { snapshot: null, loadError: guildLeaderboardErrorText(cause) };
 	}
 };

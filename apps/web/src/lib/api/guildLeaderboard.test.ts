@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GuildLeaderboardSnapshot } from '$lib/contracts/workflow';
-import { fetchGuildLeaderboard } from './guildLeaderboard';
+import { fetchGuildLeaderboard, guildLeaderboardErrorText } from './guildLeaderboard';
 
 const guildId = '1525851181157580861';
 const requestId = '01900000-0000-7000-8000-000000000001';
@@ -53,11 +53,16 @@ describe('guild leaderboard API client', () => {
 				{ status: 404 }
 			)
 		);
-		await expect(fetchGuildLeaderboard(forbidden, guildId)).rejects.toMatchObject({
+		const forbiddenError = await fetchGuildLeaderboard(forbidden, guildId).catch((cause) => cause);
+		expect(forbiddenError).toMatchObject({
 			status: 404,
 			code: 'guild_member_not_found',
-			message: '길드 멤버를 찾을 수 없습니다.'
+			message: '길드 멤버를 찾을 수 없습니다.',
+			requestId
 		});
+		expect(guildLeaderboardErrorText(forbiddenError)).toBe(
+			`길드 멤버를 찾을 수 없습니다. (요청 ID: ${requestId})`
+		);
 
 		const malformed = vi.fn(async () => envelope({ ...snapshot, internalGuildId: guildId }));
 		await expect(fetchGuildLeaderboard(malformed, guildId)).rejects.toMatchObject({

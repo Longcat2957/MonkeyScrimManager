@@ -81,14 +81,14 @@ describe('/records server load', () => {
 		[503, 'riot_unavailable', 'Riot 전적 서비스를 일시적으로 사용할 수 없습니다.']
 	])('returns an error state for API status %s', async (status, code, expectedMessage) => {
 		const fetcher = vi.fn(async () =>
-			Response.json({ error: { code, message: 'backend detail', requestId } }, { status })
+			Response.json({ error: { code, message: expectedMessage, requestId } }, { status })
 		);
 		const result = await run('http://localhost:5173/records?q=Longcat%23KR1', fetcher);
 
 		expect(result).toMatchObject({
 			lookup: { gameName: 'Longcat', tagLine: 'KR1', platform: 'KR' },
 			records: null,
-			loadError: expectedMessage
+			loadError: `${expectedMessage} (요청 ID: ${requestId})`
 		});
 	});
 });

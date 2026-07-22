@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
-	import { LoaderCircle, RotateCcw, X } from 'lucide-svelte';
+	import { ArrowLeft, LoaderCircle, RotateCcw, X } from 'lucide-svelte';
 	import {
 		auctionTournamentBracketErrorText,
 		executeAuctionTournamentBracketCommand,
@@ -125,6 +125,12 @@
 		description={`${tournament.title} · 토너먼트 #${tournament.displayNumber} · ${formatLabel} · ${rulesLabel} · ${statusLabel}`}
 	>
 		{#snippet actions()}
+			<a
+				href={resolve('/g/[guildId]/auction', { guildId: data.guildId })}
+				class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
+			>
+				<ArrowLeft size={14} aria-hidden="true" /> 경매 목록
+			</a>
 			<AuctionTournamentCancelControl
 				guildId={data.guildId}
 				{tournament}
@@ -174,8 +180,8 @@
 				</Dialog.Close>
 			</div>
 			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
-				현재 대진과 생성된 경기는 취소 이력으로 보존하고, 팀 배치 단계로 되돌립니다. 픽밴
-				입력이나 결과가 하나라도 있으면 이 작업은 진행되지 않습니다.
+				현재 대진과 생성된 경기는 취소 이력으로 보존하고, 팀 배치 단계로 되돌립니다. 픽밴 입력이나
+				결과가 하나라도 있으면 이 작업은 진행되지 않습니다.
 			</Dialog.Description>
 			{#if recoveryError}
 				<p

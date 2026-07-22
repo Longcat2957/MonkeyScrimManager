@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchChampionPreferences, updateChampionPreferences } from './championPreferences';
+import {
+	championPreferencesErrorText,
+	fetchChampionPreferences,
+	updateChampionPreferences
+} from './championPreferences';
 import type { ChampionPreferences } from '$lib/contracts/workflow';
 
 const requestId = '01900000-0000-7000-8000-000000000001';
@@ -74,12 +78,19 @@ describe('champion preference API client', () => {
 			)
 		);
 		installBrowser(backendFailure);
-		await expect(updateChampionPreferences('TOP', ['Gnar', 'Gnar'])).rejects.toMatchObject({
+		const backendError = await updateChampionPreferences('TOP', ['Gnar', 'Gnar']).catch(
+			(cause) => cause
+		);
+		expect(backendError).toMatchObject({
 			name: 'ChampionPreferencesApiError',
 			message: '중복된 챔피언은 등록할 수 없습니다.',
 			status: 422,
-			code: 'invalid_champion_preferences'
+			code: 'invalid_champion_preferences',
+			requestId
 		});
+		expect(championPreferencesErrorText(backendError)).toBe(
+			`중복된 챔피언은 등록할 수 없습니다. (요청 ID: ${requestId})`
+		);
 
 		const incompleteSuccess = fetchMock(() =>
 			Response.json({

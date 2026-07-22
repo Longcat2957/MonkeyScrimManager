@@ -4,7 +4,8 @@ import {
 	fetchMoreRiotMatches,
 	fetchRiotRecords,
 	parseRiotRecordsQuery,
-	refreshRiotRecords
+	refreshRiotRecords,
+	riotRecordsErrorText
 } from './riotRecords';
 
 const requestId = '01900000-0000-7000-8000-000000000001';
@@ -120,11 +121,16 @@ describe('Riot records API client', () => {
 				{ status: 404 }
 			)
 		);
-		await expect(fetchRiotRecords(notFound, lookup)).rejects.toMatchObject({
+		const notFoundError = await fetchRiotRecords(notFound, lookup).catch((cause) => cause);
+		expect(notFoundError).toMatchObject({
 			status: 404,
 			code: 'riot_account_not_found',
-			message: '계정을 찾을 수 없습니다.'
+			message: '계정을 찾을 수 없습니다.',
+			requestId
 		});
+		expect(riotRecordsErrorText(notFoundError)).toBe(
+			`계정을 찾을 수 없습니다. (요청 ID: ${requestId})`
+		);
 
 		const invalid = vi.fn(async () => Response.json({ data: {}, meta: { requestId } }));
 		await expect(fetchRiotRecords(invalid, lookup)).rejects.toMatchObject({

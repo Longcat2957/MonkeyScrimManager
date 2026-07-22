@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { ArrowRight, Gavel, ListFilter, Swords, UsersRound } from 'lucide-svelte';
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
-	import type { OperationDto } from '$lib/contracts/workflow';
+	import type { OperationViewItem } from '$lib/workflow/presentation';
 
-	type OperationKind = OperationDto['kind'];
+	type OperationKind = OperationViewItem['kind'];
 	type QueueFilter = 'ALL' | OperationKind;
 
 	interface Props {
-		items: OperationDto[];
+		items: OperationViewItem[];
 	}
 
 	let { items }: Props = $props();
@@ -30,18 +30,6 @@
 		filter === 'ALL' ? items : items.filter((item) => item.kind === filter)
 	);
 	const urgentCount = $derived(items.filter((item) => item.priority === 'urgent').length);
-
-	function statusTone(kind: OperationKind): 'info' | 'warning' | 'success' {
-		if (kind === 'ENTRY') return 'warning';
-		if (kind === 'AUCTION') return 'success';
-		return 'info';
-	}
-
-	function actionLabel(kind: OperationKind): string {
-		if (kind === 'ENTRY') return '편성 시작';
-		if (kind === 'PICK_BAN') return '픽밴 열기';
-		return '경매 열기';
-	}
 </script>
 
 <section
@@ -53,10 +41,12 @@
 		<div class="min-w-0">
 			<div class="flex items-center gap-2">
 				<h2 class="text-sm font-semibold text-slate-100">운영 대기열</h2>
-				<span
-					class="inline-flex h-6 min-w-6 items-center justify-center border border-amber-300/30 bg-amber-300/10 px-1.5 text-[11px] font-semibold tabular-nums text-amber-100"
-					>{urgentCount}</span
-				>
+				{#if urgentCount > 0}
+					<span
+						class="inline-flex h-6 items-center justify-center border border-amber-300/30 bg-amber-300/10 px-2 text-[11px] font-semibold tabular-nums text-amber-100"
+						aria-label={`긴급 작업 ${urgentCount}건`}>긴급 {urgentCount}</span
+					>
+				{/if}
 			</div>
 			<p class="mt-1 text-xs text-slate-500">다음 입력이 필요한 작업만 표시합니다.</p>
 		</div>
@@ -111,7 +101,7 @@
 
 				<div class="min-w-0">
 					<div class="flex min-w-0 items-center gap-2">
-						<StatusPill tone={statusTone(item.kind)} label={item.status} />
+						<StatusPill tone={item.tone} label={item.status} />
 						<p class="truncate text-xs text-slate-400">{item.detail}</p>
 					</div>
 				</div>
@@ -122,7 +112,7 @@
 					href={item.href}
 					class="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-sm border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
 				>
-					{actionLabel(item.kind)}
+					{item.actionLabel}
 					<ArrowRight size={14} aria-hidden="true" />
 				</a>
 			</div>

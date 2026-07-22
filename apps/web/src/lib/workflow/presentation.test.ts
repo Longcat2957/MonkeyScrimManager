@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildAuctionView, buildSeriesView, formatRelativeTime } from './presentation';
-import type { AuctionTournamentDto, RecruitmentDto } from '$lib/contracts/workflow';
+import {
+	buildAuctionView,
+	buildSeriesView,
+	formatRelativeTime,
+	mapOperations
+} from './presentation';
+import type { AuctionTournamentDto, OperationDto, RecruitmentDto } from '$lib/contracts/workflow';
 
 const now = Date.parse('2026-07-12T12:00:00Z');
 
@@ -11,6 +16,58 @@ describe('workflow presentation', () => {
 		expect(formatRelativeTime('2026-07-12T09:00:00Z', now)).toBe('3시간 전');
 		expect(formatRelativeTime('2026-07-10T12:00:00Z', now)).toBe('2일 전');
 		expect(formatRelativeTime('invalid', now)).toBe('-');
+	});
+
+	it('maps backend operation stages to concrete actions and priority tones', () => {
+		const operation = (
+			kind: OperationDto['kind'],
+			status: string,
+			priority: OperationDto['priority'] = 'normal'
+		): OperationDto => ({
+			id: `${kind}:${status}`,
+			kind,
+			title: status,
+			status,
+			detail: '다음 작업 대기',
+			updatedAt: '2026-07-12T11:30:00Z',
+			href: '/g/200000000000000001/work',
+			priority
+		});
+		const items = mapOperations(
+			[
+				operation('ENTRY', '편성 필요', 'urgent'),
+				operation('PICK_BAN', '픽밴/결과 입력', 'urgent'),
+				operation('AUCTION', '팀장 설정'),
+				operation('AUCTION', '입찰 진행'),
+				operation('AUCTION', '대진 설정'),
+				operation('AUCTION', '대진 진행'),
+				operation('AUCTION', '결과 입력'),
+				operation('AUCTION', '새 경매 단계')
+			],
+			now
+		);
+
+		expect(items.map((item) => item.actionLabel)).toEqual([
+			'엔트리 편성',
+			'픽밴 진행',
+			'경매 준비',
+			'입찰 진행',
+			'대진 설정',
+			'대진 확인',
+			'결과 입력',
+			'경매 진행'
+		]);
+		expect(items.map((item) => item.tone)).toEqual([
+			'warning',
+			'warning',
+			'info',
+			'info',
+			'info',
+			'info',
+			'info',
+			'info'
+		]);
+		expect(items[0].updatedAt).toBe('30분 전');
 	});
 
 	it('keeps the canonical direct match workspace href for actionable auction work', () => {
@@ -48,8 +105,8 @@ describe('workflow presentation', () => {
 		expect(view.activeWork[0]).toMatchObject({
 			status: '결과 입력',
 			detail: '결승 · 2세트 결과 대기',
-			href:
-				'/g/200000000000000001/auction/tournaments/01900000-0000-7000-8000-000000000601/result'
+			actionLabel: '경기 선택',
+			href: '/g/200000000000000001/auction/tournaments/01900000-0000-7000-8000-000000000601/result'
 		});
 	});
 
@@ -83,6 +140,7 @@ describe('workflow presentation', () => {
 		expect(view.completedWork[0]).toMatchObject({
 			kind: '보관',
 			status: '취소됨',
+			actionLabel: '기록 보기',
 			tone: 'neutral',
 			iconKind: 'archived',
 			href: tournament.href
@@ -115,6 +173,7 @@ describe('workflow presentation', () => {
 			format: 'BO3 · 일반',
 			status: '엔트리 모집',
 			detail: '3/10명 · Discord 모집 중',
+			actionLabel: '모집 관리',
 			href: recruitment.href
 		});
 	});

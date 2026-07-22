@@ -12,7 +12,7 @@ describe('pick-ban page integration', () => {
 		expect(source).toContain('boardGameFor(snapshot)');
 		expect(source).toContain('data.championCatalog.champions');
 		expect(source).not.toContain('mockScrimPickBanResultInput');
-		expect(loadSource).toContain('loadChampionCatalog(fetch');
+		expect(loadSource).toContain('loadCachedChampionCatalog(fetch');
 	});
 
 	it('maps roster teams through the current side preset and connects the board to server commands', () => {

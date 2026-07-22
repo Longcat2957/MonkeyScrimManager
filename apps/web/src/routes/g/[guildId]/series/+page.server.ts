@@ -3,9 +3,7 @@ import { apiGet, apiRoute } from '$lib/server/api';
 import { buildSeriesView } from '$lib/workflow/presentation';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
-	await parent();
-
+export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	const [recruitmentData, activeSeriesData, completedSeriesData] = await Promise.all([
 		apiGet(
 			fetch,

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PrivacySettings } from '$lib/contracts/workflow';
-import { fetchPrivacySettings, updatePrivacySettings } from './privacy';
+import { fetchPrivacySettings, privacySettingsErrorText, updatePrivacySettings } from './privacy';
 
 const requestId = '01900000-0000-7000-8000-000000000001';
 const settings: PrivacySettings = {
@@ -77,12 +77,17 @@ describe('privacy settings API client', () => {
 			)
 		);
 		installBrowser(backendFailure);
-		await expect(updatePrivacySettings(settings)).rejects.toMatchObject({
+		const backendError = await updatePrivacySettings(settings).catch((cause) => cause);
+		expect(backendError).toMatchObject({
 			name: 'PrivacySettingsApiError',
 			message: '개인정보 설정을 저장할 수 없습니다.',
 			status: 409,
-			code: 'privacy_update_rejected'
+			code: 'privacy_update_rejected',
+			requestId
 		});
+		expect(privacySettingsErrorText(backendError)).toBe(
+			`개인정보 설정을 저장할 수 없습니다. (요청 ID: ${requestId})`
+		);
 
 		const invalidSuccess = fetchMock(() =>
 			Response.json({

@@ -113,7 +113,7 @@ describe('guild records server load', () => {
 			query: 'Twin',
 			seasonId: null,
 			snapshot: null,
-			loadError: '같은 이름의 길드 멤버가 여러 명입니다.'
+			loadError: `같은 이름의 길드 멤버가 여러 명입니다. (요청 ID: ${requestId})`
 		});
 	});
 

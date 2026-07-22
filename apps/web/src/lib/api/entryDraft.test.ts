@@ -229,9 +229,7 @@ describe('entry draft API client', () => {
 		).resolves.toEqual(auctionSnapshot);
 
 		const [path, init] = fetcher.mock.calls[0]!;
-		expect(path).toBe(
-			`/api/guilds/${guildId}/recruitments/${recruitmentId}/auction-recruitment`
-		);
+		expect(path).toBe(`/api/guilds/${guildId}/recruitments/${recruitmentId}/auction-recruitment`);
 		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
 		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 3 });
 		const headers = new Headers(init?.headers);

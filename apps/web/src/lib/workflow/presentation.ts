@@ -17,11 +17,32 @@ export function formatRelativeTime(value: string, now = Date.now()): string {
 	return `${Math.floor(elapsedSeconds / 86_400)}일 전`;
 }
 
-export function mapOperations(operations: OperationDto[], now = Date.now()): OperationDto[] {
+export type OperationViewItem = OperationDto & {
+	actionLabel: string;
+	tone: 'info' | 'warning';
+};
+
+const auctionOperationActionLabels: Readonly<Record<string, string>> = {
+	'팀장 설정': '경매 준비',
+	'입찰 진행': '입찰 진행',
+	'대진 설정': '대진 설정',
+	'대진 진행': '대진 확인',
+	'결과 입력': '결과 입력'
+};
+
+export function mapOperations(operations: OperationDto[], now = Date.now()): OperationViewItem[] {
 	return operations.map((operation) => ({
 		...operation,
-		updatedAt: formatRelativeTime(operation.updatedAt, now)
+		updatedAt: formatRelativeTime(operation.updatedAt, now),
+		actionLabel: operationActionLabel(operation),
+		tone: operation.priority === 'urgent' ? 'warning' : 'info'
 	}));
+}
+
+function operationActionLabel(operation: OperationDto): string {
+	if (operation.kind === 'ENTRY') return '엔트리 편성';
+	if (operation.kind === 'PICK_BAN') return '픽밴 진행';
+	return auctionOperationActionLabels[operation.status] ?? '경매 진행';
 }
 
 export interface SeriesActiveWorkItem {
@@ -32,6 +53,7 @@ export interface SeriesActiveWorkItem {
 	format: string;
 	status: string;
 	detail: string;
+	actionLabel: string;
 	updatedAt: string;
 	href: string;
 	sortTimestamp: string;
@@ -73,6 +95,7 @@ export function buildSeriesView(
 			item.status === 'OPEN'
 				? `${item.joinedCount}/${item.targetCount}명 · Discord 모집 중`
 				: `${item.joinedCount}/${item.targetCount}명 · ${Math.max(item.joinedCount - item.assignedCount, 0)}명 미배정`,
+		actionLabel: item.status === 'OPEN' ? '모집 관리' : '엔트리 편성',
 		updatedAt: formatRelativeTime(item.updatedAt, now),
 		href: item.href,
 		sortTimestamp: item.updatedAt
@@ -87,6 +110,7 @@ export function buildSeriesView(
 		detail: item.currentSetNumber
 			? `${item.currentSetNumber}세트 · 입력 대기`
 			: '다음 세트 입력 대기',
+		actionLabel: '픽밴 진행',
 		updatedAt: formatRelativeTime(item.updatedAt, now),
 		href: item.href,
 		sortTimestamp: item.updatedAt
@@ -126,6 +150,7 @@ export interface AuctionWorkItem {
 	kind: '모집' | '토너먼트' | '완료' | '보관';
 	status: string;
 	detail: string;
+	actionLabel: string;
 	href: string;
 	iconKind: AuctionIconKind;
 	tone: 'neutral' | 'warning' | 'info' | 'success';
@@ -148,6 +173,7 @@ export function buildAuctionView(input: {
 			item.status === 'OPEN'
 				? `${item.joinedParticipantCount}/${item.participantCount}명 · Discord 모집 중`
 				: `${item.joinedParticipantCount}/${item.participantCount}명 · ${item.teamCount}팀`,
+		actionLabel: item.status === 'OPEN' ? '모집 관리' : '경매 준비',
 		href: item.href,
 		iconKind: 'recruitment',
 		tone: 'warning',
@@ -185,6 +211,7 @@ function mapCompletedAuctionTournament(item: AuctionTournamentDto): AuctionWorkI
 		detail: item.championTeam
 			? `${item.participantCount}인 · 우승 ${item.championTeam.name}`
 			: `${item.participantCount}인 · 우승팀 미정`,
+		actionLabel: '결과 보기',
 		href: item.href,
 		iconKind: 'completed',
 		tone: 'success',
@@ -200,6 +227,7 @@ function mapArchivedAuctionTournament(item: AuctionTournamentDto): AuctionWorkIt
 		kind: '보관',
 		status: '취소됨',
 		detail: `${item.participantCount}인 · 운영 취소됨`,
+		actionLabel: '기록 보기',
 		href: item.href,
 		iconKind: 'archived',
 		tone: 'neutral',
@@ -216,6 +244,7 @@ function mapActiveAuctionTournament(item: AuctionTournamentDto, guildId: string)
 			kind: '토너먼트',
 			status: '입찰 진행',
 			detail: `${item.participantCount}인 · ${item.teamCount}팀 · ${item.bidMemberCount}명 낙찰`,
+			actionLabel: '입찰 진행',
 			href: item.href,
 			iconKind: 'bidding',
 			tone: 'info',
@@ -230,6 +259,7 @@ function mapActiveAuctionTournament(item: AuctionTournamentDto, guildId: string)
 			kind: '토너먼트',
 			status: '대진 설정',
 			detail: `${item.participantCount}인 · ${item.teamCount}팀 · 대진 확정 대기`,
+			actionLabel: '대진 설정',
 			href: item.href,
 			iconKind: 'bracket',
 			tone: 'warning',
@@ -248,6 +278,7 @@ function mapActiveAuctionTournament(item: AuctionTournamentDto, guildId: string)
 				? `${item.nextMatch.label} · ${item.nextMatch.confirmedGameCount + 1}세트 결과 대기`
 				: `${item.nextMatch.label} · 라인업 대기`
 			: `${item.incompleteMatchCount}경기 진행 대기`,
+		actionLabel: item.nextMatch ? (resultInput ? '경기 선택' : '라인업 선택') : '대진 현황',
 		href: `/g/${guildId}/auction/tournaments/${item.id}/result`,
 		iconKind: 'bracket',
 		tone: 'warning',

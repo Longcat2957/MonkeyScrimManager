@@ -29,9 +29,7 @@ function semifinalMatches(
 	return [semifinalA, semifinalB];
 }
 
-export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
-	await parent();
-
+export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	const bracket = await apiGet(
 		fetch,
 		apiRoute(['guilds', params.guildId, 'auction-tournaments', params.id, 'bracket']),
@@ -39,10 +37,7 @@ export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
 		{
 			url,
 			onApiError: (apiError) => {
-				if (
-					apiError.status === 409 &&
-					apiError.code === 'auction_tournament_bracket_unavailable'
-				) {
+				if (apiError.status === 409 && apiError.code === 'auction_tournament_bracket_unavailable') {
 					redirect(
 						303,
 						resolve('/g/[guildId]/auction/tournaments/[id]/draft', {

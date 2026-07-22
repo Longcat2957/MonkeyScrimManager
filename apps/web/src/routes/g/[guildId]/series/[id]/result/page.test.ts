@@ -19,25 +19,38 @@ describe('series result page integration', () => {
 			'<SeriesResultLedgerBoard catalog={data.championCatalog} {snapshot} />'
 		);
 		expect(source).not.toContain('mockScrimPickBanResultInput');
-		expect(loadSource).toContain('loadChampionCatalog(fetch');
+		expect(loadSource).toContain('loadCachedChampionCatalog(fetch');
 	});
 
 	it('keeps the ledger layout but maps frozen teams through each confirmed game side preset', () => {
 		expect(boardSource).toContain("from '$lib/contracts/seriesResult'");
-		expect(boardSource).toContain("from '$lib/workflow/seriesRules'");
-		expect(boardSource).toContain(
+		expect(source).toContain("from '$lib/workflow/seriesRules'");
+		expect(source).toContain(
 			'formatSeriesRules(snapshot.series.bestOf, snapshot.series.hardFearless)'
 		);
 		expect(boardSource).toContain("game.sidePreset === 'DEFAULT' ? 'BLUE' : 'RED'");
 		expect(boardSource).toContain('mmrChanges');
 		expect(boardSource).toContain('snapshot.series.bestOf');
 		expect(boardSource).toContain('disabled={!game}');
-		expect(boardSource).toContain("terminalReason === 'EARLY_WIN'");
-		expect(boardSource).toContain("terminalReason === 'EARLY_DRAW'");
-		expect(boardSource).toContain('조기 종료 · 승리 처리');
-		expect(boardSource).toContain('조기 종료 · 무승부');
+		expect(source).toContain("terminalReason === 'EARLY_WIN'");
+		expect(source).toContain("terminalReason === 'EARLY_DRAW'");
+		expect(source).toContain('조기 종료 · 승리 처리');
+		expect(source).toContain('조기 종료 · 무승부');
 		expect(boardSource).not.toContain('$lib/fixtures');
 		expect(boardSource).not.toContain('result-game-1');
+	});
+
+	it('keeps completed-series context and navigation in the route header without duplicating it in the ledger', () => {
+		expect(source).toContain(
+			'<WorkspaceHeader kicker="일반 내전" title="시리즈 결과" description={resultDescription}>'
+		);
+		expect(source).toContain("resolve('/g/[guildId]/series', { guildId: data.guildId })");
+		expect(source).toContain('내전 목록');
+		expect(source.indexOf('<WorkspaceHeader')).toBeLessThan(
+			source.indexOf('<SeriesResultLedgerBoard')
+		);
+		expect(boardSource).not.toContain('{snapshot.series.title}');
+		expect(boardSource).not.toContain("from '$lib/workflow/seriesRules'");
 	});
 
 	it('exposes only server-authorized result actions through confirmed HTTP mutations', () => {

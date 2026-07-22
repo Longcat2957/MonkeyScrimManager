@@ -7,7 +7,9 @@ const tournamentId = '01900000-0000-7000-8000-000000000601';
 const teamOneId = '01900000-0000-7000-8000-000000000611';
 const teamTwoId = '01900000-0000-7000-8000-000000000612';
 
-function snapshot(status: 'BRACKET_SETUP' | 'IN_GAME' | 'COMPLETED' | 'CANCELLED' = 'BRACKET_SETUP') {
+function snapshot(
+	status: 'BRACKET_SETUP' | 'IN_GAME' | 'COMPLETED' | 'CANCELLED' = 'BRACKET_SETUP'
+) {
 	return {
 		tournament: {
 			id: tournamentId,
@@ -72,7 +74,7 @@ describe('auction tournament bracket page server load', () => {
 			url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/bracket`)
 		} as never);
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher.mock.calls[0]?.[0]).toBe(
 			`/api/guilds/${guildId}/auction-tournaments/${tournamentId}/bracket`
 		);
@@ -98,7 +100,9 @@ describe('auction tournament bracket page server load', () => {
 					),
 				params: { guildId, id: tournamentId },
 				parent: async () => ({ guildId }),
-				url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/bracket`)
+				url: new URL(
+					`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/bracket`
+				)
 			} as never)
 		).rejects.toMatchObject({
 			status: 303,
@@ -111,8 +115,7 @@ describe('auction tournament bracket page server load', () => {
 		async (status) => {
 			await expect(
 				load({
-					fetch: async () =>
-						Response.json({ data: snapshot(status), meta: { requestId } }),
+					fetch: async () => Response.json({ data: snapshot(status), meta: { requestId } }),
 					params: { guildId, id: tournamentId },
 					parent: async () => ({ guildId }),
 					url: new URL(

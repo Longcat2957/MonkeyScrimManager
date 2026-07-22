@@ -1,6 +1,12 @@
 import { render } from 'svelte/server';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import UserDefaultGuildSettingsPanel from './UserDefaultGuildSettingsPanel.svelte';
+
+const source = readFileSync(
+	new URL('./UserDefaultGuildSettingsPanel.svelte', import.meta.url),
+	'utf8'
+);
 
 const guild = {
 	id: '200000000000000001',
@@ -41,5 +47,11 @@ describe('UserDefaultGuildSettingsPanel', () => {
 
 		expect(isDisabled(openingTag(body, 'aria-label="대표 길드 저장"'))).toBe(true);
 		expect(isDisabled(openingTag(body, 'aria-label="대표 길드 변경 취소"'))).toBe(true);
+	});
+
+	it('renders the concrete save failure as an alert', () => {
+		expect(source).toContain('saveError = defaultGuildErrorText(cause)');
+		expect(source).toContain('<span role="alert"');
+		expect(source).not.toContain('>저장 실패</span>');
 	});
 });

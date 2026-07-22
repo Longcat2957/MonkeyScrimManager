@@ -1,4 +1,4 @@
-import { loadChampionCatalog, STATIC_CHAMPION_FIXTURE_URL } from '$lib/datadragon';
+import { loadCachedChampionCatalog, STATIC_CHAMPION_FIXTURE_URL } from '$lib/datadragon';
 import type { PageLoad } from './$types';
 
 export const load: PageLoad = async ({ fetch, url, data }) => {
@@ -18,7 +18,7 @@ export const load: PageLoad = async ({ fetch, url, data }) => {
 		privacySettings: data.privacySettings,
 		championCatalog:
 			initialTab === 'champions'
-				? await loadChampionCatalog(fetch, {
+				? await loadCachedChampionCatalog(fetch, {
 						fixtureUrl: STATIC_CHAMPION_FIXTURE_URL
 					})
 				: null

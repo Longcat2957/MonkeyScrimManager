@@ -4,7 +4,7 @@
 	import LandingAuctionDraftPreview from '$lib/components/landing/LandingAuctionDraftPreview.svelte';
 	import LandingScrimPreview from '$lib/components/landing/LandingScrimPreview.svelte';
 
-	const loginHref = `${resolve('/oauth/[...path]', { path: 'discord/start' })}?${new URLSearchParams({ next: '/' })}`;
+	const loginHref = `${resolve('/oauth/[...path]', { path: 'discord/start' })}?${new globalThis.URLSearchParams({ next: '/' })}`;
 </script>
 
 <svelte:head>

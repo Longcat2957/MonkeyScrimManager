@@ -7,7 +7,12 @@
 		ChevronUp,
 		RefreshCw
 	} from 'lucide-svelte';
-	import { fetchMoreRiotMatches, refreshRiotRecords } from '$lib/api/riotRecords';
+	import {
+		fetchMoreRiotMatches,
+		refreshRiotRecords,
+		riotRecordsErrorText,
+		RiotRecordsApiError
+	} from '$lib/api/riotRecords';
 	import { championIconUrl, profileIconUrl, type ChampionCatalog } from '$lib/datadragon';
 	import type {
 		RiotChampionAggregate,
@@ -164,7 +169,7 @@
 					? 'Riot 응답 지연으로 기존 기록을 표시합니다.'
 					: '전적을 갱신했습니다.';
 		} catch (error) {
-			refreshError = error instanceof Error ? error.message : '전적 갱신에 실패했습니다.';
+			refreshError = riotRecordsErrorText(error);
 		} finally {
 			refreshing = false;
 		}
@@ -177,7 +182,11 @@
 		try {
 			const nextPage = await fetchMoreRiotMatches(lookup, nextMatchOffset, 10);
 			if (nextPage.targetPuuid !== records.account.puuid) {
-				throw new Error('조회한 계정과 추가 전적의 계정이 일치하지 않습니다.');
+				throw new RiotRecordsApiError(
+					'조회한 계정과 추가 전적의 계정이 일치하지 않습니다.',
+					409,
+					'record_account_mismatch'
+				);
 			}
 			const knownMatchIds = new Set(records.recentMatches.map((match) => match.matchId));
 			const recentMatches = [
@@ -198,7 +207,7 @@
 			matchesHaveMoreOverride = nextPage.page.hasMore;
 			nextMatchOffset = nextPage.page.nextOffset ?? recentMatches.length;
 		} catch (error) {
-			loadMoreError = error instanceof Error ? error.message : '추가 전적을 불러오지 못했습니다.';
+			loadMoreError = riotRecordsErrorText(error);
 		} finally {
 			loadingMoreMatches = false;
 		}
@@ -416,6 +425,7 @@
 					<img
 						src={profileIconUrl(records.profileIconId, dataDragonVersion())}
 						alt={`${records.account.gameName}#${records.account.tagLine} 프로필`}
+						decoding="async"
 					/>
 				{:else}
 					<span>{records.account.gameName.slice(0, 1)}</span>
@@ -449,8 +459,9 @@
 								? `${refreshCooldown}초 후 갱신`
 								: '전적 갱신'}
 					</button>
-					{#if refreshNotice}<span class="refresh-notice">{refreshNotice}</span>{/if}
-					{#if refreshError}<span class="refresh-error">{refreshError}</span>{/if}
+					{#if refreshNotice}<span class="refresh-notice" aria-live="polite">{refreshNotice}</span
+						>{/if}
+					{#if refreshError}<span class="refresh-error" role="alert">{refreshError}</span>{/if}
 				</div>
 			</div>
 			<div class="record-meta">
@@ -468,7 +479,13 @@
 				<div class="rank-panel">
 					<div class="rank-mark">
 						{#if rankIcon(rank.tier)}
-							<img src={rankIcon(rank.tier) ?? ''} alt={rank.tier ?? ''} />
+							<img
+								src={rankIcon(rank.tier) ?? ''}
+								alt={rank.tier ?? ''}
+								width="82"
+								height="82"
+								decoding="async"
+							/>
 						{:else}
 							<span>-</span>
 						{/if}
@@ -523,6 +540,8 @@
 									src={championImage(champion.championName)}
 									alt=""
 									class="table-champion-icon"
+									loading="lazy"
+									decoding="async"
 								/>
 								{championName(champion.championName)}
 							</span>
@@ -600,6 +619,8 @@
 									<img
 										src={championImage(entry.player.championName)}
 										alt={championName(entry.player.championName)}
+										loading="lazy"
+										decoding="async"
 									/>
 									<span>{entry.player.championLevel}</span>
 								</div>
@@ -618,14 +639,19 @@
 								<span>
 									<span class="spell-icons">
 										{#each entry.player.summonerSpellIds as spellId (spellId)}
-											{#if spellImage(spellId)}<img src={spellImage(spellId) ?? ''} alt="" />{/if}
+											{#if spellImage(spellId)}<img
+													src={spellImage(spellId) ?? ''}
+													alt=""
+													loading="lazy"
+													decoding="async"
+												/>{/if}
 										{/each}
 									</span>
 									<small>{positionLabel(entry.player.teamPosition)}</small>
 								</span>
 								<span class="item-icons">
 									{#each entry.player.itemIds.filter((id) => id > 0) as itemId, index (`${itemId}-${index}`)}
-										<img src={itemImage(itemId)} alt="" />
+										<img src={itemImage(itemId)} alt="" loading="lazy" decoding="async" />
 									{/each}
 								</span>
 								<span>
@@ -681,7 +707,7 @@
 					{/if}
 				</button>
 			{/if}
-			{#if loadMoreError}<p class="load-more-error">{loadMoreError}</p>{/if}
+			{#if loadMoreError}<p class="load-more-error" role="alert">{loadMoreError}</p>{/if}
 		</section>
 	</div>
 </div>
@@ -701,7 +727,12 @@
 		>
 			<strong class="expanded-position">{positionLabel(player.teamPosition)}</strong>
 			<div class="expanded-identity">
-				<img src={championImage(player.championName)} alt={championName(player.championName)} />
+				<img
+					src={championImage(player.championName)}
+					alt={championName(player.championName)}
+					loading="lazy"
+					decoding="async"
+				/>
 				<p>
 					<strong>{player.gameName ?? '이름 비공개'}</strong>
 					<span>{player.tagLine ? `#${player.tagLine}` : championName(player.championName)}</span>
@@ -709,7 +740,12 @@
 			</div>
 			<div class="expanded-spells">
 				{#each player.summonerSpellIds as spellId (spellId)}
-					{#if spellImage(spellId)}<img src={spellImage(spellId) ?? ''} alt="" />{/if}
+					{#if spellImage(spellId)}<img
+							src={spellImage(spellId) ?? ''}
+							alt=""
+							loading="lazy"
+							decoding="async"
+						/>{/if}
 				{/each}
 			</div>
 			<strong class="expanded-level">{player.championLevel}</strong>
@@ -720,7 +756,7 @@
 			<span class="expanded-kill-rate">{killParticipation(match, player)}</span>
 			<div class="expanded-items">
 				{#each player.itemIds.filter((id) => id > 0) as itemId, index (`${itemId}-${index}`)}
-					<img src={itemImage(itemId)} alt="" />
+					<img src={itemImage(itemId)} alt="" loading="lazy" decoding="async" />
 				{/each}
 			</div>
 			<div class="expanded-farm">

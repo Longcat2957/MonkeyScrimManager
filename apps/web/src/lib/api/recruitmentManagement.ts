@@ -11,7 +11,8 @@ const recruitmentSnapshotEnvelopeSchema = z
 	.object({ data: recruitmentSnapshotSchema, meta: responseMetaSchema })
 	.strict();
 
-type RecruitmentManagementAction = 'load' | 'add_member' | 'remove_member' | 'start_entry' | 'cancel';
+type RecruitmentManagementAction =
+	'load' | 'add_member' | 'remove_member' | 'start_entry' | 'cancel';
 
 export class RecruitmentManagementApiError extends Error {
 	constructor(

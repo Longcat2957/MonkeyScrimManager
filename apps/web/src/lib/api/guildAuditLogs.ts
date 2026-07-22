@@ -25,7 +25,8 @@ export class GuildAuditLogsApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'GuildAuditLogsApiError';
@@ -78,7 +79,8 @@ export async function fetchGuildAuditLogs(
 			throw new GuildAuditLogsApiError(
 				parsedError.data.error.message,
 				response.status,
-				parsedError.data.error.code
+				parsedError.data.error.code,
+				parsedError.data.error.requestId
 			);
 		}
 		throw new GuildAuditLogsApiError(
@@ -97,4 +99,9 @@ export async function fetchGuildAuditLogs(
 		);
 	}
 	return parsed.data.data;
+}
+
+export function guildAuditLogsErrorText(cause: unknown): string {
+	if (!(cause instanceof GuildAuditLogsApiError)) return '감사 로그 요청을 처리하지 못했습니다.';
+	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }

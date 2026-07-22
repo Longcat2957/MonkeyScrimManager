@@ -39,12 +39,7 @@ function bracketSnapshot(format: 'TEN_PERSON' | 'TWENTY_PERSON' = 'TWENTY_PERSON
 			revision: 12,
 			href: `/g/${guildId}/auction/tournaments/${tournamentId}`
 		},
-		teams: [
-			team(teamOneId, 1),
-			team(teamTwoId, 2),
-			team(teamThreeId, 3),
-			team(teamFourId, 4)
-		],
+		teams: [team(teamOneId, 1), team(teamTwoId, 2), team(teamThreeId, 3), team(teamFourId, 4)],
 		bracket: {
 			locked: true,
 			slots: [
@@ -189,14 +184,10 @@ describe('auction tournament lineup page server load', () => {
 				return envelope(bracketSnapshot());
 			}
 			if (path === `/api/guilds/${guildId}/auction-matches/${semifinalAMatchId}`) {
-				return envelope(
-					gameSnapshot(semifinalAMatchId, 'SEMIFINAL_A', teamOneId, teamTwoId)
-				);
+				return envelope(gameSnapshot(semifinalAMatchId, 'SEMIFINAL_A', teamOneId, teamTwoId));
 			}
 			if (path === `/api/guilds/${guildId}/auction-matches/${semifinalBMatchId}`) {
-				return envelope(
-					gameSnapshot(semifinalBMatchId, 'SEMIFINAL_B', teamThreeId, teamFourId)
-				);
+				return envelope(gameSnapshot(semifinalBMatchId, 'SEMIFINAL_B', teamThreeId, teamFourId));
 			}
 			return new Response('not found', { status: 404 });
 		});
@@ -208,7 +199,7 @@ describe('auction tournament lineup page server load', () => {
 			url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/lineup`)
 		} as never);
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
 			`/api/guilds/${guildId}/auction-tournaments/${tournamentId}/bracket`,
 			`/api/guilds/${guildId}/auction-matches/${semifinalAMatchId}`,
@@ -240,7 +231,9 @@ describe('auction tournament lineup page server load', () => {
 					),
 				params: { guildId, id: tournamentId },
 				parent: async () => ({ guildId }),
-				url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/lineup`)
+				url: new URL(
+					`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/lineup`
+				)
 			} as never)
 		).rejects.toMatchObject({
 			status: 303,
@@ -254,7 +247,9 @@ describe('auction tournament lineup page server load', () => {
 				fetch: async () => envelope(bracketSnapshot('TEN_PERSON')),
 				params: { guildId, id: tournamentId },
 				parent: async () => ({ guildId }),
-				url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/lineup`)
+				url: new URL(
+					`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/lineup`
+				)
 			} as never)
 		).rejects.toMatchObject({
 			status: 303,

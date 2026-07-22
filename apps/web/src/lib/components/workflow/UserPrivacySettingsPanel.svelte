@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Check, Save, ShieldCheck } from 'lucide-svelte';
 	import { untrack } from 'svelte';
-	import { updatePrivacySettings } from '$lib/api/privacy';
+	import { privacySettingsErrorText, updatePrivacySettings } from '$lib/api/privacy';
 	import type { PrivacySettings } from '$lib/contracts/workflow';
 
 	type PrivacyKey = keyof PrivacySettings;
@@ -58,10 +58,7 @@
 			draftSettings = { ...settings };
 			savedNotice = true;
 		} catch (saveError) {
-			error =
-				saveError instanceof Error
-					? saveError.message
-					: '개인정보 설정 저장 중 오류가 발생했습니다.';
+			error = privacySettingsErrorText(saveError);
 		} finally {
 			saving = false;
 		}

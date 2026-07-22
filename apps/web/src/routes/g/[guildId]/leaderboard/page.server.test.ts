@@ -46,7 +46,7 @@ describe('guild leaderboard server load', () => {
 
 		await expect(run(fetcher)).resolves.toEqual({
 			snapshot: null,
-			loadError: '길드 리더보드를 찾을 수 없습니다.'
+			loadError: `길드 리더보드를 찾을 수 없습니다. (요청 ID: ${requestId})`
 		});
 	});
 

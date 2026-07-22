@@ -53,7 +53,7 @@ describe('entry draft page route binding', () => {
 	});
 
 	it('requires confirmation before reopening recruitment and explains that the entry draft is preserved', () => {
-		expect(source).toContain("let reopenDialogOpen = $state(false)");
+		expect(source).toContain('let reopenDialogOpen = $state(false)');
 		expect(source).toContain('function openReopenDialog()');
 		expect(source).toContain('reopenDialogOpen = true;');
 		expect(source).toContain('onclick={openReopenDialog}');

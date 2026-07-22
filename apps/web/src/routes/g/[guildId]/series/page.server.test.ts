@@ -107,7 +107,7 @@ describe('general series page server load', () => {
 		} as never);
 		if (!result) throw new Error('series page load returned no data');
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher).toHaveBeenCalledTimes(3);
 		expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
 			`/api/guilds/${guildId}/recruitments?state=actionable&limit=100`,
@@ -123,7 +123,13 @@ describe('general series page server load', () => {
 		expect(result.view.activeWork[0]).toMatchObject({
 			displayNumber: 106,
 			format: 'BO3 · 일반',
+			actionLabel: '픽밴 진행',
 			href: `/g/${guildId}/series/${activeSeriesId}/pick-ban`
+		});
+		expect(result.view.activeWork[1]).toMatchObject({
+			displayNumber: 214,
+			actionLabel: '엔트리 편성',
+			href: `/g/${guildId}/recruitments/${recruitmentId}/entry`
 		});
 		expect(result.view.completedSeries[0]).toMatchObject({
 			displayNumber: 105,

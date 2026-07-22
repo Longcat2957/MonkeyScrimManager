@@ -2,6 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Gamepad2, Server, ShieldCheck, Sparkles } from 'lucide-svelte';
+	import { updateDefaultGuild } from '$lib/api/defaultGuild';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import RiotAccountManager from '$lib/components/workflow/RiotAccountManager.svelte';
 	import UserChampionPreferencesEditor from '$lib/components/workflow/UserChampionPreferencesEditor.svelte';
@@ -25,32 +26,8 @@
 		void goto(`${resolve('/me')}?tab=${tab}`, { replaceState: true, noScroll: true });
 	}
 
-	function readCookie(name: string): string | null {
-		const prefix = `${name}=`;
-		const value = globalThis.document.cookie
-			.split(';')
-			.map((cookie) => cookie.trim())
-			.find((cookie) => cookie.startsWith(prefix));
-		return value ? decodeURIComponent(value.slice(prefix.length)) : null;
-	}
-
 	async function saveDefaultGuild(guildId: string) {
-		const csrfToken = readCookie('monkeybot_csrf');
-		if (!csrfToken) throw new Error('csrf token is unavailable');
-		const response = await globalThis.fetch(
-			resolve('/api/[...path]', { path: 'me/default-guild' }),
-			{
-				method: 'PUT',
-				credentials: 'same-origin',
-				headers: {
-					accept: 'application/json',
-					'content-type': 'application/json',
-					'X-CSRF-Token': csrfToken
-				},
-				body: JSON.stringify({ guildId })
-			}
-		);
-		if (!response.ok) throw new Error('default guild update failed');
+		await updateDefaultGuild(guildId);
 		await invalidateAll();
 	}
 </script>

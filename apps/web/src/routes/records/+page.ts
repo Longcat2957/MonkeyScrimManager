@@ -1,5 +1,5 @@
 import {
-	loadChampionCatalog,
+	loadCachedChampionCatalog,
 	STATIC_CHAMPION_FIXTURE_URL,
 	type ChampionCatalog
 } from '$lib/datadragon';
@@ -9,7 +9,7 @@ export const load: PageLoad = async ({ data, fetch }) => {
 	let championCatalog: ChampionCatalog | null = null;
 	if (data.records) {
 		try {
-			championCatalog = await loadChampionCatalog(fetch, {
+			championCatalog = await loadCachedChampionCatalog(fetch, {
 				fixtureUrl: STATIC_CHAMPION_FIXTURE_URL
 			});
 		} catch {

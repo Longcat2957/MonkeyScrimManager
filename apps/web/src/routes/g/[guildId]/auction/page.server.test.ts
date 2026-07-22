@@ -117,7 +117,7 @@ describe('auction page server load', () => {
 		} as never);
 		if (!result) throw new Error('auction page load returned no data');
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
 			`/api/guilds/${guildId}/auction-recruitments?state=actionable&limit=100`,
 			`/api/guilds/${guildId}/auction-tournaments?state=active&limit=100`,

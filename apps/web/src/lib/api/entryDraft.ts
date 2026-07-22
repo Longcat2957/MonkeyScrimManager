@@ -34,12 +34,7 @@ const createSeriesEnvelopeSchema = z
 	.strict();
 
 type EntryDraftAction =
-	| 'load'
-	| 'move'
-	| 'reset'
-	| 'create_series'
-	| 'create_auction_recruitment'
-	| 'reopen';
+	'load' | 'move' | 'reset' | 'create_series' | 'create_auction_recruitment' | 'reopen';
 export type EntryDraftCreatedSeries = z.infer<typeof createdSeriesSchema>;
 
 export class EntryDraftApiError extends Error {
@@ -63,9 +58,7 @@ export function isEntryDraftRevisionConflict(cause: unknown): cause is EntryDraf
 	);
 }
 
-export function isEntryDraftAuthoritativeStateError(
-	cause: unknown
-): cause is EntryDraftApiError {
+export function isEntryDraftAuthoritativeStateError(cause: unknown): cause is EntryDraftApiError {
 	if (!(cause instanceof EntryDraftApiError)) return false;
 	return (
 		(cause.status === 409 &&

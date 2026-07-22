@@ -50,15 +50,14 @@
 	const players = $derived(snapshot?.players ?? []);
 	const rows = $derived(buildRows(selectedRole));
 	const filteredRows = $derived(
-		rows
-			.filter((row) => {
-				const needle = query.trim().toLocaleLowerCase();
-				return (
-					!needle ||
-					row.player.name.toLocaleLowerCase().includes(needle) ||
-					(row.player.tag?.toLocaleLowerCase().includes(needle) ?? false)
-				);
-			})
+		rows.filter((row) => {
+			const needle = query.trim().toLocaleLowerCase();
+			return (
+				!needle ||
+				row.player.name.toLocaleLowerCase().includes(needle) ||
+				(row.player.tag?.toLocaleLowerCase().includes(needle) ?? false)
+			);
+		})
 	);
 	const pageCount = $derived(Math.max(1, Math.ceil(filteredRows.length / pageSize)));
 	const activePage = $derived(Math.min(currentPage, pageCount));

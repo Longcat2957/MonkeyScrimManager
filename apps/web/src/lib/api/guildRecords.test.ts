@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GuildRecordsSearchSnapshot } from '$lib/contracts/workflow';
-import { fetchGuildRecords } from './guildRecords';
+import { fetchGuildRecords, guildRecordsErrorText } from './guildRecords';
 
 const guildId = '1525851181157580861';
 const seasonId = '01900000-0000-7000-8000-000000000010';
@@ -97,10 +97,17 @@ describe('guild records API client', () => {
 				{ status: 409 }
 			)
 		);
-		await expect(fetchGuildRecords(conflict, guildId, { query: 'Twin' })).rejects.toMatchObject({
+		const conflictError = await fetchGuildRecords(conflict, guildId, { query: 'Twin' }).catch(
+			(cause) => cause
+		);
+		expect(conflictError).toMatchObject({
 			status: 409,
-			code: 'ambiguous_guild_member'
+			code: 'ambiguous_guild_member',
+			requestId
 		});
+		expect(guildRecordsErrorText(conflictError)).toBe(
+			`같은 이름의 길드 멤버가 여러 명입니다. (요청 ID: ${requestId})`
+		);
 
 		const malformed = vi.fn(async () => envelope({ ...snapshot, internalUserId: 'secret' }));
 		await expect(fetchGuildRecords(malformed, guildId, { query: 'Longcat' })).rejects.toMatchObject(

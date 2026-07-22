@@ -63,7 +63,12 @@ function snapshot() {
 			}
 		],
 		draft: { currentTarget: null, currentTargetProfile: null, unsold: [], recentAction: null },
-		permissions: { canManageDraft: true, canManageBracket: false, canRevertLast: false, canCancel: true }
+		permissions: {
+			canManageDraft: true,
+			canManageBracket: false,
+			canRevertLast: false,
+			canCancel: true
+		}
 	};
 }
 
@@ -82,7 +87,7 @@ describe('auction tournament draft page server load', () => {
 			url: new URL(`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/draft`)
 		} as never);
 
-		expect(parent).toHaveBeenCalledOnce();
+		expect(parent).not.toHaveBeenCalled();
 		expect(String(fetcher.mock.calls[0]?.[0])).toBe(
 			`/api/guilds/${guildId}/auction-tournaments/${tournamentId}`
 		);
@@ -90,7 +95,12 @@ describe('auction tournament draft page server load', () => {
 			guildId,
 			snapshot: {
 				tournament: { id: tournamentId, revision: 7 },
-				permissions: { canManageDraft: true, canManageBracket: false, canRevertLast: false, canCancel: true }
+				permissions: {
+					canManageDraft: true,
+					canManageBracket: false,
+					canRevertLast: false,
+					canCancel: true
+				}
 			}
 		});
 	});

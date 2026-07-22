@@ -127,9 +127,7 @@
 		>
 			<span class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
 				<span class="min-w-0">
-					<span
-						class={`block truncate font-semibold ${emphasis ? 'text-xl' : 'text-base'}`}
-					>
+					<span class={`block truncate font-semibold ${emphasis ? 'text-xl' : 'text-base'}`}>
 						{team?.teamName ?? (emphasis ? '승자 대기' : '팀 대기')}
 					</span>
 					{#if team}
@@ -165,9 +163,7 @@
 	<article
 		class={`group relative grid min-w-0 overflow-hidden border bg-[var(--color-app-surface)] transition ${
 			emphasis ? 'border-amber-300/25' : 'border-cyan-400/25'
-		} ${
-			playable ? 'cursor-pointer hover:border-cyan-300/45' : ''
-		}`}
+		} ${playable ? 'cursor-pointer hover:border-cyan-300/45' : ''}`}
 	>
 		<header
 			class="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--color-app-border-muted)] px-3 py-2"
@@ -203,9 +199,7 @@
 	<article
 		class={`group relative grid min-w-0 overflow-hidden border bg-[var(--color-app-surface)] transition ${
 			emphasis ? 'border-amber-300/25' : 'border-cyan-400/25'
-		} ${
-			playable ? 'cursor-pointer hover:border-cyan-300/45' : ''
-		}`}
+		} ${playable ? 'cursor-pointer hover:border-cyan-300/45' : ''}`}
 	>
 		<header
 			class="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--color-app-border-muted)] px-3 py-2"
@@ -340,7 +334,9 @@
 			</div>
 		{/if}
 	{:else}
-		<div class="grid min-h-48 place-items-center px-4 text-center text-sm font-semibold text-slate-500">
+		<div
+			class="grid min-h-48 place-items-center px-4 text-center text-sm font-semibold text-slate-500"
+		>
 			표시할 대진 정보가 없습니다.
 		</div>
 	{/if}

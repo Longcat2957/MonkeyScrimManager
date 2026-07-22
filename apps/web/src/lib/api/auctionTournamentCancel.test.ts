@@ -60,9 +60,7 @@ describe('auction tournament cancel API client', () => {
 		);
 
 		const [path, init] = fetcher.mock.calls[0]!;
-		expect(path).toBe(
-			`/api/guilds/${guildId}/auction-tournaments/${tournamentId}/cancel-preview`
-		);
+		expect(path).toBe(`/api/guilds/${guildId}/auction-tournaments/${tournamentId}/cancel-preview`);
 		expect(init).toMatchObject({ credentials: 'same-origin' });
 		expect(new Headers(init?.headers).get('accept')).toBe('application/json');
 	});

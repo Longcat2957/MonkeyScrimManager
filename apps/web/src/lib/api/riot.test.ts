@@ -5,6 +5,7 @@ import {
 	fetchRiotAccounts,
 	parseRiotIdInput,
 	refreshAccount,
+	riotErrorText,
 	setMainAccount
 } from './riot';
 import type { RiotAccount } from '$lib/contracts/workflow';
@@ -142,12 +143,15 @@ describe('Riot account API client', () => {
 			)
 		);
 		installBrowser(backendFailure);
-		await expect(refreshAccount(mainAccount.puuid)).rejects.toMatchObject({
+		const backendError = await refreshAccount(mainAccount.puuid).catch((cause) => cause);
+		expect(backendError).toMatchObject({
 			name: 'RiotApiError',
 			message: '잠시 후 다시 시도해 주세요.',
 			status: 429,
-			code: 'riot_rate_limited'
+			code: 'riot_rate_limited',
+			requestId
 		});
+		expect(riotErrorText(backendError)).toBe(`잠시 후 다시 시도해 주세요. (요청 ID: ${requestId})`);
 
 		const invalidSuccess = fetchMock(() => Response.json({ data: {}, meta: { requestId } }));
 		vi.stubGlobal('fetch', invalidSuccess);

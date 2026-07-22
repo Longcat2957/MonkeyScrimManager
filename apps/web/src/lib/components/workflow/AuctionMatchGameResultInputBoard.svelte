@@ -72,17 +72,15 @@
 		BLUE: toBoardTeam('BLUE', resultTeams[0]),
 		RED: toBoardTeam('RED', resultTeams[1])
 	}));
-	const currentGame = $derived.by(
-		(): ScrimPickBanResultInputGame => ({
-			id: `${snapshot.match.id}:set:${nextSetNumber}`,
-			label: `${nextSetNumber}세트`,
-			sidePreset: 'DEFAULT',
-			sideSelected: false,
-			winner: null,
-			bans: emptyBans(),
-			picks: Object.fromEntries(snapshot.lineups.map((lineup) => [lineup.userId, null]))
-		})
-	);
+	const currentGame = $derived.by((): ScrimPickBanResultInputGame => ({
+		id: `${snapshot.match.id}:set:${nextSetNumber}`,
+		label: `${nextSetNumber}세트`,
+		sidePreset: 'DEFAULT',
+		sideSelected: false,
+		winner: null,
+		bans: emptyBans(),
+		picks: Object.fromEntries(snapshot.lineups.map((lineup) => [lineup.userId, null]))
+	}));
 	const previousPickChampionIds = $derived(
 		snapshot.games.flatMap((game) =>
 			Object.values(game.picks).filter((championId): championId is string => championId !== null)
@@ -107,7 +105,10 @@
 		return { BLUE: [null, null, null, null, null], RED: [null, null, null, null, null] };
 	}
 
-	function toBoardTeam(side: Side, team: AuctionMatchResultTeam | undefined): ScrimPickBanResultInputTeam {
+	function toBoardTeam(
+		side: Side,
+		team: AuctionMatchResultTeam | undefined
+	): ScrimPickBanResultInputTeam {
 		return {
 			side,
 			name: team?.teamName ?? `${side} 팀`,
@@ -123,7 +124,9 @@
 		};
 	}
 
-	function teamsForConfirmedGame(game: AuctionMatchConfirmedGame): Record<Side, ScrimPickBanResultInputTeam> {
+	function teamsForConfirmedGame(
+		game: AuctionMatchConfirmedGame
+	): Record<Side, ScrimPickBanResultInputTeam> {
 		const leftSide: Side = game.sidePreset === 'DEFAULT' ? 'BLUE' : 'RED';
 		return {
 			BLUE: toBoardTeam('BLUE', leftSide === 'BLUE' ? resultTeams[0] : resultTeams[1]),
@@ -247,7 +250,9 @@
 
 	{#if snapshot.match.status === 'COMPLETED' && selectedCompletedGame && resultTeams.length === 2}
 		{@const gameTeams = teamsForConfirmedGame(selectedCompletedGame)}
-		<section class="overflow-hidden border border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)]">
+		<section
+			class="overflow-hidden border border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)]"
+		>
 			<header
 				class="flex min-h-11 items-center justify-between gap-3 border-b border-[var(--color-app-border-muted)] px-3"
 			>

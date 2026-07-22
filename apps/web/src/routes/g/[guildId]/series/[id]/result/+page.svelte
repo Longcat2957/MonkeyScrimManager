@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
-	import { LoaderCircle, RefreshCw, Trash2, Undo2, X } from 'lucide-svelte';
+	import { ArrowLeft, LoaderCircle, RefreshCw, Trash2, Undo2, X } from 'lucide-svelte';
 	import {
 		deleteSeries,
 		isSeriesPickBanRevisionConflict,
@@ -10,8 +11,10 @@
 	} from '$lib/api/seriesPickBan';
 	import { createOperationIdempotencyKeys } from '$lib/api/operationIdempotency';
 	import { fetchSeriesResult, seriesResultErrorText } from '$lib/api/seriesResult';
+	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import SeriesResultLedgerBoard from '$lib/components/workflow/SeriesResultLedgerBoard.svelte';
 	import type { SeriesResultSnapshot } from '$lib/contracts/seriesResult';
+	import { formatSeriesRules } from '$lib/workflow/seriesRules';
 	import type { PageProps } from './$types';
 
 	type ResultMutation = 'revertLastGame' | 'delete';
@@ -37,6 +40,11 @@
 	const isMutating = $derived(mutation !== null);
 	const canRevertLastGame = $derived(Boolean(snapshot?.capabilities.canRevertLastGame));
 	const canDelete = $derived(Boolean(snapshot?.capabilities.canDelete));
+	const resultDescription = $derived(
+		snapshot
+			? `${snapshot.series.title} · ${formatSeriesRules(snapshot.series.bestOf, snapshot.series.hardFearless)} · #${snapshot.series.displayNumber} · ${resultStatusLabel(snapshot.series.terminalReason)}${snapshot.series.endedAt ? ` · ${snapshot.series.endedAt.slice(0, 10)} 종료` : ''}`
+			: '완료된 내전의 세트 결과와 MMR 정산'
+	);
 
 	$effect(() => {
 		const route = currentResultRoute();
@@ -72,6 +80,12 @@
 		deleteError = '';
 		idempotencyKeys.invalidate('series-result-revert-last-game');
 		idempotencyKeys.invalidate('series-result-delete');
+	}
+
+	function resultStatusLabel(terminalReason: string | null): string {
+		if (terminalReason === 'EARLY_WIN') return '조기 종료 · 승리 처리';
+		if (terminalReason === 'EARLY_DRAW') return '조기 종료 · 무승부';
+		return '완료';
 	}
 
 	async function loadResult(route = currentResultRoute()) {
@@ -208,52 +222,16 @@
 	<title>시리즈 결과 | MonkeyBot</title>
 </svelte:head>
 
-{#if loading && !snapshot}
-	<section
-		class="flex min-h-56 items-center justify-center border border-[var(--color-app-border)] bg-[var(--color-app-surface)] px-4 text-center"
-		aria-busy="true"
-	>
-		<div class="grid justify-items-center gap-2 text-sm font-semibold text-slate-400">
-			<LoaderCircle size={20} class="animate-spin text-cyan-200" aria-hidden="true" />
-			시리즈 결과를 불러오는 중입니다.
-		</div>
-	</section>
-{:else if !snapshot}
-	<section
-		class="grid min-h-56 place-items-center border border-rose-400/25 bg-rose-500/[0.035] px-4 text-center"
-	>
-		<div class="max-w-xl">
-			<p class="text-sm font-semibold text-rose-100">시리즈 결과를 불러오지 못했습니다.</p>
-			<p class="mt-2 break-words text-xs leading-5 text-rose-200">{loadError}</p>
-			<button
-				type="button"
-				onclick={() => void loadResult()}
-				class="mt-4 inline-flex h-8 items-center gap-1.5 border border-rose-300/30 px-3 text-xs font-semibold text-rose-100 hover:bg-rose-500/10"
-			>
-				<RefreshCw size={14} aria-hidden="true" /> 다시 시도
-			</button>
-		</div>
-	</section>
-{:else}
-	<div class="space-y-3">
-		{#if mutationError}
-			<p
-				class="border border-rose-400/25 bg-rose-500/[0.07] px-3 py-2 text-xs leading-5 font-semibold break-words text-rose-200"
-				aria-live="assertive"
-			>
-				{mutationError}
-			</p>
-		{/if}
-		{#if mutationNotice}
-			<p
-				class="border border-cyan-300/20 bg-cyan-400/[0.055] px-3 py-2 text-xs leading-5 font-semibold break-words text-cyan-100"
-				aria-live="polite"
-			>
-				{mutationNotice}
-			</p>
-		{/if}
-		{#if canRevertLastGame || canDelete}
+<div class="space-y-4">
+	<WorkspaceHeader kicker="일반 내전" title="시리즈 결과" description={resultDescription}>
+		{#snippet actions()}
 			<div class="flex flex-wrap items-center justify-end gap-2">
+				<a
+					href={resolve('/g/[guildId]/series', { guildId: data.guildId })}
+					class="inline-flex h-10 items-center gap-1.5 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-semibold text-slate-300 hover:bg-[var(--color-app-hover)] hover:text-slate-100"
+				>
+					<ArrowLeft size={14} aria-hidden="true" /> 내전 목록
+				</a>
 				{#if canRevertLastGame}
 					<button
 						type="button"
@@ -285,10 +263,55 @@
 					</button>
 				{/if}
 			</div>
+		{/snippet}
+	</WorkspaceHeader>
+
+	{#if loading && !snapshot}
+		<section
+			class="flex min-h-56 items-center justify-center border border-[var(--color-app-border)] bg-[var(--color-app-surface)] px-4 text-center"
+			aria-busy="true"
+		>
+			<div class="grid justify-items-center gap-2 text-sm font-semibold text-slate-400">
+				<LoaderCircle size={20} class="animate-spin text-cyan-200" aria-hidden="true" />
+				시리즈 결과를 불러오는 중입니다.
+			</div>
+		</section>
+	{:else if !snapshot}
+		<section
+			class="grid min-h-56 place-items-center border border-rose-400/25 bg-rose-500/[0.035] px-4 text-center"
+		>
+			<div class="max-w-xl">
+				<p class="text-sm font-semibold text-rose-100">시리즈 결과를 불러오지 못했습니다.</p>
+				<p class="mt-2 break-words text-xs leading-5 text-rose-200">{loadError}</p>
+				<button
+					type="button"
+					onclick={() => void loadResult()}
+					class="mt-4 inline-flex h-8 items-center gap-1.5 border border-rose-300/30 px-3 text-xs font-semibold text-rose-100 hover:bg-rose-500/10"
+				>
+					<RefreshCw size={14} aria-hidden="true" /> 다시 시도
+				</button>
+			</div>
+		</section>
+	{:else}
+		{#if mutationError}
+			<p
+				class="border border-rose-400/25 bg-rose-500/[0.07] px-3 py-2 text-xs leading-5 font-semibold break-words text-rose-200"
+				aria-live="assertive"
+			>
+				{mutationError}
+			</p>
+		{/if}
+		{#if mutationNotice}
+			<p
+				class="border border-cyan-300/20 bg-cyan-400/[0.055] px-3 py-2 text-xs leading-5 font-semibold break-words text-cyan-100"
+				aria-live="polite"
+			>
+				{mutationNotice}
+			</p>
 		{/if}
 		<SeriesResultLedgerBoard catalog={data.championCatalog} {snapshot} />
-	</div>
-{/if}
+	{/if}
+</div>
 
 <Dialog.Root bind:open={revertLastGameDialogOpen}>
 	<Dialog.Portal>

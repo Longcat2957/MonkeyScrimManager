@@ -484,7 +484,7 @@ row:
 
 ```text
 id
-kind       ENTRY | PICK_BAN | RESULT | AUCTION
+kind       ENTRY | PICK_BAN | AUCTION
 title
 status
 detail
@@ -493,9 +493,9 @@ href
 priority   urgent | normal
 ```
 
-MVP에서 이 route는 WebSocket을 사용하지 않는다.
-`kind=RESULT`인 actionable row의 href는 game 입력이 있는
-`/g/{guildId}/series/{seriesId}/pick-ban`이다. 완료된 원장 링크만 `/result`를 사용한다.
+MVP에서 이 route는 WebSocket을 사용하지 않는다. 일반 내전의 pick-ban과 game 결과 입력은 모두
+`kind=PICK_BAN`이며 href는 `/g/{guildId}/series/{seriesId}/pick-ban`이다. 완료된 원장 링크만 `/result`를
+사용한다.
 
 ## 일반 내전
 

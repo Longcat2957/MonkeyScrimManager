@@ -33,4 +33,9 @@ describe('general series page', () => {
 		expect(source).not.toContain('await goto(created.links.entry)');
 		expect(source).not.toContain("['guilds', data.guildId, 'recruitments', 'manual']");
 	});
+
+	it('uses the presentation-provided next action instead of a generic work link', () => {
+		expect(source).toContain('{item.actionLabel}');
+		expect(source).not.toContain('작업 열기');
+	});
 });

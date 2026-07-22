@@ -5,6 +5,7 @@
 		deleteAccount,
 		parseRiotIdInput,
 		refreshAccount,
+		riotErrorText,
 		setMainAccount
 	} from '$lib/api/riot';
 	import { riotProfileIconUrl, DEFAULT_PROFILE_ICON_VERSION } from '$lib/datadragon';
@@ -49,10 +50,6 @@
 		return `${Math.floor(seconds / (86400 * 7))}주 전`;
 	}
 
-	function messageFrom(error: unknown, fallback: string): string {
-		return error instanceof Error ? error.message : fallback;
-	}
-
 	async function addAccount(event: globalThis.SubmitEvent) {
 		event.preventDefault();
 		if (busy) return;
@@ -81,7 +78,7 @@
 			riotId = '';
 			notice = `${created ? formatRiotId(created) : `${parsed.gameName}#${parsed.tagLine}`} 연결됨`;
 		} catch (addError) {
-			error = messageFrom(addError, '계정 연결 처리 중 오류가 발생했습니다.');
+			error = riotErrorText(addError);
 		} finally {
 			creating = false;
 		}
@@ -97,7 +94,7 @@
 			const main = accounts.find((account) => account.puuid === puuid);
 			notice = main ? `${formatRiotId(main)} 메인 지정됨` : '메인 계정이 변경되었습니다.';
 		} catch (err) {
-			error = messageFrom(err, '메인 지정 중 오류가 발생했습니다.');
+			error = riotErrorText(err);
 		} finally {
 			actioningPuuid = null;
 		}
@@ -113,7 +110,7 @@
 			const refreshed = accounts.find((account) => account.puuid === puuid);
 			notice = refreshed ? `${formatRiotId(refreshed)} 동기화됨` : '계정이 동기화되었습니다.';
 		} catch (err) {
-			error = messageFrom(err, '동기화 중 오류가 발생했습니다.');
+			error = riotErrorText(err);
 		} finally {
 			actioningPuuid = null;
 		}
@@ -130,7 +127,7 @@
 			pendingDeletePuuid = null;
 			notice = deleting ? `${formatRiotId(deleting)} 연결 해제됨` : '연결 해제됨';
 		} catch (err) {
-			error = messageFrom(err, '연결 해제 중 오류가 발생했습니다.');
+			error = riotErrorText(err);
 		} finally {
 			actioningPuuid = null;
 		}

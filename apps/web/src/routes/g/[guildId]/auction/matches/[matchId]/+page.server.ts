@@ -1,6 +1,6 @@
 import { resolve } from '$app/paths';
 import { redirect } from '@sveltejs/kit';
-import { loadChampionCatalog, STATIC_CHAMPION_FIXTURE_URL } from '$lib/datadragon';
+import { loadCachedChampionCatalog, STATIC_CHAMPION_FIXTURE_URL } from '$lib/datadragon';
 import {
 	auctionTournamentBracketSnapshotSchema,
 	type AuctionTournamentBracketSnapshot
@@ -30,9 +30,7 @@ function requiresTournamentLineupStage(
 	return semifinals.length !== 2 || !semifinals.every((match) => match.lineupsLocked);
 }
 
-export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
-	await parent();
-
+export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	const snapshot = await apiGet(
 		fetch,
 		apiRoute(['guilds', params.guildId, 'auction-matches', params.matchId]),
@@ -43,7 +41,13 @@ export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
 	if (snapshot.match.matchKey === 'SEMIFINAL_A' || snapshot.match.matchKey === 'SEMIFINAL_B') {
 		const bracket = await apiGet(
 			fetch,
-			apiRoute(['guilds', params.guildId, 'auction-tournaments', snapshot.match.tournamentId, 'bracket']),
+			apiRoute([
+				'guilds',
+				params.guildId,
+				'auction-tournaments',
+				snapshot.match.tournamentId,
+				'bracket'
+			]),
 			auctionTournamentBracketSnapshotSchema,
 			{ url }
 		);
@@ -58,7 +62,9 @@ export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
 		}
 	}
 
-	const championCatalog = await loadChampionCatalog(fetch, { fixtureUrl: STATIC_CHAMPION_FIXTURE_URL });
+	const championCatalog = await loadCachedChampionCatalog(fetch, {
+		fixtureUrl: STATIC_CHAMPION_FIXTURE_URL
+	});
 
 	return {
 		guildId: params.guildId,

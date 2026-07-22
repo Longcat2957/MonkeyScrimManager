@@ -120,7 +120,9 @@ export function matchScrimPickBanBulkInputChampion(
 	if (exact.length > 1) return ambiguousChampionMatch(token, exact);
 
 	const prefix = uniqueChampionMatches(
-		champions.filter((champion) => championTokens(champion).some((value) => value.startsWith(query)))
+		champions.filter((champion) =>
+			championTokens(champion).some((value) => value.startsWith(query))
+		)
 	);
 	if (prefix.length === 1) return { champion: prefix[0]!, error: null };
 	if (prefix.length > 1) return ambiguousChampionMatch(token, prefix);
@@ -213,7 +215,7 @@ export function buildScrimPickBanBulkInputPlan(
 	}));
 	const operations = candidates
 		.map((candidate) => candidate.operation)
-	.filter((operation): operation is SeriesPickBanBulkItem => operation !== null);
+		.filter((operation): operation is SeriesPickBanBulkItem => operation !== null);
 	const hasValidationErrors = fields.some((field) =>
 		field.feedback.some((feedback) => feedback.severity === 'error')
 	);
@@ -275,7 +277,9 @@ function targetsForDefinition(
 		}));
 	}
 
-	const playersByLane = new Map(teams[definition.side].players.map((player) => [player.lane, player]));
+	const playersByLane = new Map(
+		teams[definition.side].players.map((player) => [player.lane, player])
+	);
 	const targets = laneOrder.map((lane) => playersByLane.get(lane));
 	if (targets.some((player) => !player)) return null;
 
@@ -358,9 +362,14 @@ function validateFinalChampionState({
 	}
 
 	if (!hardFearless) return;
-	const previous = new Set(previousPickChampionIds.map(normalizeScrimPickBanResultInputChampionName));
+	const previous = new Set(
+		previousPickChampionIds.map(normalizeScrimPickBanResultInputChampionName)
+	);
 	for (const candidate of candidates) {
-		if (!candidate.operation || !previous.has(normalizeScrimPickBanResultInputChampionName(candidate.championId))) {
+		if (
+			!candidate.operation ||
+			!previous.has(normalizeScrimPickBanResultInputChampionName(candidate.championId))
+		) {
 			continue;
 		}
 		addCandidateError(
@@ -378,7 +387,10 @@ function addCandidateError(
 ) {
 	const feedback = feedbackByField.get(candidate.fieldKey);
 	if (!feedback?.some((item) => item.severity === 'error' && item.message === message)) {
-		feedback?.push({ severity: 'error', message: `${candidate.tokenIndex + 1}번째 항목: ${message}` });
+		feedback?.push({
+			severity: 'error',
+			message: `${candidate.tokenIndex + 1}번째 항목: ${message}`
+		});
 	}
 }
 

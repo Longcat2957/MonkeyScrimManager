@@ -4,6 +4,7 @@ import {
 	championIconUrl,
 	createChampionCatalog,
 	findChampion,
+	loadCachedChampionCatalog,
 	loadChampionCatalog,
 	normalizeChampionSlug,
 	searchChampions
@@ -92,5 +93,40 @@ describe('Data Dragon champion helpers', () => {
 		expect(fetcher).toHaveBeenNthCalledWith(1, '/dd/api/versions.json');
 		expect(fetcher).toHaveBeenNthCalledWith(2, '/fixtures/datadragon/champion-ko_KR.fixture.json');
 		expect(catalog.version).toBe('14.24.1');
+	});
+
+	it('deduplicates concurrent catalog loads for the same public resource', async () => {
+		const fetcher = vi.fn(async () => Response.json(championResponse));
+		const options = {
+			version: '14.24.1',
+			proxyRoot: '/dd/cache-deduplication'
+		};
+
+		const [first, second] = await Promise.all([
+			loadCachedChampionCatalog(fetcher, options),
+			loadCachedChampionCatalog(fetcher, options)
+		]);
+
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect(first).toBe(second);
+	});
+
+	it('evicts a failed catalog load so a later request can recover', async () => {
+		const fetcher = vi
+			.fn()
+			.mockRejectedValueOnce(new Error('temporary transport failure'))
+			.mockResolvedValueOnce(Response.json(championResponse));
+		const options = {
+			version: '14.24.1',
+			proxyRoot: '/dd/cache-recovery'
+		};
+
+		await expect(loadCachedChampionCatalog(fetcher, options)).rejects.toThrow(
+			'temporary transport failure'
+		);
+		await expect(loadCachedChampionCatalog(fetcher, options)).resolves.toMatchObject({
+			version: '14.24.1'
+		});
+		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 });

@@ -5,9 +5,7 @@ import {
 import { apiGet, apiRoute } from '$lib/server/api';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
-	await parent();
-
+export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	const [recruitmentData, activeTournamentData, completedTournamentData] = await Promise.all([
 		apiGet(
 			fetch,

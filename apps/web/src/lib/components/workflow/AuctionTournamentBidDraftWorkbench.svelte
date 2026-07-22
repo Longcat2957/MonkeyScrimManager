@@ -62,9 +62,7 @@
 	);
 	const canRevert = $derived(snapshot.permissions.canRevertLast && !submitting);
 	const revertLabel = $derived(
-		snapshot.tournament.status === 'BRACKET_SETUP'
-			? '입찰 단계로 되돌리기'
-			: '마지막 입찰 되돌리기'
+		snapshot.tournament.status === 'BRACKET_SETUP' ? '입찰 단계로 되돌리기' : '마지막 입찰 되돌리기'
 	);
 
 	function playerInitial(displayName: string): string {
@@ -364,7 +362,8 @@
 								class="inline-flex h-9 items-center gap-1.5 rounded-sm px-3 text-sm font-semibold text-amber-100 hover:bg-amber-400/10"
 								onclick={openRevertDialog}
 							>
-								<Undo2 size={14} aria-hidden="true" /> {revertLabel}
+								<Undo2 size={14} aria-hidden="true" />
+								{revertLabel}
 							</button>
 						{/if}
 						<button
@@ -1013,8 +1012,7 @@
 			</div>
 			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
 				{#if snapshot.tournament.status === 'BRACKET_SETUP'}
-					마지막 입찰 작업과 해당 선수 배치·포인트를 되돌리고, 토너먼트를 입찰 단계로
-					복구합니다.
+					마지막 입찰 작업과 해당 선수 배치·포인트를 되돌리고, 토너먼트를 입찰 단계로 복구합니다.
 				{:else}
 					가장 최근 입찰 작업과 해당 선수 배치·포인트를 함께 되돌립니다.
 				{/if}
@@ -1032,7 +1030,8 @@
 					onclick={() => void revertLastAction()}
 					class="inline-flex h-8 items-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 enabled:hover:bg-amber-400/16 disabled:cursor-not-allowed disabled:opacity-35"
 				>
-					<Undo2 size={14} aria-hidden="true" /> {revertLabel}
+					<Undo2 size={14} aria-hidden="true" />
+					{revertLabel}
 				</button>
 			</div>
 		</Dialog.Content>

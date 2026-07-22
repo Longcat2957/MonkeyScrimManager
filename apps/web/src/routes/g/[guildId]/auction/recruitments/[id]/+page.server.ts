@@ -2,9 +2,7 @@ import { auctionRecruitmentSnapshotSchema } from '$lib/contracts/auctionRecruitm
 import { apiGet, apiRoute } from '$lib/server/api';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ fetch, params, parent, url }) => {
-	await parent();
-
+export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	const snapshot = await apiGet(
 		fetch,
 		apiRoute(['guilds', params.guildId, 'auction-recruitments', params.id]),

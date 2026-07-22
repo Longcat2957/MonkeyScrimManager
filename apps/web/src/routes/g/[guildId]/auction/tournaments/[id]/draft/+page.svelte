@@ -163,9 +163,10 @@
 			realtimeConflict = true;
 			mutationError = `입찰 최신 상태를 불러오지 못했습니다. ${auctionTournamentDraftErrorText(cause)}`;
 		} finally {
-			if (!isCurrentAuctionDraftRoute(route)) return;
-			realtimeRefreshing = false;
-			void flushRealtimeSnapshotRefresh(route);
+			if (isCurrentAuctionDraftRoute(route)) {
+				realtimeRefreshing = false;
+				void flushRealtimeSnapshotRefresh(route);
+			}
 		}
 	}
 

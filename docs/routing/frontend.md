@@ -134,6 +134,11 @@ Backend 데이터:
 
 - 현재 guild에서 입력해야 하는 편성, 픽밴, 결과, 경매 작업을 우선순위 순으로 확인한다.
 - guild 전적 화면과 각 작업 route로 바로 이동한다.
+- API `status`는 presentation adapter에서 `엔트리 편성`, `픽밴 진행`, `경매 준비`, `입찰 진행`, `대진 설정`,
+  `대진 확인`, `결과 입력` action으로 변환한다. 알 수 없는 후속 경매 status는 canonical href를 유지한
+  `경매 진행`으로 표시한다.
+- `priority=urgent`는 warning tone, `normal`은 info tone으로 표시한다. 긴급 건수는 1건 이상일 때만 의미가
+  드러나는 label과 함께 표시한다.
 
 Backend 데이터:
 
@@ -146,21 +151,30 @@ WebSocket: 사용하지 않는다.
 파일:
 
 - `apps/web/src/routes/+layout.svelte`
+- `apps/web/src/lib/components/layout/AppRouteShell.svelte`
+- `apps/web/src/routes/{admin,dd,dev,docs,g,me,privacy,records,terms,users}/+layout.svelte`
 
 목적:
 
-- 공통 shell, navigation, auth bootstrap, toast/overlay root.
+- 루트 layout은 전역 CSS와 기본 head만 소유하고 모든 route children을 그대로 렌더링한다.
+- app 최상위 layout은 `AppRouteShell`을 통해 공통 shell과 navigation을 한 번 배치한다.
 - 로그인 상태와 현재 권한 요약을 표시한다.
-- 오른쪽 guild selector가 현재 `guildId` context를 표시하고 서버 전환 시 해당 guild dashboard로 이동한다.
-- 모집 마감 상태는 `내전` 메뉴에 포함하고, `전적`, `랭킹`, `관리`는 현재 guild 기준 route를 사용한다.
+- 로고와 오른쪽 guild selector가 현재 `guildId` context를 유지하며, 로고 클릭과 서버 전환 시 해당 guild dashboard로 이동한다.
+- `/series/**`와 `/recruitments/**`는 모두 `내전` 메뉴의 활성 경로로 표시하고, `전적`, `랭킹`, `관리`는 현재 guild 기준 route를 사용한다.
+- 전역 업무 메뉴의 활성 링크는 시각 상태와 `aria-current="page"`를 함께 제공한다.
 - `관리`는 현재 guild의 operator에게만 노출하고 `/g/[guildId]/admin`으로 이동한다.
-- `QuickActionFab`을 전역 배치해 미니게임과 타이머를 연다.
-- `/landing`과 `/install`은 공개 페이지이므로 AppShell 대신 독립 header/footer를 렌더링한다.
+- 검색 자동완성 실패는 backend의 public message와 request ID를 검색 panel 안에 표시하며, transport 실패는
+  내부 응답 내용을 노출하지 않는 연결 실패 사유로 정규화한다.
+- `QuickActionFab`을 app shell에 배치하고 미니게임과 타이머 chunk는 사용자가 선택할 때 로드한다.
+- `/landing`과 `/install`은 공개 페이지이므로 AppShell dependency 없이 독립 header/footer를 렌더링한다.
 
 주의:
 
 - route-specific 데이터를 root layout에 과하게 올리지 않는다.
 - protected data는 각 page load 또는 API client에서 다시 검증한다.
+- guild page server load가 parent data를 사용하지 않으면 `parent()`를 기다리지 않는다. app page API와 guild
+  context layout API를 병렬로 실행하되, admin operator 판정처럼 parent 결과가 필요한 layout은 명시적으로
+  기다린다.
 
 ### `+error.svelte`
 
@@ -374,6 +388,8 @@ revision의 invalidate, reconnect, browser focus, `resync_required`에서만 aut
 목적:
 
 - 상단에는 엔트리 모집, 엔트리 편성, 픽밴, 결과 입력 상태를 일반 내전 작업 목록으로 보여준다.
+- 각 진행 row의 action은 generic `작업 열기` 대신 `모집 관리`, `엔트리 편성`, `픽밴 진행`처럼
+  해당 route에서 이어갈 작업을 직접 표시한다.
 - 하단에는 완료된 일반 내전을 최신 순으로 보여준다.
 - pick-ban 또는 result route로 이동한다.
 - `RESULT`처럼 아직 game 입력이 필요한 작업은 pick-ban route로 이동하고, 완료된 row만 result
@@ -470,7 +486,9 @@ Backend 데이터:
 
 완료 series만 렌더링한다. operator에게만 `canRevertLastGame` 또는 `canDelete`가 true이면 확인 dialog와
 game/lifecycle mutation control을 제공한다. 마지막 game revert가 성공해 series가 `IN_PROGRESS`로 바뀌면
-response `nextHref`를 사용해 `/pick-ban`으로 이동한다.
+response `nextHref`를 사용해 `/pick-ban`으로 이동한다. 시리즈 제목, 저장된 규칙, 완료 사유와 종료일은
+route `WorkspaceHeader`에서 한 번만 표시하고, ledger는 스코어·세트·MMR 정산에 집중한다. 헤더의 `내전 목록`
+링크는 같은 guild의 `/series`로 돌아간다.
 
 WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 
@@ -486,8 +504,10 @@ WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 
 - 상단에는 경매 모집과 진행 중 경매 토너먼트, 하단에는 완료된 경매를 표시한다.
 - 팀장 설정, 입찰 진행, 브래킷 진행, 결과 입력, 결과 확정 상태를 구분한다.
-- `IN_GAME` row는 현재 작업을 여는 primary link와 read-only `토너먼트 현황` link를 함께 제공한다.
-  진행 현황은 active guild member가 같은 브래킷 화면에서 경기 점수·승자·팀 구성을 확인하는 read-only route다.
+- 각 row의 action은 generic `작업 열기` 대신 `모집 관리`, `경매 준비`, `입찰 진행`, `대진 설정`,
+  `경기 선택`처럼 현재 단계의 다음 작업을 직접 표시한다.
+- `IN_GAME` row는 read-only 토너먼트 현황을 먼저 열고, 그 브래킷에서 canonical match 작업대를 선택한다.
+  진행 현황은 active guild member가 같은 화면에서 경기 점수·승자·팀 구성을 확인하는 route다.
 - actionable 모집, 진행 중 tournament, 완료/보관 tournament는 각각 독립 `nextCursor`를 가진다. 각
   section의 `더 불러오기`는 해당 cursor만 이어 읽고 ID 기준으로 중복을 제거한다. 진행 중 section은 모집과
   tournament cursor가 모두 남아 있으면 둘을 함께 읽은 뒤 같은 작업 목록으로 병합한다.
@@ -721,6 +741,7 @@ canonical match snapshot을 다시 읽는다.
   확인할 수 있다. match score, 승자와 canonical match 진입점은 같은 대진 카드에 둔다.
 - 진행 중에는 경매 목록, 브래킷, `READY`/`IN_PROGRESS` match 작업대에서 이 route로 이동한다. 현재 작업을
   바꾸는 control은 각 canonical match route에 남긴다.
+- route header의 `경매 목록`은 같은 guild의 경매 작업 목록으로 돌아간다.
 - `IN_GAME`이고 result snapshot의 `permissions.canRecoverBracket=true`이면 active operator에게만 `대진 확정
 해제` 확인 control을 보인다. 성공 시 `/bracket`의 편집 단계로 이동한다. 결과가 기록된 이후의 복구는
   canonical match route에서 마지막 game을 먼저 되돌려야 하며, result route가 범용 rollback을 만들지 않는다.
@@ -770,6 +791,8 @@ season 통계와 기록의 empty state를 표시한다. 존재하지 않거나 �
 projection하므로 client가 MMR이나 change를 추론하지 않는다. Champion 사용 기록은 champion+lane별 row다.
 일반/경매, lane 버튼은 현재 읽은 `records` page에 대한 local filter이며 query parameter를 추가하지 않는다.
 `더 보기`는 현재 `q`와 season selection을 유지하고 `nextCursor`만 보내 append/dedupe한다.
+초기 조회와 추가 페이지 실패는 API error code를 client error에 보존하고 public message와 request ID를 같은
+오류 상태에 표시한다. 반복되거나 이미 소비한 cursor는 추가 요청을 중단한다.
 
 Outer `SERIES`는 일반과 10인 경매를 기존 series row/expand UI로 렌더링한다. `TOURNAMENT`는 20인 경매
 한 건이며 내부 series selector와 game detail을 유지한다. API timestamp와 `WIN|LOSS|DRAW`,
@@ -803,6 +826,8 @@ Backend 데이터:
 
 Navbar/UI의 `GameName#TagLine`은 frontend adapter에서 마지막 `#` 기준으로 두 query field로 나눈다.
 Browser는 같은 origin의 `/api/**`만 호출하고 Riot key, PUUID, regional routing을 만들지 않는다.
+명시 갱신과 최근 경기 더보기는 서로 독립적인 busy/error state를 사용하며, public API message와 request ID를
+alert로 표시한다. 전적이 없는 정상 상태와 요청 실패를 같은 문구로 합치지 않는다.
 
 WebSocket: 사용하지 않는다.
 
@@ -841,6 +866,7 @@ Backend 데이터:
 `+page.server.ts`가 인증 cookie를 전달해 snapshot을 한 번 읽는다. 활성 season이 없으면
 `season=null, players=[]`을 정상 empty state로 표시한다. API의 `stats`는 실제 game이 한 건 이상인 lane만
 포함하며, Riot ID와 profile icon은 backend가 적용한 `show_riot_ids` projection을 그대로 신뢰한다.
+조회 실패는 정상 empty state와 분리하고 backend public message와 request ID를 표시한다.
 
 통합/라인 탭, player 검색, 고정 25명 단위의 local pagination, MMR 정렬, 순위와 승률은 읽은 전체
 snapshot 위에서 `LeaderboardBoard`가 local state로 처리한다. 순위는 페이지마다 다시 매기지 않으며,
@@ -884,6 +910,8 @@ Backend 데이터:
 계정 추가는 `{ gameName, tagLine, platform }`만 보내며 backend가 PUUID와 canonical identity를 확인한다.
 Riot account mutation은 모두 최신 `{ riotAccounts: [...] }` snapshot을 반환하므로 mutation 직후 별도 GET이나
 client-side main account 추론을 하지 않는다.
+선호 챔피언, Riot 계정, 대표 길드, 개인정보 mutation 실패는 각 API error의 안정적인 code를 보존하고
+public message와 request ID를 해당 tab의 alert에 표시한다.
 
 WebSocket: 사용하지 않는다.
 
@@ -1043,8 +1071,9 @@ principal type/ID로 fallback한다. 펼침 상세는 저장된 note와 before/a
 
 검색, category, 실행자 필터는 현재까지 읽은 entry에 local로 적용한다. `nextCursor`가 있으면 `더 보기`가
 같은 endpoint를 cursor와 함께 호출해 ID 기준으로 중복 제거 후 누적한다. 요청 중 버튼을 잠그고 실패 시
-기존 entry를 유지한다. 감사 로그는 append-only 조회 화면이므로 WebSocket, CSRF, revision과 idempotency
-key를 사용하지 않는다.
+기존 entry를 유지하며 public message와 request ID를 오류 alert에 표시한다. 이미 소비했거나 반복된 cursor는
+추가 조회를 중단한다. 감사 로그는 append-only 조회 화면이므로 WebSocket, CSRF, revision과 idempotency key를
+사용하지 않는다.
 
 ### `/g/[guildId]/admin/data`
 

@@ -10,7 +10,6 @@
 	import {
 		buildScrimPickBanBulkInputPlan,
 		emptyScrimPickBanBulkInputValues,
-		scrimPickBanBulkInputFields,
 		type ScrimPickBanBulkInputFieldKey,
 		type ScrimPickBanBulkInputValues
 	} from './scrimPickBanBulkInput';

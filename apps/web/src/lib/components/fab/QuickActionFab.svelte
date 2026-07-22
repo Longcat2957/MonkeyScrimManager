@@ -3,8 +3,6 @@
 	import { fly, scale } from 'svelte/transition';
 	import { Plus, X } from 'lucide-svelte';
 	import QuickActionMenuItem from './QuickActionMenuItem.svelte';
-	import MiniGameModal from './MiniGameModal.svelte';
-	import TimerModal from './TimerModal.svelte';
 
 	interface Props {
 		label?: string;
@@ -15,6 +13,10 @@
 	let open = $state(false);
 	let miniGameOpen = $state(false);
 	let timerOpen = $state(false);
+	let loadingTool = $state<'game' | 'timer' | null>(null);
+	let toolLoadError = $state<string | null>(null);
+	let MiniGameModalComponent = $state<typeof import('./MiniGameModal.svelte').default | null>(null);
+	let TimerModalComponent = $state<typeof import('./TimerModal.svelte').default | null>(null);
 
 	function toggleOpen() {
 		open = !open;
@@ -24,14 +26,38 @@
 		open = false;
 	}
 
-	function openMiniGame() {
-		closeFab();
-		miniGameOpen = true;
+	async function openMiniGame() {
+		if (loadingTool) return;
+
+		loadingTool = 'game';
+		toolLoadError = null;
+		try {
+			MiniGameModalComponent ??= (await import('./MiniGameModal.svelte')).default;
+			closeFab();
+			miniGameOpen = true;
+		} catch {
+			toolLoadError =
+				'미니게임 화면을 불러오지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.';
+		} finally {
+			loadingTool = null;
+		}
 	}
 
-	function openTimer() {
-		closeFab();
-		timerOpen = true;
+	async function openTimer() {
+		if (loadingTool) return;
+
+		loadingTool = 'timer';
+		toolLoadError = null;
+		try {
+			TimerModalComponent ??= (await import('./TimerModal.svelte')).default;
+			closeFab();
+			timerOpen = true;
+		} catch {
+			toolLoadError =
+				'타이머 화면을 불러오지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.';
+		} finally {
+			loadingTool = null;
+		}
 	}
 </script>
 
@@ -56,9 +82,18 @@
 					</button>
 				</div>
 
-				<div class="grid gap-1 p-2">
+				<div class="grid gap-1 p-2" aria-busy={loadingTool !== null}>
 					<QuickActionMenuItem label="미니게임" tone="game" onSelect={openMiniGame} />
 					<QuickActionMenuItem label="타이머" tone="timer" onSelect={openTimer} />
+					{#if loadingTool}
+						<p class="px-2 py-1 text-xs text-slate-400" role="status">
+							{loadingTool === 'game' ? '미니게임' : '타이머'} 화면을 불러오는 중입니다.
+						</p>
+					{:else if toolLoadError}
+						<p class="px-2 py-1 text-xs leading-5 text-rose-200" role="alert">
+							{toolLoadError}
+						</p>
+					{/if}
 				</div>
 			</div>
 		</div>
@@ -84,8 +119,13 @@
 	</button>
 </div>
 
-<MiniGameModal bind:open={miniGameOpen} />
-<TimerModal bind:open={timerOpen} />
+{#if MiniGameModalComponent}
+	<MiniGameModalComponent bind:open={miniGameOpen} />
+{/if}
+
+{#if TimerModalComponent}
+	<TimerModalComponent bind:open={timerOpen} />
+{/if}
 
 <style>
 	.quick-action-fab {

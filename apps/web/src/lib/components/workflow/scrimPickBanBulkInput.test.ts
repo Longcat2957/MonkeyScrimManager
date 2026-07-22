@@ -77,7 +77,10 @@ describe('scrim pick-ban bulk input plan', () => {
 		expect(hardFearlessPlan.canApply).toBe(false);
 		expect(hardFearlessPlan.fields[0]?.feedback).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ severity: 'error', message: expect.stringContaining('Hard Fearless') })
+				expect.objectContaining({
+					severity: 'error',
+					message: expect.stringContaining('Hard Fearless')
+				})
 			])
 		);
 	});
@@ -93,8 +96,8 @@ describe('scrim pick-ban bulk input plan', () => {
 
 		expect(plan.canApply).toBe(false);
 		expect(plan.hasValidationErrors).toBe(true);
-		expect(plan.fields.flatMap((field) => field.feedback).map((feedback) => feedback.message)).toEqual(
-			expect.arrayContaining([expect.stringContaining('중복')])
-		);
+		expect(
+			plan.fields.flatMap((field) => field.feedback).map((feedback) => feedback.message)
+		).toEqual(expect.arrayContaining([expect.stringContaining('중복')]));
 	});
 });

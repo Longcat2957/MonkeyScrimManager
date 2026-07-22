@@ -17,7 +17,8 @@ export class RiotApiError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		readonly code: string
+		readonly code: string,
+		readonly requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'RiotApiError';
@@ -72,7 +73,8 @@ async function requestRiotAccounts(path: string, init: RequestInit = {}): Promis
 			throw new RiotApiError(
 				parsedError.data.error.message,
 				response.status,
-				parsedError.data.error.code
+				parsedError.data.error.code,
+				parsedError.data.error.requestId
 			);
 		}
 		throw new RiotApiError(
@@ -91,6 +93,11 @@ async function requestRiotAccounts(path: string, init: RequestInit = {}): Promis
 		);
 	}
 	return parsed.data.data.riotAccounts;
+}
+
+export function riotErrorText(cause: unknown): string {
+	if (!(cause instanceof RiotApiError)) return 'Riot 계정 요청을 처리하지 못했습니다.';
+	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }
 
 function fallbackErrorMessage(status: number): string {

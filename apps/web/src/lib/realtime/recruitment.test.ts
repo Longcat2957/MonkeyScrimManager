@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecruitmentSnapshot } from '$lib/contracts/recruitmentSnapshot';
-import {
-	isNewerRecruitmentInvalidation,
-	recruitmentRealtimeTopic
-} from './recruitment';
+import { isNewerRecruitmentInvalidation, recruitmentRealtimeTopic } from './recruitment';
 
 const guildId = '1525851181157580861';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
@@ -31,7 +28,11 @@ describe('recruitment realtime topic', () => {
 		);
 		expect(
 			isNewerRecruitmentInvalidation(
-				{ ...event, topic: `guild:${guildId}:recruitment-entry-draft:${recruitmentId}`, revision: 9 },
+				{
+					...event,
+					topic: `guild:${guildId}:recruitment-entry-draft:${recruitmentId}`,
+					revision: 9
+				},
 				snapshot,
 				topic
 			)
