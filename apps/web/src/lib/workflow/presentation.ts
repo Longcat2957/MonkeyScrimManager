@@ -22,6 +22,11 @@ export type OperationViewItem = OperationDto & {
 	tone: 'info' | 'warning';
 };
 
+export type OperationStageView = {
+	label: string;
+	state: 'complete' | 'current' | 'upcoming';
+};
+
 const auctionOperationActionLabels: Readonly<Record<string, string>> = {
 	'팀장 설정': '경매 준비',
 	'입찰 진행': '입찰 진행',
@@ -37,6 +42,44 @@ export function mapOperations(operations: OperationDto[], now = Date.now()): Ope
 		actionLabel: operationActionLabel(operation),
 		tone: operation.priority === 'urgent' ? 'warning' : 'info'
 	}));
+}
+
+export function selectPrimaryOperation(items: OperationViewItem[]): OperationViewItem | null {
+	return items.find((item) => item.priority === 'urgent') ?? items[0] ?? null;
+}
+
+export function operationActionLabelForRole(
+	item: OperationViewItem,
+	role: 'MEMBER' | 'OPERATOR'
+): string {
+	return role === 'OPERATOR' ? item.actionLabel : '진행 상황 보기';
+}
+
+export function operationStageView(item: OperationViewItem): OperationStageView[] {
+	const labels =
+		item.kind === 'AUCTION'
+			? ['모집', '팀장', '입찰', '대진', '경기', '결과']
+			: ['모집', '편성', '픽밴', '결과'];
+	const currentIndex = operationStageIndex(item);
+
+	return labels.map((label, index) => ({
+		label,
+		state: index < currentIndex ? 'complete' : index === currentIndex ? 'current' : 'upcoming'
+	}));
+}
+
+function operationStageIndex(item: OperationViewItem): number {
+	if (item.kind === 'ENTRY') return 1;
+	if (item.kind === 'PICK_BAN') return 2;
+
+	const auctionStageByStatus: Readonly<Record<string, number>> = {
+		'팀장 설정': 1,
+		'입찰 진행': 2,
+		'대진 설정': 3,
+		'대진 진행': 4,
+		'결과 입력': 5
+	};
+	return auctionStageByStatus[item.status] ?? -1;
 }
 
 function operationActionLabel(operation: OperationDto): string {

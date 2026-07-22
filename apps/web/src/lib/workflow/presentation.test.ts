@@ -3,7 +3,10 @@ import {
 	buildAuctionView,
 	buildSeriesView,
 	formatRelativeTime,
-	mapOperations
+	mapOperations,
+	operationActionLabelForRole,
+	operationStageView,
+	selectPrimaryOperation
 } from './presentation';
 import type { AuctionTournamentDto, OperationDto, RecruitmentDto } from '$lib/contracts/workflow';
 
@@ -68,6 +71,48 @@ describe('workflow presentation', () => {
 			'info'
 		]);
 		expect(items[0].updatedAt).toBe('30분 전');
+	});
+
+	it('selects urgent work for the primary action and maps canonical workflow stages', () => {
+		const operation = (
+			kind: OperationDto['kind'],
+			status: string,
+			priority: OperationDto['priority']
+		): OperationDto => ({
+			id: `${kind}:${status}`,
+			kind,
+			title: status,
+			status,
+			detail: '다음 작업 대기',
+			updatedAt: '2026-07-12T11:30:00Z',
+			href: '/g/200000000000000001/work',
+			priority
+		});
+		const items = mapOperations(
+			[operation('AUCTION', '입찰 진행', 'normal'), operation('ENTRY', '편성 필요', 'urgent')],
+			now
+		);
+		const primary = selectPrimaryOperation(items);
+
+		expect(primary?.id).toBe('ENTRY:편성 필요');
+		expect(operationActionLabelForRole(primary!, 'OPERATOR')).toBe('엔트리 편성');
+		expect(operationActionLabelForRole(primary!, 'MEMBER')).toBe('진행 상황 보기');
+		expect(operationStageView(primary!)).toEqual([
+			{ label: '모집', state: 'complete' },
+			{ label: '편성', state: 'current' },
+			{ label: '픽밴', state: 'upcoming' },
+			{ label: '결과', state: 'upcoming' }
+		]);
+		expect(operationStageView(items[0]).at(-1)).toEqual({
+			label: '결과',
+			state: 'upcoming'
+		});
+		expect(
+			operationStageView({ ...items[0], status: '알 수 없는 단계' }).every(
+				(stage) => stage.state === 'upcoming'
+			)
+		).toBe(true);
+		expect(selectPrimaryOperation([])).toBeNull();
 	});
 
 	it('keeps the canonical direct match workspace href for actionable auction work', () => {
