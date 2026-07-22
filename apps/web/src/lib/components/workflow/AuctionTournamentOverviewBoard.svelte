@@ -9,6 +9,7 @@
 		AuctionTournamentResultTeam,
 		AuctionTournamentResultTeamMember
 	} from '$lib/contracts/auctionTournamentResult';
+	import { formatRoundedNumber, formatSignedMmr } from '$lib/numberFormat';
 	import PositionIcon from './PositionIcon.svelte';
 
 	type MatchSide = 'LEFT' | 'RIGHT';
@@ -102,7 +103,7 @@
 	}
 
 	function pointLabel(points: number): string {
-		return `${points.toLocaleString('ko-KR')}P`;
+		return `${formatRoundedNumber(points)}P`;
 	}
 
 	function teamFor(
@@ -235,9 +236,7 @@
 	}
 
 	function mmrDeltaLabel(delta: number | null): string {
-		if (delta === null) return '미반영';
-		if (delta > 0) return `+${delta.toLocaleString('ko-KR')}`;
-		return delta.toLocaleString('ko-KR');
+		return delta === null ? '미반영' : formatSignedMmr(delta);
 	}
 
 	function mmrDeltaClass(delta: number | null): string {

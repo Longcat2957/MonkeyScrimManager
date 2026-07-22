@@ -2,6 +2,7 @@
 	import { Dialog } from 'bits-ui';
 	import { CircleSlash, Dice5, Gavel, PackageOpen, Swords, Trophy, Undo2, X } from 'lucide-svelte';
 	import type { ChampionCatalog } from '$lib/datadragon';
+	import { formatMmr } from '$lib/numberFormat';
 	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
 	import type {
 		AuctionTournamentDraftCandidate,
@@ -76,7 +77,7 @@
 	}
 
 	function mmrLabel(mmr: number | null): string {
-		return mmr === null ? '미집계' : Math.round(mmr).toLocaleString('ko-KR');
+		return mmr === null ? '미집계' : formatMmr(mmr);
 	}
 
 	function currentTargetRole(): keyof typeof laneLabels {

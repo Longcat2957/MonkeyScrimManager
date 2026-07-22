@@ -5,6 +5,7 @@ import {
 	type MockEntryParticipant,
 	type Team
 } from '$lib/fixtures/workflow';
+import { formatMmr } from '$lib/numberFormat';
 
 export function entrySlot(team: Team, lane: Lane): EntrySlot {
 	return `${team}_${lane}`;
@@ -67,7 +68,7 @@ export function entryTeamAverage(
 }
 
 export function entryParticipantDetail(participant: MockEntryParticipant): string {
-	return [participant.recentRecord, `MMR ${participant.mmr}`, participant.riotTier]
+	return [participant.recentRecord, `MMR ${formatMmr(participant.mmr)}`, participant.riotTier]
 		.filter(Boolean)
 		.join(' · ');
 }

@@ -4,6 +4,7 @@
 	import PositionIcon from '$lib/components/workflow/PositionIcon.svelte';
 	import type { SeriesResultGame, SeriesResultSnapshot } from '$lib/contracts/seriesResult';
 	import type { ChampionCatalog } from '$lib/datadragon';
+	import { formatSignedMmr } from '$lib/numberFormat';
 
 	type Side = 'BLUE' | 'RED';
 	type TeamId = 'TEAM_1' | 'TEAM_2';
@@ -96,16 +97,6 @@
 		return `${game.setNumber}세트`;
 	}
 
-	function signed(value: number): string {
-		const rendered = Number.isInteger(value)
-			? String(value)
-			: value
-					.toFixed(2)
-					.replace(/\.0+$/, '')
-					.replace(/(\.\d*?)0+$/, '$1');
-		return value > 0 ? `+${rendered}` : rendered;
-	}
-
 	function mmrChangeFor(userId: string) {
 		return selectedMmrChanges.get(userId) ?? null;
 	}
@@ -191,8 +182,8 @@
 					<h2 class="text-xs font-semibold text-slate-200">MMR 정산</h2>
 				</div>
 				<div class="flex gap-3 text-xs font-semibold">
-					<span class="text-cyan-300">{teamOne.name} {signed(teamMmr('TEAM_1'))}</span>
-					<span class="text-rose-300">{teamTwo.name} {signed(teamMmr('TEAM_2'))}</span>
+					<span class="text-cyan-300">{teamOne.name} {formatSignedMmr(teamMmr('TEAM_1'))}</span>
+					<span class="text-rose-300">{teamTwo.name} {formatSignedMmr(teamMmr('TEAM_2'))}</span>
 				</div>
 			</header>
 			<div class="grid gap-px bg-[var(--color-app-border-muted)] lg:grid-cols-2">
@@ -209,7 +200,7 @@
 								<b
 									class:negative={Boolean(change && change.delta < 0)}
 									class="text-right text-xs text-cyan-300"
-									>MMR {change ? signed(change.delta) : '-'}</b
+									>MMR {change ? formatSignedMmr(change.delta) : '-'}</b
 								>
 							</div>
 						{/each}

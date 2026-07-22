@@ -94,7 +94,7 @@ function snapshot(
 				games: 3,
 				wins: 2,
 				losses: 1,
-				mmrDelta: 18
+				mmrDelta: 18.000000000000004
 			},
 			{
 				userId: '1525847677542207549',
@@ -119,6 +119,7 @@ describe('AuctionTournamentOverviewBoard', () => {
 		expect(body).toContain('2');
 		expect(body).toContain('280P');
 		expect(body).toContain('+18');
+		expect(body).not.toContain('18.000000000000004');
 		expect(body).toContain('미반영');
 		expect(body).not.toContain('결과 입력 되돌리기');
 		expect(source).not.toContain('mockAuction');

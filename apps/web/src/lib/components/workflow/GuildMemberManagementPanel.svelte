@@ -14,6 +14,7 @@
 	import StatusPill from '$lib/components/layout/StatusPill.svelte';
 	import type { GuildAdminMember, GuildMemberStatus } from '$lib/contracts/workflow';
 	import { LANES, laneLabel, type Lane } from '$lib/fixtures/workflow';
+	import { formatMmr, formatSignedMmr } from '$lib/numberFormat';
 	import type { GuildMemberStatusCommand, GuildMmrAdjustmentCommand } from '$lib/realtime/admin';
 	import { formatRelativeTime } from '$lib/workflow/presentation';
 
@@ -110,7 +111,7 @@
 				note,
 				expectedRevision
 			});
-			notice = `${memberName} ${laneLabel[lane]} MMR ${signed(delta)} 반영`;
+			notice = `${memberName} ${laneLabel[lane]} MMR ${formatSignedMmr(delta)} 반영`;
 			adjustmentOpen = false;
 		} catch (cause) {
 			errorMessage = errorText(cause);
@@ -138,14 +139,6 @@
 		} finally {
 			statusSubmittingMemberId = null;
 		}
-	}
-
-	function signed(value: number): string {
-		return `${value > 0 ? '+' : ''}${formatMmr(value)}`;
-	}
-
-	function formatMmr(value: number): string {
-		return String(Math.round(value));
 	}
 
 	function roleLabel(role: GuildAdminMember['role']): string {

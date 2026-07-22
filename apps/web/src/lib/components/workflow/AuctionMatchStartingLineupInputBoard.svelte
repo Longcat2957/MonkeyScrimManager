@@ -10,6 +10,7 @@
 		AuctionMatchLineupTeam
 	} from '$lib/contracts/auctionMatchLineup';
 	import type { ChampionPreferenceLane } from '$lib/contracts/workflow';
+	import { formatMmr } from '$lib/numberFormat';
 	import PositionIcon from './PositionIcon.svelte';
 
 	interface Props {
@@ -94,9 +95,7 @@
 
 	function memberDetail(member: AuctionMatchLineupMember): string {
 		const mmr =
-			member.mmrAtAcquisition === null
-				? 'MMR 미집계'
-				: `MMR ${Math.round(member.mmrAtAcquisition).toLocaleString('ko-KR')}`;
+			member.mmrAtAcquisition === null ? 'MMR 미집계' : `MMR ${formatMmr(member.mmrAtAcquisition)}`;
 		return `신청 라인 · ${laneLabel(member.declaredLane)} · ${mmr}`;
 	}
 

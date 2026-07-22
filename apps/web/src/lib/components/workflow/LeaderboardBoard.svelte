@@ -9,6 +9,7 @@
 	} from '$lib/contracts/workflow';
 	import { findChampion, type ChampionCatalog } from '$lib/datadragon';
 	import type { Lane } from '$lib/fixtures/workflow';
+	import { formatMmr } from '$lib/numberFormat';
 
 	type LeaderboardRole = 'COMPOSITE' | Lane;
 
@@ -259,8 +260,7 @@
 							>
 						</span>
 					</span>
-					<strong class="text-right text-sm tabular-nums text-cyan-200"
-						>{Math.round(row.mmr)}</strong
+					<strong class="text-right text-sm tabular-nums text-cyan-200">{formatMmr(row.mmr)}</strong
 					>
 					<span class="text-right text-xs tabular-nums text-slate-400"
 						>{row.wins}승 {row.losses}패</span

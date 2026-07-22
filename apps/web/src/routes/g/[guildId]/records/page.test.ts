@@ -48,7 +48,7 @@ const snapshot: GuildRecordsSearchSnapshot = {
 	laneMmr: [
 		{ lane: 'TOP', mmr: 1500, games: 0, wins: 0 },
 		{ lane: 'JUNGLE', mmr: 1500, games: 0, wins: 0 },
-		{ lane: 'MID', mmr: 1500, games: 0, wins: 0 },
+		{ lane: 'MID', mmr: 1618.75, games: 0, wins: 0 },
 		{ lane: 'BOTTOM', mmr: 1500, games: 0, wins: 0 },
 		{ lane: 'SUPPORT', mmr: 1500, games: 0, wins: 0 }
 	],
@@ -88,6 +88,8 @@ describe('/g/[guildId]/records page', () => {
 		expect(body).toContain('class="custom-records-shell ');
 		expect(body).not.toContain('route-loading');
 		expect(body).not.toContain('<select disabled');
+		expect(body).toContain('1,619');
+		expect(body).not.toContain('1618.75');
 		expect(source).not.toContain('Boolean(navigating)');
 		expect(source).toContain('navigating.to !== null');
 	});

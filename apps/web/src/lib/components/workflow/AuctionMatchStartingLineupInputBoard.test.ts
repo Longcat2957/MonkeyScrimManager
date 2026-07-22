@@ -42,7 +42,7 @@ const snapshot: AuctionMatchLineupSnapshot = {
 					userId: '1525847677542207501',
 					displayName: 'Longcat',
 					declaredLane: 'MID',
-					mmrAtAcquisition: 1623,
+					mmrAtAcquisition: 1623.7499999999998,
 					snapshotOrigin: 'CAPTURED',
 					acquiredVia: 'CAPTAIN',
 					rosterSlot: 1
@@ -66,7 +66,14 @@ const snapshot: AuctionMatchLineupSnapshot = {
 			]
 		}
 	],
-	lineups: [],
+	lineups: [
+		{
+			teamId: leftTeamId,
+			lane: 'MID',
+			teamMemberId: leftMemberId,
+			userId: '1525847677542207501'
+		}
+	],
 	permissions: {
 		canManageLineup: true,
 		canEnterResults: false,
@@ -89,6 +96,8 @@ describe('AuctionMatchStartingLineupInputBoard', () => {
 		expect(body).toContain('BO3 · 하드 피어리스');
 		expect(body).toContain('Longcat');
 		expect(body).toContain('Nyan');
+		expect(body).toContain('MMR 1,624');
+		expect(body).not.toContain('1623.7499999999998');
 		expect(body).toContain('선수 선택');
 	});
 

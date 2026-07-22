@@ -23,11 +23,11 @@ const snapshot: GuildLeaderboardSnapshot = {
 			name: 'Longcat',
 			tag: null,
 			profileIconId: null,
-			compositeMmr: 1600,
+			compositeMmr: 1600.4999999999998,
 			mainRole: 'JUNGLE',
 			isMe: true,
 			stats: {
-				JUNGLE: { mmr: 1600, games: 10, wins: 6, championId: null }
+				JUNGLE: { mmr: 1600.4999999999998, games: 10, wins: 6, championId: null }
 			}
 		}
 	]
@@ -43,6 +43,8 @@ describe('LeaderboardBoard', () => {
 		expect(body).toContain('Longcat');
 		expect(body).toContain('Riot ID 비공개');
 		expect(body).toContain('6승 4패');
+		expect(body).toContain('1,600');
+		expect(body).not.toContain('1600.4999999999998');
 		expect(body).toContain('기록 없음');
 		expect(body).not.toContain('/img/profileicon/');
 		expect(source).not.toContain('user-tamsol');

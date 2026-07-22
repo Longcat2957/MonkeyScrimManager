@@ -21,6 +21,7 @@
 	} from '$lib/contracts/workflow';
 	import { findChampion, riotProfileIconUrl } from '$lib/datadragon';
 	import type { Lane } from '$lib/fixtures/workflow';
+	import { formatMmr, formatRoundedNumber, formatSignedMmr } from '$lib/numberFormat';
 	import { formatRelativeTime } from '$lib/workflow/presentation';
 	import { untrack } from 'svelte';
 	import type { PageProps } from './$types';
@@ -138,13 +139,8 @@
 		return findChampion(data.championCatalog, id);
 	}
 
-	function signed(value: number): string {
-		const rounded = Math.round(value);
-		return (rounded > 0 ? '+' : '') + rounded;
-	}
-
 	function mmrDeltaLabel(value: number | null): string {
-		return value === null ? 'MMR 기록 없음' : 'MMR ' + signed(value);
+		return value === null ? 'MMR 기록 없음' : 'MMR ' + formatSignedMmr(value);
 	}
 
 	function gameMmrDelta(game: GuildRecordsGame): number | null {
@@ -401,7 +397,7 @@
 						<PositionIcon role={lane.lane} size="md" />
 						<div>
 							<span>{laneLabel[lane.lane]}</span>
-							<strong>{Math.round(lane.mmr)}</strong>
+							<strong>{formatMmr(lane.mmr)}</strong>
 						</div>
 						<p>{lane.games}게임 <b>{lane.wins}승</b></p>
 					</div>
@@ -567,7 +563,7 @@
 											{#if record.teamName || record.spentPoints !== null}
 												<span
 													>{record.teamName ?? '팀 정보 없음'}{record.spentPoints !== null
-														? ' · ' + record.spentPoints + 'P'
+														? ' · ' + formatRoundedNumber(record.spentPoints) + 'P'
 														: ''}</span
 												>
 											{/if}

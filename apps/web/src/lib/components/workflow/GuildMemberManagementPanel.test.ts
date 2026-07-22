@@ -71,7 +71,7 @@ describe('GuildMemberManagementPanel', () => {
 			}
 		});
 
-		expect(body).toContain('1619');
+		expect(body).toContain('1,619');
 		expect(body).not.toContain('1618.75');
 	});
 });

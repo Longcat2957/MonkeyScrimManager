@@ -55,6 +55,7 @@
 	import UserChampionPreferencesEditor from '$lib/components/workflow/UserChampionPreferencesEditor.svelte';
 	import type { ChampionPreferenceLane, ChampionPreferences } from '$lib/contracts/workflow';
 	import type { ChampionCatalog } from '$lib/datadragon';
+	import { formatMmr } from '$lib/numberFormat';
 
 	interface Props {
 		initialUsers: DummyUser[];
@@ -1585,7 +1586,9 @@
 									>{createMode === 'BULK' ? (bulkPreviewLane(index) ?? '-') : '-'}</span
 								>
 								<span class="font-mono text-slate-400"
-									>{createMode === 'BULK' ? (bulkPreviewMmr(index) ?? '-') : '-'}</span
+									>{createMode === 'BULK'
+										? formatMmr(bulkPreviewMmr(index) ?? Number.NaN)
+										: '-'}</span
 								>
 							</div>
 						{/each}
@@ -1753,8 +1756,11 @@
 						placeholder={membershipExistingMmr ? '비우면 기존 라인별 MMR 유지' : '1500'}
 						class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 font-mono text-sm text-slate-100 outline-none placeholder:text-slate-600 disabled:opacity-40"
 					/>{#if membershipExistingMmr}<small class="font-normal text-slate-600"
-							>현재 TOP {membershipExistingMmr.top} · JGL {membershipExistingMmr.jungle} · MID {membershipExistingMmr.mid}
-							· BOT {membershipExistingMmr.bottom} · SUP {membershipExistingMmr.support}</small
+							>현재 TOP {formatMmr(membershipExistingMmr.top)} · JGL {formatMmr(
+								membershipExistingMmr.jungle
+							)} · MID {formatMmr(membershipExistingMmr.mid)} · BOT {formatMmr(
+								membershipExistingMmr.bottom
+							)} · SUP {formatMmr(membershipExistingMmr.support)}</small
 						>{:else if membershipGuild && !membershipGuild.activeSeasonId}<small
 							class="font-normal text-amber-300/80">활성 시즌이 없어 MMR을 저장하지 않습니다.</small
 						>{/if}</label

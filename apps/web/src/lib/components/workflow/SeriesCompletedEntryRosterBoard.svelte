@@ -8,6 +8,7 @@
 		type MockEntryParticipant,
 		type Team
 	} from '$lib/fixtures/workflow';
+	import { formatMmr } from '$lib/numberFormat';
 	import PlayerAvatar from './PlayerAvatar.svelte';
 	import PositionIcon from './PositionIcon.svelte';
 	import { entrySlot, entryTeamAverage, participantForSlot } from './entryDraft';
@@ -67,7 +68,7 @@
 	}
 
 	function teamSummary(team: Team): string {
-		return `${teamMembers(team).length}/5 배치 · 평균 ${teamAverage(team)}`;
+		return `${teamMembers(team).length}/5 배치 · 평균 ${formatMmr(teamAverage(team))}`;
 	}
 
 	function teamSurfaceClass(team: Team): string {
@@ -149,7 +150,9 @@
 									{/each}
 								</div>
 								<div class="text-right">
-									<p class="font-mono text-xl font-bold tabular-nums text-slate-50">{player.mmr}</p>
+									<p class="font-mono text-xl font-bold tabular-nums text-slate-50">
+										{formatMmr(player.mmr)}
+									</p>
 									<p class="text-xs font-bold text-slate-500">{player.riotTier ?? '-'}</p>
 								</div>
 							{:else}
@@ -221,7 +224,9 @@
 									{/each}
 								</div>
 								<div class="text-right">
-									<p class="font-mono text-xl font-bold tabular-nums text-slate-50">{player.mmr}</p>
+									<p class="font-mono text-xl font-bold tabular-nums text-slate-50">
+										{formatMmr(player.mmr)}
+									</p>
 									<p class="text-xs font-bold text-slate-500">{player.riotTier ?? '-'}</p>
 								</div>
 							{:else}
