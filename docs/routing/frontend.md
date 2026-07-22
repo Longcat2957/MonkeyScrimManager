@@ -138,6 +138,8 @@ Backend 데이터:
   보여준다. 나머지 작업은 기존 필터 목록에서 이어서 확인한다.
 - 작업이 없으면 ACTIVE guild member에게 `/series?create=1`, `/auction?create=1` 진입점을 제공한다. 각 query는
   목록 route가 소유한 생성 dialog만 열며 모집을 자동 생성하지 않는다.
+- 작업이 있으면 같은 두 진입점을 page header에 유지한다. 빈 상태에서는 header action을 숨기고 empty CTA만
+  표시해 같은 생성 링크를 한 화면에 중복하지 않는다.
 - API `status`는 presentation adapter에서 `엔트리 편성`, `픽밴 진행`, `경매 준비`, `입찰 진행`, `대진 설정`,
   `대진 확인`, `결과 입력` action으로 변환한다. 알 수 없는 후속 경매 status는 canonical href를 유지한
   `경매 진행`으로 표시한다.

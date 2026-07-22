@@ -31,6 +31,20 @@
 		description={`${seasonLabel} · ${guild.memberCount}명 · ${roleLabel}`}
 	>
 		{#snippet actions()}
+			{#if operations.length > 0}
+				<a
+					href={seriesHref}
+					class="inline-flex h-10 items-center gap-2 border border-cyan-300/30 bg-cyan-400/[0.065] px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
+				>
+					<Swords size={15} aria-hidden="true" /> 새 내전
+				</a>
+				<a
+					href={auctionHref}
+					class="inline-flex h-10 items-center gap-2 border border-emerald-300/25 bg-emerald-400/[0.055] px-3 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/10"
+				>
+					<Gavel size={15} aria-hidden="true" /> 새 경매
+				</a>
+			{/if}
 			<a
 				href={recordsHref}
 				class="inline-flex h-10 items-center gap-2 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-semibold text-slate-300 hover:text-slate-50"
