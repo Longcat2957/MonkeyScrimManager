@@ -129,7 +129,7 @@
 		{ format: 'TWENTY_PERSON', label: '20인 경매', detail: '20명 · 4팀' }
 	];
 
-	let createDialogOpen = $state(false);
+	let createDialogOpen = $derived(Boolean(data.openCreateDialog));
 	let creatingRecruitment = $state(false);
 	let createError = $state('');
 	let createIdempotencyKey = $state<string | null>(null);

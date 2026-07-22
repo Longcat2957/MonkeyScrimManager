@@ -79,7 +79,7 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 | `ScrimPickBanBulkInput`               | 일반 내전과 `/g/[guildId]/auction/matches/[matchId]`의 픽밴 입력 위 | current picks/bans, 게임 진영으로 매핑된 frozen teams, catalog, `hardFearless`, prior confirmed picks, 일괄 반영 callback                                                                               | API snapshot/local game draft |
 | `SeriesResultLedgerBoard`             | `/g/[guildId]/series/[id]/result`                                   | `SeriesResultSnapshot`의 frozen teams, confirmed games, score, MMR ledger, champion catalog; nullable `durationSeconds`는 `-` adapter. 시리즈 제목·규칙·완료 상태는 route `WorkspaceHeader`가 담당한다. | API snapshot                  |
 
-`/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태와 해당 단계의 구체적인 다음 action을 보여주고 하단에 완료 시리즈를 보여준다. 내전 모집은 BO1/BO3/BO5와 하드 피어리스를 선택하는 작은 dialog를 통해 생성한다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
+`/g/[guildId]/series`는 상단에 모집 마감, 엔트리 편성, 픽밴, 결과 입력 상태와 해당 단계의 구체적인 다음 action을 보여주고 하단에 완료 시리즈를 보여준다. 내전 모집은 BO1/BO3/BO5와 하드 피어리스를 선택하는 작은 dialog를 통해 생성한다. `/series?create=1`은 이 dialog만 열며 자동 mutation은 하지 않는다. 편성, 픽밴, 결과 컴포넌트를 목록 route에 직접 쌓지 않는다.
 
 ## 경매 Entrypoints
 
@@ -89,6 +89,7 @@ $lib/datadragon             챔피언 catalog loader와 이미지 URL
 10인/20인 format, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 생성 dialog를 소유한다. 20인은 같은
 dialog에서 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 성공 response의 `recruitment.href`로
 OPEN 모집 상세 route에 이동한다. 팀장 설정/입찰/브래킷 board를 목록 route에 직접 쌓지 않는다.
+`/auction?create=1`도 같은 생성 dialog만 여는 deep-link다.
 
 | 컴포넌트                                  | 운영 route                                      | 필수 입력과 parent 책임                                                                                                                |
 | ----------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |

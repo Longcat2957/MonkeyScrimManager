@@ -38,6 +38,7 @@ export const load: PageServerLoad = async ({ fetch, params, url }) => {
 
 	return {
 		guildId: params.guildId,
+		openCreateDialog: url.searchParams.get('create') === '1',
 		auctionPages: {
 			actionableRecruitments: recruitmentData,
 			activeTournaments: activeTournamentData,

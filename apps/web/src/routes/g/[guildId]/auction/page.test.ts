@@ -10,6 +10,7 @@ const matchId = '01900000-0000-7000-8000-000000000701';
 
 describe('auction page', () => {
 	it('opens the canonical recruitment link returned by the create response', () => {
+		expect(source).toContain('let createDialogOpen = $derived(Boolean(data.openCreateDialog));');
 		expect(source).toContain('await goto(created.recruitment.href)');
 		expect(source).not.toContain('id: created.recruitment.id');
 	});

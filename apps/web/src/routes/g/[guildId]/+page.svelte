@@ -11,10 +11,13 @@
 	const operations = $derived(data.operations);
 	const roleLabel = $derived(guild.currentUserRole === 'OPERATOR' ? '운영자' : '참가자');
 	const seasonLabel = $derived(guild.currentSeason?.name ?? '진행 중 시즌 없음');
-	const seriesHref = $derived(resolve('/g/[guildId]/series', { guildId: data.guildId }));
-	const auctionHref = $derived(resolve('/g/[guildId]/auction', { guildId: data.guildId }));
+	const seriesHref = $derived(
+		`${resolve('/g/[guildId]/series', { guildId: data.guildId })}?create=1`
+	);
+	const auctionHref = $derived(
+		`${resolve('/g/[guildId]/auction', { guildId: data.guildId })}?create=1`
+	);
 	const recordsHref = $derived(resolve('/g/[guildId]/records', { guildId: data.guildId }));
-	const leaderboardHref = $derived(resolve('/g/[guildId]/leaderboard', { guildId: data.guildId }));
 </script>
 
 <svelte:head>
@@ -60,35 +63,25 @@
 				</h2>
 				<p class="mt-2 text-sm leading-6 text-slate-500">
 					{guild.currentUserRole === 'OPERATOR'
-						? '새 모집은 내전 또는 경매 운영 화면에서 시작할 수 있습니다.'
-						: '완료된 내전은 상단 전적에서, 현재 시즌 순위는 리더보드에서 확인할 수 있습니다.'}
+						? '새 모집을 시작하거나 기존 기록을 확인할 수 있습니다.'
+						: '길드 멤버는 새 내전이나 경매 모집을 직접 시작할 수 있습니다.'}
 				</p>
 
 				<div class="mt-5 flex flex-col justify-center gap-2 sm:flex-row">
-					{#if guild.currentUserRole === 'OPERATOR'}
-						<a
-							href={seriesHref}
-							class="inline-flex h-10 items-center justify-center gap-2 border border-cyan-300/30 bg-cyan-400/[0.065] px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
-						>
-							<Swords size={15} aria-hidden="true" /> 내전 운영
-							<ArrowRight size={14} aria-hidden="true" />
-						</a>
-						<a
-							href={auctionHref}
-							class="inline-flex h-10 items-center justify-center gap-2 border border-emerald-300/25 bg-emerald-400/[0.055] px-4 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/10"
-						>
-							<Gavel size={15} aria-hidden="true" /> 경매 운영
-							<ArrowRight size={14} aria-hidden="true" />
-						</a>
-					{:else}
-						<a
-							href={leaderboardHref}
-							class="inline-flex h-10 items-center justify-center gap-2 border border-cyan-300/30 bg-cyan-400/[0.065] px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
-						>
-							<Trophy size={15} aria-hidden="true" /> 리더보드 보기
-							<ArrowRight size={14} aria-hidden="true" />
-						</a>
-					{/if}
+					<a
+						href={seriesHref}
+						class="inline-flex h-10 items-center justify-center gap-2 border border-cyan-300/30 bg-cyan-400/[0.065] px-4 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10"
+					>
+						<Swords size={15} aria-hidden="true" /> 새 내전 모집
+						<ArrowRight size={14} aria-hidden="true" />
+					</a>
+					<a
+						href={auctionHref}
+						class="inline-flex h-10 items-center justify-center gap-2 border border-emerald-300/25 bg-emerald-400/[0.055] px-4 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/10"
+					>
+						<Gavel size={15} aria-hidden="true" /> 새 경매 모집
+						<ArrowRight size={14} aria-hidden="true" />
+					</a>
 				</div>
 			</div>
 		</section>

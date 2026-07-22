@@ -6,11 +6,12 @@ import Page from './+page.svelte';
 const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 const guildId = '1525851181157580861';
 
-function renderPage() {
+function renderPage(openCreateDialog = false) {
 	return render(Page, {
 		props: {
 			data: {
 				guildId,
+				openCreateDialog,
 				guild: { currentUserRole: 'MEMBER' },
 				view: { activeWork: [], completedSeries: [] }
 			}
@@ -25,6 +26,7 @@ describe('general series page', () => {
 		expect(body).toContain('내전 모집');
 		expect(body).toContain('진행 중인 내전이 없습니다.');
 		expect(source).toContain('createRecruitment(');
+		expect(source).toContain('let createDialogOpen = $derived(Boolean(data.openCreateDialog));');
 		expect(source).toContain('{ bestOf: createBestOf, hardFearless: createHardFearless }');
 		expect(source).toContain('<Dialog.Root bind:open={createDialogOpen}>');
 		expect(source).toContain('BO{bestOf}');

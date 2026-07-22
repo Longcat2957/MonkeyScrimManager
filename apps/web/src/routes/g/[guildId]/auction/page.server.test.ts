@@ -113,7 +113,7 @@ describe('auction page server load', () => {
 			fetch: fetcher,
 			params: { guildId },
 			parent,
-			url: new URL(`http://localhost:5173/g/${guildId}/auction`)
+			url: new URL(`http://localhost:5173/g/${guildId}/auction?create=1`)
 		} as never);
 		if (!result) throw new Error('auction page load returned no data');
 
@@ -124,6 +124,7 @@ describe('auction page server load', () => {
 			`/api/guilds/${guildId}/auction-tournaments?state=completed&limit=100`
 		]);
 		expect(result.guildId).toBe(guildId);
+		expect(result.openCreateDialog).toBe(true);
 		expect(result.auctionPages).toMatchObject({
 			actionableRecruitments: { nextCursor: recruitmentCursor },
 			activeTournaments: { nextCursor: activeTournamentCursor },

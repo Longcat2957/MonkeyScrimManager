@@ -30,6 +30,7 @@ export const load: PageServerLoad = async ({ fetch, params, url }) => {
 
 	return {
 		guildId: params.guildId,
+		openCreateDialog: url.searchParams.get('create') === '1',
 		view: buildSeriesView({
 			recruitments: recruitmentData.recruitments,
 			activeSeries: activeSeriesData.series,

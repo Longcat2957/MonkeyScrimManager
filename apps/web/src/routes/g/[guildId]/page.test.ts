@@ -36,10 +36,10 @@ describe('/g/[guildId] dashboard', () => {
 
 		expect(body).toContain('2026 여름 시즌 · 48명 · 운영자');
 		expect(body).toContain('현재 처리할 운영 작업이 없습니다.');
-		expect(body).toContain(`href="/g/${guildId}/series"`);
-		expect(body).toContain('내전 운영');
-		expect(body).toContain(`href="/g/${guildId}/auction"`);
-		expect(body).toContain('경매 운영');
+		expect(body).toContain(`href="/g/${guildId}/series?create=1"`);
+		expect(body).toContain('새 내전 모집');
+		expect(body).toContain(`href="/g/${guildId}/auction?create=1"`);
+		expect(body).toContain('새 경매 모집');
 	});
 
 	it('uses participant-oriented empty guidance and handles a missing active season', () => {
@@ -51,8 +51,8 @@ describe('/g/[guildId] dashboard', () => {
 
 		expect(body).toContain('진행 중 시즌 없음 · 48명 · 참가자');
 		expect(body).toContain('현재 진행 중인 길드 작업이 없습니다.');
-		expect(body).toContain(`href="/g/${guildId}/leaderboard"`);
-		expect(body).toContain('리더보드 보기');
-		expect(body).not.toContain('경매 운영');
+		expect(body).toContain('길드 멤버는 새 내전이나 경매 모집을 직접 시작할 수 있습니다.');
+		expect(body).toContain(`href="/g/${guildId}/series?create=1"`);
+		expect(body).toContain(`href="/g/${guildId}/auction?create=1"`);
 	});
 });

@@ -134,6 +134,10 @@ Backend 데이터:
 
 - 현재 guild에서 입력해야 하는 편성, 픽밴, 결과, 경매 작업을 우선순위 순으로 확인한다.
 - guild 전적 화면과 각 작업 route로 바로 이동한다.
+- `priority=urgent`인 첫 작업을 상단 Spotlight에 한 번만 표시하고 일반 내전 또는 경매의 현재 단계를 함께
+  보여준다. 나머지 작업은 기존 필터 목록에서 이어서 확인한다.
+- 작업이 없으면 ACTIVE guild member에게 `/series?create=1`, `/auction?create=1` 진입점을 제공한다. 각 query는
+  목록 route가 소유한 생성 dialog만 열며 모집을 자동 생성하지 않는다.
 - API `status`는 presentation adapter에서 `엔트리 편성`, `픽밴 진행`, `경매 준비`, `입찰 진행`, `대진 설정`,
   `대진 확인`, `결과 입력` action으로 변환한다. 알 수 없는 후속 경매 status는 canonical href를 유지한
   `경매 진행`으로 표시한다.
@@ -295,6 +299,8 @@ API 한 번으로 확정한다. 선택 group 추가는 별도 revision mutation�
 설정 dialog를 연다. dialog는 `BO1 | BO3 | BO5` 세그먼트와 `하드 피어리스` boolean toggle만 제공하며,
 선택값을 모집 create API에 명시적으로 전송한다. 생성 뒤에는 모집 detail로 이동한다. 규칙은 모집에서
 immutable로 저장되므로 entry 또는 pick-ban 화면에 수정 control을 중복으로 두지 않는다.
+`?create=1`은 같은 dialog의 deep-link이며 다른 값은 무시한다. 실제 생성 권한과 CSRF, season/channel 조건은
+기존 create command가 다시 검증한다.
 
 ### `/g/[guildId]/recruitments/[id]`
 
@@ -514,6 +520,8 @@ WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 - ACTIVE guild member가 10인 또는 20인 형식, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
   dialog를 제공한다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
   목록을 낙관적으로 추가하지 않고, `201` snapshot의 `recruitment.href`로 OPEN 모집 상세 화면에 이동한다.
+- `?create=1`은 같은 생성 dialog만 여는 deep-link다. 다른 값은 무시하고 실제 모집 mutation은 기존 확인
+  버튼과 create command를 거쳐야 한다.
 - 생성 dialog는 Discord actor, title, 정원 또는 setup team 값을 직접 받지 않는다. format과 rules만 전송하고
   target count, 표시 번호, 현재 season, Discord 발행 대상은 backend가 결정한다.
 

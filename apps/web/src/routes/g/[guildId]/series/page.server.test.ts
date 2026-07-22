@@ -103,7 +103,7 @@ describe('general series page server load', () => {
 			fetch: fetcher,
 			params: { guildId },
 			parent,
-			url: new URL(`http://localhost:5173/g/${guildId}/series`)
+			url: new URL(`http://localhost:5173/g/${guildId}/series?create=1`)
 		} as never);
 		if (!result) throw new Error('series page load returned no data');
 
@@ -116,6 +116,7 @@ describe('general series page server load', () => {
 		]);
 
 		expect(result.guildId).toBe(guildId);
+		expect(result.openCreateDialog).toBe(true);
 		expect(result.view.activeWork.map((item: { kind: string }) => item.kind)).toEqual([
 			'SERIES',
 			'RECRUITMENT'
