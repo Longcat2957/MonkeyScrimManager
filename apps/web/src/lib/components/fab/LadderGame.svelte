@@ -48,6 +48,7 @@
 	let runId = $state(0);
 	let nextId = $state(1);
 	let timers: Array<ReturnType<typeof globalThis.setTimeout>> = [];
+	let animationFrames: Array<ReturnType<typeof globalThis.requestAnimationFrame>> = [];
 
 	const rowCount = $derived(Math.max(8, entries.length * 4));
 	const canPlay = $derived(entries.length >= 2 && entries.length === results.length);
@@ -73,6 +74,24 @@
 	function clearTimers() {
 		for (const timer of timers) globalThis.clearTimeout(timer);
 		timers = [];
+		for (const frame of animationFrames) globalThis.cancelAnimationFrame(frame);
+		animationFrames = [];
+	}
+
+	function requestNextFrame(callback: () => void) {
+		const frame = globalThis.requestAnimationFrame(() => {
+			animationFrames = animationFrames.filter((queuedFrame) => queuedFrame !== frame);
+			callback();
+		});
+		animationFrames.push(frame);
+	}
+
+	function scheduleAfterPaint(callback: () => void, delayMs: number) {
+		timers.push(
+			globalThis.setTimeout(() => {
+				requestNextFrame(() => requestNextFrame(callback));
+			}, delayMs)
+		);
 	}
 
 	function resetLadder() {
@@ -174,25 +193,20 @@
 		runId += 1;
 
 		nextTraces.forEach((trace, index) => {
-			const startAt = index * 260;
-			const doneAt = startAt + 1320;
-
-			timers.push(
-				globalThis.setTimeout(() => {
-					activeEntryIds = [...activeEntryIds, trace.entryId];
-				}, startAt)
-			);
-			timers.push(
-				globalThis.setTimeout(() => {
-					activeEntryIds = activeEntryIds.filter((id) => id !== trace.entryId);
-					doneEntryIds = [...doneEntryIds, trace.entryId];
-					selectedEntryId = trace.entryId;
-					if (doneEntryIds.length >= nextTraces.length) {
-						ladderRunning = false;
-						ladderDone = true;
-					}
-				}, doneAt)
-			);
+			scheduleAfterPaint(() => {
+				activeEntryIds = [...activeEntryIds, trace.entryId];
+				timers.push(
+					globalThis.setTimeout(() => {
+						activeEntryIds = activeEntryIds.filter((id) => id !== trace.entryId);
+						doneEntryIds = [...doneEntryIds, trace.entryId];
+						selectedEntryId = trace.entryId;
+						if (doneEntryIds.length >= nextTraces.length) {
+							ladderRunning = false;
+							ladderDone = true;
+						}
+					}, 1320)
+				);
+			}, index * 260);
 		});
 	}
 
@@ -250,7 +264,7 @@
 						vector-effect="non-scaling-stroke"
 					/>
 					<circle
-						class={`ladder-output-pin ${selectedTrace?.output === index ? 'active' : ''}`}
+						class={`ladder-output-pin fab-minigame-ladder-output-pin ${selectedTrace?.output === index ? 'active' : ''}`}
 						cx={xFor(index)}
 						cy="384"
 						r={ladderDone ? 8 : 5}
@@ -259,7 +273,7 @@
 
 				{#each bridges as bridge (`bridge-${runId}-${bridge.row}-${bridge.left}`)}
 					<line
-						class={`ladder-bridge ${ladderRunning || ladderDone ? 'revealed' : ''}`}
+						class={`ladder-bridge fab-minigame-ladder-bridge ${ladderRunning || ladderDone ? 'revealed' : ''}`}
 						x1={xFor(bridge.left)}
 						y1={yFor(bridge.row)}
 						x2={xFor(bridge.left + 1)}
@@ -272,13 +286,13 @@
 				{#each traces as trace (`trace-${runId}-${trace.entryId}`)}
 					{@const visible = traceVisible(trace)}
 					<path
-						class={`ladder-trace ${visible ? 'active' : ''}`}
+						class={`ladder-trace fab-minigame-ladder-trace ${visible ? 'active' : ''}`}
 						d={trace.d}
 						stroke={trace.color}
 						pathLength="100"
 					/>
 					{#if traceActive(trace)}
-						<circle class="ladder-dot active" r="7" fill={trace.color}>
+						<circle class="ladder-dot fab-minigame-ladder-dot active" r="7" fill={trace.color}>
 							<animateMotion dur="1.25s" fill="freeze" begin="0s" path={trace.d} />
 						</circle>
 					{/if}

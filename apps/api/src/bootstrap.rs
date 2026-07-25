@@ -69,8 +69,11 @@ pub async fn run(config: Config) -> Result<(), BootstrapError> {
     }
 
     if let Some(riot_config) = state.config().riot_service().cloned() {
-        let riot =
-            ReqwestRiotClient::new(riot_config.base_url().clone(), riot_config.token().clone())?;
+        let riot = ReqwestRiotClient::with_timeout(
+            riot_config.base_url().clone(),
+            riot_config.token().clone(),
+            riot_config.request_timeout(),
+        )?;
         state = state.with_riot(Arc::new(riot));
     }
 

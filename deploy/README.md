@@ -115,7 +115,7 @@ PUSH=1 pnpm docker:build
 각 secret file은 인접한 `*.example`을 기초로 만든다.
 
 - Axum runtime: DB runtime role, Discord OAuth client secret, session encryption key, service-admin
-  IDs, Bot service token, Riot internal token
+  IDs, Bot service token, Riot internal token, API-to-Riot-service request timeout
 - migration runtime: migration role DB URL만
 - Riot runtime: Riot production key, same internal token, explicit season start timestamp
 - Bot runtime: Discord Bot token과 같은 환경의 Bot service token
@@ -123,6 +123,10 @@ PUSH=1 pnpm docker:build
 `MONKEYBOT_RIOT_SERVICE_TOKEN`과 Riot service의 `MONKEYBOT_RIOT_INTERNAL_TOKEN`은 같은 32자 이상
 secret이다. `MONKEYBOT_BOT_SERVICE_TOKEN`과 Bot runtime token도 같은 값이어야 한다. Riot developer
 key는 Riot runtime file 외에는 절대 넣지 않는다.
+
+Axum의 `MONKEYBOT_RIOT_SERVICE_REQUEST_TIMEOUT_MS`는 Axum -> Riot adapter 호출 제한이다. 기본값과
+배포 예시는 `30000`이며, Riot adapter가 Riot API로 보내는 `MONKEYBOT_RIOT_REQUEST_TIMEOUT_MS`와는
+별개다.
 
 dev Compose는 dummy-user route를 켜므로 `MONKEYBOT_SERVICE_ADMIN_IDS`에는 최소 한 명의 MonkeyBot
 운영자 Discord ID를 넣는다. 빈 값 또는 `replace-with-*` 예시 값은 preflight가 배포 전에 거부한다.

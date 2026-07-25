@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = "MonkeyBot/0.1 (+https://monkeybot.lol)";
 const MAX_GAME_NAME_CHARS: usize = 64;
 const MAX_TAG_LINE_CHARS: usize = 16;
@@ -160,18 +160,28 @@ pub struct ReqwestRiotClient {
     http: Client,
     base_url: Url,
     service_token: SecretString,
+    request_timeout: Duration,
 }
 
 impl ReqwestRiotClient {
     pub fn new(base_url: Url, service_token: SecretString) -> Result<Self, RiotClientError> {
+        Self::with_timeout(base_url, service_token, DEFAULT_REQUEST_TIMEOUT)
+    }
+
+    pub fn with_timeout(
+        base_url: Url,
+        service_token: SecretString,
+        request_timeout: Duration,
+    ) -> Result<Self, RiotClientError> {
         if !is_internal_service_base_url(&base_url)
             || service_token.expose_secret().chars().count() < 32
+            || request_timeout.is_zero()
         {
             return Err(RiotClientError::InvalidConfiguration);
         }
         let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(request_timeout)
             .user_agent(USER_AGENT)
             .build()
             .map_err(RiotClientError::Request)?;
@@ -179,7 +189,12 @@ impl ReqwestRiotClient {
             http,
             base_url,
             service_token,
+            request_timeout,
         })
+    }
+
+    pub const fn request_timeout(&self) -> Duration {
+        self.request_timeout
     }
 
     async fn get_json<T: DeserializeOwned>(
@@ -254,6 +269,7 @@ impl fmt::Debug for ReqwestRiotClient {
             .debug_struct("ReqwestRiotClient")
             .field("base_url", &self.base_url)
             .field("service_token", &"[REDACTED]")
+            .field("request_timeout", &self.request_timeout)
             .finish()
     }
 }
@@ -1015,6 +1031,30 @@ mod tests {
         ));
         assert!(!is_internal_service_base_url(
             &Url::parse("https://internal.example/no-trailing-slash").unwrap()
+        ));
+    }
+
+    #[test]
+    fn reqwest_riot_client_timeout_defaults_to_30_seconds_and_can_be_customized() {
+        let token = SecretString::from("riot-service-token-that-is-at-least-32-characters");
+        let base_url = Url::parse("http://riot-api:8081/internal/riot/").unwrap();
+
+        let default_client =
+            ReqwestRiotClient::new(base_url.clone(), token.clone()).expect("default client");
+        assert_eq!(default_client.request_timeout(), Duration::from_secs(30));
+
+        let custom_client =
+            ReqwestRiotClient::with_timeout(base_url.clone(), token, Duration::from_millis(45_000))
+                .expect("custom timeout client");
+        assert_eq!(custom_client.request_timeout(), Duration::from_secs(45));
+
+        assert!(matches!(
+            ReqwestRiotClient::with_timeout(
+                base_url,
+                SecretString::from("riot-service-token-that-is-at-least-32-characters"),
+                Duration::ZERO,
+            ),
+            Err(RiotClientError::InvalidConfiguration)
         ));
     }
 

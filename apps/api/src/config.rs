@@ -29,6 +29,7 @@ const DEFAULT_DATABASE_LOCK_TIMEOUT_MS: u64 = 1_000;
 const DEFAULT_DATABASE_IDLE_TRANSACTION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_DATABASE_IDLE_TIMEOUT_MS: u64 = 600_000;
 const DEFAULT_DATABASE_MAX_LIFETIME_MS: u64 = 1_800_000;
+const DEFAULT_RIOT_SERVICE_REQUEST_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_SESSION_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MIN_SESSION_TTL_SECONDS: u64 = 5 * 60;
 const MAX_SESSION_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -108,6 +109,7 @@ pub struct BotServiceConfig {
 pub struct RiotServiceConfig {
     base_url: Url,
     token: SecretString,
+    request_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -354,9 +356,17 @@ impl RiotServiceConfig {
             ));
         }
 
+        let request_timeout = parse_duration(
+            lookup,
+            "MONKEYBOT_RIOT_SERVICE_REQUEST_TIMEOUT_MS",
+            DEFAULT_RIOT_SERVICE_REQUEST_TIMEOUT_MS,
+            MAX_TIMEOUT_MS,
+        )?;
+
         Ok(Some(Self {
             base_url,
             token: SecretString::from(token),
+            request_timeout,
         }))
     }
 
@@ -366,6 +376,10 @@ impl RiotServiceConfig {
 
     pub fn token(&self) -> &SecretString {
         &self.token
+    }
+
+    pub const fn request_timeout(&self) -> Duration {
+        self.request_timeout
     }
 }
 
@@ -406,6 +420,7 @@ impl fmt::Debug for RiotServiceConfig {
             .debug_struct("RiotServiceConfig")
             .field("base_url", &self.base_url)
             .field("token", &"[REDACTED]")
+            .field("request_timeout", &self.request_timeout)
             .finish()
     }
 }
@@ -1038,6 +1053,53 @@ mod tests {
             Config::from_map(&values),
             Err(ConfigError::Invalid {
                 key: "MONKEYBOT_RIOT_SERVICE_URL",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn riot_service_request_timeout_defaults_to_30_seconds_and_can_be_overridden() {
+        let mut values = valid_values();
+        values.insert(
+            "MONKEYBOT_RIOT_SERVICE_URL".to_owned(),
+            "http://riot-api:8080/internal/riot/".to_owned(),
+        );
+        values.insert(
+            "MONKEYBOT_RIOT_SERVICE_TOKEN".to_owned(),
+            "riot-service-token-that-is-at-least-32-characters".to_owned(),
+        );
+
+        let config = Config::from_map(&values).expect("Riot service config should parse");
+        assert_eq!(
+            config
+                .riot_service()
+                .expect("Riot service config")
+                .request_timeout(),
+            Duration::from_secs(30)
+        );
+
+        values.insert(
+            "MONKEYBOT_RIOT_SERVICE_REQUEST_TIMEOUT_MS".to_owned(),
+            "45000".to_owned(),
+        );
+        let config = Config::from_map(&values).expect("Riot service config should parse");
+        assert_eq!(
+            config
+                .riot_service()
+                .expect("Riot service config")
+                .request_timeout(),
+            Duration::from_secs(45)
+        );
+
+        values.insert(
+            "MONKEYBOT_RIOT_SERVICE_REQUEST_TIMEOUT_MS".to_owned(),
+            "0".to_owned(),
+        );
+        assert!(matches!(
+            Config::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: "MONKEYBOT_RIOT_SERVICE_REQUEST_TIMEOUT_MS",
                 ..
             })
         ));

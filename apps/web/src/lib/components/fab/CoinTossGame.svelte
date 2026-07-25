@@ -4,6 +4,7 @@
 	type CoinSide = 'front' | 'back';
 
 	let result = $state<CoinSide | null>(null);
+	let pendingResult = $state<CoinSide | null>(null);
 	let tossCount = $state(0);
 	let flipping = $state(false);
 
@@ -16,11 +17,15 @@
 	function tossCoin() {
 		if (flipping) return;
 
+		const nextResult = randomSide();
 		flipping = true;
-		result = randomSide();
+		result = null;
+		pendingResult = nextResult;
 		tossCount += 1;
 
 		globalThis.setTimeout(() => {
+			result = pendingResult;
+			pendingResult = null;
 			flipping = false;
 		}, 420);
 	}
@@ -51,7 +56,7 @@
 		<div class="grid place-items-center py-4">
 			<div
 				class={`grid size-28 place-items-center rounded-full border text-center shadow-xl shadow-black/30 transition-transform duration-500 ${
-					flipping ? 'coin-flip' : ''
+					flipping ? 'coin-flip fab-minigame-coin-flip' : ''
 				} ${
 					result === 'front'
 						? 'border-cyan-300/45 bg-cyan-400/14 text-cyan-50 shadow-cyan-950/30'

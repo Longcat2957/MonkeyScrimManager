@@ -48,3 +48,94 @@ button,
 a {
 	-webkit-tap-highlight-color: transparent;
 }
+
+/* Keep FAB minigame motion rules in the eager stylesheet; the modal itself is lazy-loaded. */
+.fab-minigame-coin-flip {
+	transform: rotateY(720deg) scale(1.04);
+}
+
+.fab-minigame-roulette-wheel {
+	transition: transform 900ms cubic-bezier(0.18, 0.85, 0.18, 1);
+}
+
+.fab-minigame-ladder-bridge {
+	stroke: rgb(103 232 249 / 0.62);
+	stroke-width: 4;
+	stroke-linecap: round;
+	opacity: 0;
+	transition: opacity 240ms ease-out;
+}
+
+.fab-minigame-ladder-bridge.revealed {
+	opacity: 1;
+	animation: fab-minigame-ladder-bridge-flash 520ms ease-out;
+}
+
+.fab-minigame-ladder-trace {
+	fill: none;
+	stroke-width: 7;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-dasharray: 100;
+	stroke-dashoffset: 100;
+	visibility: hidden;
+	transition: stroke-dashoffset 1250ms cubic-bezier(0.45, 0, 0.55, 1);
+}
+
+.fab-minigame-ladder-trace.active {
+	visibility: visible;
+	stroke-dashoffset: 0;
+}
+
+.fab-minigame-ladder-dot {
+	visibility: hidden;
+	stroke: white;
+	stroke-width: 2;
+	filter: drop-shadow(0 0 6px rgb(255 255 255 / 0.32));
+}
+
+.fab-minigame-ladder-dot.active {
+	visibility: visible;
+}
+
+.fab-minigame-ladder-output-pin {
+	fill: rgb(15 23 42);
+	stroke: rgb(226 232 240 / 0.62);
+	stroke-width: 3;
+	transition: r 200ms;
+}
+
+.fab-minigame-ladder-output-pin.active {
+	fill: rgb(34 211 238 / 0.24);
+	stroke: rgb(103 232 249);
+}
+
+@keyframes fab-minigame-ladder-bridge-flash {
+	0% {
+		stroke-width: 7;
+		opacity: 0.72;
+	}
+	100% {
+		stroke-width: 4;
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.fab-minigame-coin-flip {
+		transform: none;
+	}
+
+	.fab-minigame-roulette-wheel {
+		transition-duration: 1ms;
+	}
+
+	.fab-minigame-ladder-bridge,
+	.fab-minigame-ladder-trace {
+		transition-duration: 1ms !important;
+	}
+
+	.fab-minigame-ladder-bridge.revealed {
+		animation: none !important;
+	}
+}

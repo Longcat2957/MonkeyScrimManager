@@ -31,7 +31,9 @@ describe('AuctionMatchGameResultInputBoard', () => {
 		expect(source).toContain('let selectedCompletedGameId = $state<string | null>(null)');
 		expect(source).toContain('const completedSetNumbers = $derived(');
 		expect(source).toContain('const selectedCompletedGame = $derived(');
-		expect(source).toContain('function teamsForConfirmedGame(game: AuctionMatchConfirmedGame)');
+		expect(source).toMatch(
+			/function teamsForConfirmedGame\(\s*game: AuctionMatchConfirmedGame\s*\)/
+		);
 		expect(source).toContain("game.sidePreset === 'DEFAULT' ? 'BLUE' : 'RED'");
 		expect(source).toContain("snapshot.match.status === 'COMPLETED'");
 		expect(source).toContain('<ScrimPickBanResultSetSummaryCard');

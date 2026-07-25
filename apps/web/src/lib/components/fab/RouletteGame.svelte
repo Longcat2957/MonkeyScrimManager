@@ -133,7 +133,7 @@
 					class="roulette-pointer absolute -top-1 z-10 h-0 w-0 border-x-[7px] border-t-[12px] border-x-transparent border-t-cyan-100"
 				></div>
 				<div
-					class="roulette-wheel size-32 overflow-hidden rounded-full border border-slate-700 shadow-xl shadow-black/30"
+					class="roulette-wheel fab-minigame-roulette-wheel size-32 overflow-hidden rounded-full border border-slate-700 shadow-xl shadow-black/30"
 					style={`transform: rotate(${rotation}deg);`}
 					aria-hidden="true"
 				>
