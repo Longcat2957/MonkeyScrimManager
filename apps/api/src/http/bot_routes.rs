@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     domain::{
@@ -1685,15 +1685,22 @@ fn parse_expected_start_at(
     value: Option<&Value>,
     request_id: &RequestId,
 ) -> Result<OffsetDateTime, ApiError> {
-    let Some(value) = value.and_then(Value::as_str) else {
+    let Some(value) = value else {
+        return Ok(default_expected_start_at());
+    };
+    let Some(value) = value.as_str() else {
         return Err(invalid_expected_start_at(request_id));
     };
     let value = value.trim();
     if value.is_empty() {
-        return Err(invalid_expected_start_at(request_id));
+        return Ok(default_expected_start_at());
     }
 
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| invalid_expected_start_at(request_id))
+}
+
+fn default_expected_start_at() -> OffsetDateTime {
+    OffsetDateTime::now_utc() + Duration::minutes(30)
 }
 
 fn invalid_expected_start_at(request_id: &RequestId) -> ApiError {
@@ -3843,6 +3850,20 @@ mod tests {
             "예상 시작 시간은 시간대가 포함된 ISO 8601 형식이어야 합니다."
         );
         assert_eq!(body["error"]["details"]["field"], "expectedStartAt");
+    }
+
+    #[test]
+    fn missing_or_blank_expected_start_defaults_to_thirty_minutes_from_now() {
+        let request_id = RequestId("test-request".to_owned());
+        let lower_bound = OffsetDateTime::now_utc() + Duration::minutes(30);
+        let missing = parse_expected_start_at(None, &request_id)
+            .expect("missing expected start should use the default");
+        let blank = parse_expected_start_at(Some(&serde_json::json!("  ")), &request_id)
+            .expect("blank expected start should use the default");
+        let upper_bound = OffsetDateTime::now_utc() + Duration::minutes(30);
+
+        assert!(missing >= lower_bound && missing <= upper_bound);
+        assert!(blank >= lower_bound && blank <= upper_bound);
     }
 
     #[tokio::test]
