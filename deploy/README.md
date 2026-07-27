@@ -36,7 +36,7 @@ env files belong under `/root/monkeybot-infra/main` with mode `600`. Main always
 
 Main release order:
 
-1. Build and push all four images with the same full Git SHA.
+1. Full release는 네 이미지를 같은 full Git SHA로 build/push한다.
 2. Provision the separate main database and roles, set passwords, and create the main runtime env files.
 3. Run `scripts/vps-main-preflight.sh` and `scripts/vps-environment-isolation-audit.sh`, then the one-shot
    `migrate-main` profile and `runtime-grants.sql`.
@@ -68,8 +68,9 @@ app-owned `monkeybot-<environment>_riot-egress` bridge로만 서로 통신한다
 
 ## Release Images
 
-모든 배포 이미지는 **같은 Git commit의 full SHA tag**를 사용한다. `latest`와 `dev` tag는 배포
-기준으로 사용하지 않는다.
+정상 full release는 모든 배포 이미지를 **같은 Git commit의 full SHA tag**로 사용한다. `latest`와
+`dev` tag는 배포 기준으로 사용하지 않는다. 단, migration이 없고 현재 실행 중인 다른 component와
+backward-compatible한 hotfix만 component별 image tag를 고정해 한 서비스만 교체할 수 있다.
 
 | Image                                  | Dockerfile                 |
 | -------------------------------------- | -------------------------- |
@@ -86,7 +87,39 @@ PUSH=1 pnpm docker:build
 ```
 
 `scripts/docker-build.sh`는 dirty worktree를 거부하고, 기본적으로 push하지 않는다. 필요한 경우만
-`ALLOW_DIRTY=1`을 명시한다. VPS의 Docker credential file은 mode `600`이어야 한다.
+`ALLOW_DIRTY=1`을 명시한다. `COMPONENTS=api`처럼 지정하면 그 component만 build/push한다. VPS의
+Docker credential file은 mode `600`이어야 한다.
+
+Migration을 마친 normal full release는 VPS에서 다음 helper를 사용한다. 이 helper는 component override를
+비워 네 service가 새 release tag를 모두 사용하게 한 뒤, preflight, pull, health wait, nginx reload, 전체
+smoke를 한 번에 수행한다.
+
+```bash
+scripts/vps-main-full-rollout.sh <full-git-sha>
+```
+
+### Fast Compatible Component Rollout
+
+다음은 migration, shared runtime config, 또는 현재 Web/Bot/Riot API와 호환되지 않는 API contract 변경이
+없는 hotfix에만 쓴다. 그런 변경은 기존 full release 절차를 사용한다.
+
+예를 들어 API만 바뀐 경우 local checkout에서 API 이미지만 만든다.
+
+```bash
+COMPONENTS=api PUSH=1 pnpm docker:build
+```
+
+그 다음 VPS의 `/root/monkeybot-main` checkout에서 아래를 실행한다.
+
+```bash
+scripts/vps-main-component-rollout.sh api <full-git-sha> --compatible
+```
+
+이 script는 기존 component image tag를 `deploy/main.env`에 명시적으로 보존한 뒤 대상 image만 새 SHA로
+바꾸고, 네 image manifest preflight, 대상 service의 pull/recreate/wait, 필요한 nginx reload, 전체 smoke를
+실행한다. 실패한 preflight는 env file을 자동 복원하고, 성공 후 smoke 실패 시에는 출력된 backup env file로
+명시적으로 rollback한다. Bot command schema가 바뀐 bot hotfix는 rollout 뒤 command registration도 별도로
+실행한다.
 
 ## Runtime Files
 
@@ -102,7 +135,9 @@ PUSH=1 pnpm docker:build
 
 `deploy/dev.env.example`을 `/root/monkeybot-dev/deploy/dev.env`로 복사하고 다음을 채운다.
 
-- `MONKEYBOT_RELEASE_TAG`: release commit의 40자리 SHA
+- `MONKEYBOT_RELEASE_TAG`: 가장 최근 source release commit의 40자리 SHA
+- `MONKEYBOT_{WEB,API,RIOT_API,BOT}_IMAGE_TAG`: 선택값. 없으면 release tag를 쓰며, component hotfix는
+  각 실행 image의 실제 SHA를 명시한다.
 - image repository 네 개
 - `MONKEYBOT_PUBLIC_ORIGIN=https://dev.monkeybot.lol`
 - `MONKEYBOT_DISCORD_APPLICATION_ID`: `MonkeyBot[dev]`의 public application ID

@@ -11,6 +11,7 @@ IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --verify HEAD)}"
 PUSH="${PUSH:-0}"
 ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
 PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-0}"
+COMPONENTS="${COMPONENTS:-all}"
 
 if [[ "${ALLOW_DIRTY}" != "1" ]] && [[ -n "$(git status --porcelain)" ]]; then
 	echo "[docker-build] refusing a dirty worktree; commit first or set ALLOW_DIRTY=1" >&2
@@ -30,9 +31,40 @@ case "${PUSH}" in
 		;;
 esac
 
+declare -A selected_components=()
+if [[ "${COMPONENTS}" == "all" ]]; then
+	selected_components[web]=1
+	selected_components[api]=1
+	selected_components[riot-api]=1
+	selected_components[bot]=1
+else
+	IFS=',' read -r -a requested_components <<<"${COMPONENTS}"
+	if [[ "${#requested_components[@]}" -eq 0 ]]; then
+		echo "[docker-build] COMPONENTS must be all or a comma-separated component list" >&2
+		exit 1
+	fi
+	for component in "${requested_components[@]}"; do
+		case "${component}" in
+			web|api|riot-api|bot) selected_components["${component}"]=1 ;;
+			*)
+				echo "[docker-build] unsupported component: ${component}" >&2
+				exit 1
+				;;
+		esac
+	done
+fi
+
+components=()
+for component in web api riot-api bot; do
+	if [[ -n "${selected_components[$component]:-}" ]]; then
+		components+=("${component}")
+	fi
+done
+
 echo "[docker-build] registry: $REGISTRY"
 echo "[docker-build] tag: $IMAGE_TAG"
 echo "[docker-build] push: $PUSH"
+echo "[docker-build] components: ${components[*]}"
 
 build_component() {
 	local component=$1
@@ -59,9 +91,13 @@ build_component() {
 	fi
 }
 
-build_component web apps/web/Dockerfile
-build_component api apps/api/Dockerfile
-build_component riot-api apps/riot-api/Dockerfile
-build_component bot apps/bot/Dockerfile
+for component in "${components[@]}"; do
+	case "${component}" in
+		web) build_component web apps/web/Dockerfile ;;
+		api) build_component api apps/api/Dockerfile ;;
+		riot-api) build_component riot-api apps/riot-api/Dockerfile ;;
+		bot) build_component bot apps/bot/Dockerfile ;;
+	esac
+done
 
-echo "[docker-build] completed release image set for $IMAGE_TAG"
+echo "[docker-build] completed image build for $IMAGE_TAG"

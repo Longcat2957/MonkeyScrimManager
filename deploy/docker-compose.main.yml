@@ -28,7 +28,7 @@ services:
       start_period: 5s
 
   riot-api-main:
-    image: ${MONKEYBOT_RIOT_API_IMAGE:?set MONKEYBOT_RIOT_API_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    image: ${MONKEYBOT_RIOT_API_IMAGE:?set MONKEYBOT_RIOT_API_IMAGE}:${MONKEYBOT_RIOT_API_IMAGE_TAG:-${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}}
     container_name: monkeybot-riot-api-main
     restart: unless-stopped
     stop_grace_period: 20s
@@ -44,7 +44,7 @@ services:
     logging: *json-logging
 
   api-main:
-    image: ${MONKEYBOT_API_IMAGE:?set MONKEYBOT_API_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    image: ${MONKEYBOT_API_IMAGE:?set MONKEYBOT_API_IMAGE}:${MONKEYBOT_API_IMAGE_TAG:-${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}}
     container_name: monkeybot-api-main
     restart: unless-stopped
     stop_grace_period: 30s
@@ -79,7 +79,7 @@ services:
     logging: *json-logging
 
   migrate-main:
-    image: ${MONKEYBOT_API_IMAGE:?set MONKEYBOT_API_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    image: ${MONKEYBOT_API_IMAGE:?set MONKEYBOT_API_IMAGE}:${MONKEYBOT_API_IMAGE_TAG:-${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}}
     profiles: ['migration']
     restart: 'no'
     entrypoint: ['/usr/local/bin/monkeybot-migrate']
@@ -91,7 +91,7 @@ services:
     logging: *json-logging
 
   web-main:
-    image: ${MONKEYBOT_WEB_IMAGE:?set MONKEYBOT_WEB_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    image: ${MONKEYBOT_WEB_IMAGE:?set MONKEYBOT_WEB_IMAGE}:${MONKEYBOT_WEB_IMAGE_TAG:-${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}}
     container_name: monkeybot-web-main
     restart: unless-stopped
     stop_grace_period: 20s
@@ -123,7 +123,7 @@ services:
       start_period: 10s
 
   bot-main:
-    image: ${MONKEYBOT_BOT_IMAGE:?set MONKEYBOT_BOT_IMAGE}:${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}
+    image: ${MONKEYBOT_BOT_IMAGE:?set MONKEYBOT_BOT_IMAGE}:${MONKEYBOT_BOT_IMAGE_TAG:-${MONKEYBOT_RELEASE_TAG:?set MONKEYBOT_RELEASE_TAG}}
     container_name: monkeybot-bot-main
     restart: unless-stopped
     stop_grace_period: 30s
@@ -143,8 +143,8 @@ services:
       MONKEYBOT_BOT_HEARTBEAT_INTERVAL_MS: '30000'
       MONKEYBOT_BOT_NOTIFICATION_POLL_INTERVAL_MS: '1000'
       MONKEYBOT_BOT_LOG_LEVEL: info
-      MONKEYBOT_BOT_VERSION: ${MONKEYBOT_RELEASE_TAG:?set}
-      MONKEYBOT_BOT_COMMIT_SHA: ${MONKEYBOT_RELEASE_TAG:?set}
+      MONKEYBOT_BOT_VERSION: ${MONKEYBOT_BOT_IMAGE_TAG:-${MONKEYBOT_RELEASE_TAG:?set}}
+      MONKEYBOT_BOT_COMMIT_SHA: ${MONKEYBOT_BOT_IMAGE_TAG:-${MONKEYBOT_RELEASE_TAG:?set}}
     ports:
       - 127.0.0.1:${MONKEYBOT_BOT_HEALTH_PORT:?set MONKEYBOT_BOT_HEALTH_PORT}:8081
     depends_on:

@@ -62,10 +62,34 @@ for name in "${required[@]}"; do
 	fi
 done
 
-if [[ "${MONKEYBOT_RELEASE_TAG}" == replace-with-* ]]; then
-	printf 'MONKEYBOT_RELEASE_TAG is still a placeholder\n' >&2
-	exit 2
-fi
+component_image_tag() {
+	local component=$1 setting configured_tag
+	case "${component}" in
+		web) setting=MONKEYBOT_WEB_IMAGE_TAG ;;
+		api) setting=MONKEYBOT_API_IMAGE_TAG ;;
+		riot-api) setting=MONKEYBOT_RIOT_API_IMAGE_TAG ;;
+		bot) setting=MONKEYBOT_BOT_IMAGE_TAG ;;
+		*)
+			printf 'Unsupported image component: %s\n' "${component}" >&2
+			exit 2
+			;;
+	esac
+	configured_tag="${!setting-}"
+	printf '%s\n' "${configured_tag:-${MONKEYBOT_RELEASE_TAG}}"
+}
+
+validate_image_tag() {
+	local setting=$1 value=$2
+	if [[ "${value}" == replace-with-* || ! "${value}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+		printf 'Invalid image tag for %s\n' "${setting}" >&2
+		exit 2
+	fi
+}
+
+validate_image_tag MONKEYBOT_RELEASE_TAG "${MONKEYBOT_RELEASE_TAG}"
+for component in web api riot-api bot; do
+	validate_image_tag "${component}" "$(component_image_tag "${component}")"
+done
 
 compose_dir="$(cd "$(dirname "${COMPOSE_FILE}")" && pwd)"
 resolve_compose_path() {
@@ -309,13 +333,10 @@ fi
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" config -q
 
 if [[ "${CHECK_IMAGES}" == "1" ]]; then
-	for image in \
-		"${MONKEYBOT_WEB_IMAGE}" \
-		"${MONKEYBOT_API_IMAGE}" \
-		"${MONKEYBOT_RIOT_API_IMAGE}" \
-		"${MONKEYBOT_BOT_IMAGE}"; do
-		docker manifest inspect "${image}:${MONKEYBOT_RELEASE_TAG}" >/dev/null
-	done
+	docker manifest inspect "${MONKEYBOT_WEB_IMAGE}:$(component_image_tag web)" >/dev/null
+	docker manifest inspect "${MONKEYBOT_API_IMAGE}:$(component_image_tag api)" >/dev/null
+	docker manifest inspect "${MONKEYBOT_RIOT_API_IMAGE}:$(component_image_tag riot-api)" >/dev/null
+	docker manifest inspect "${MONKEYBOT_BOT_IMAGE}:$(component_image_tag bot)" >/dev/null
 fi
 
 printf 'MonkeyBot %s preflight passed for release %s\n' "${DEPLOYMENT_NAME}" "${MONKEYBOT_RELEASE_TAG}"
