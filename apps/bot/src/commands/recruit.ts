@@ -13,7 +13,9 @@ import {
 import { renderRecruitmentMessage } from '../discord/recruitment-message.js';
 import { guildInteractionError } from '../interactions/guild-context.js';
 import type { BotCommand } from './types.js';
+import { expectedStartAtFromKstInput, expectedStartInputExample } from './expected-start-at.js';
 
+const EXPECTED_START_OPTION = '예상시작';
 const BEST_OF_OPTION = '형식';
 const HARD_FEARLESS_OPTION = '하드피어리스';
 const DEFAULT_BEST_OF = 3;
@@ -25,6 +27,12 @@ export const recruitCommand: BotCommand = {
 		.setDescription('10명 5v5 내전 참가자를 모집합니다.')
 		.setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
 		.setContexts(InteractionContextType.Guild)
+		.addStringOption((option) =>
+			option
+				.setName(EXPECTED_START_OPTION)
+				.setDescription(`예상 시작 시각 (KST, 예: ${expectedStartInputExample})`)
+				.setRequired(true)
+		)
 		.addIntegerOption((option) =>
 			option
 				.setName(BEST_OF_OPTION)
@@ -49,14 +57,30 @@ export const recruitCommand: BotCommand = {
 		}
 		if (!interaction.inCachedGuild()) return;
 
-		await interaction.deferReply(botDeferOptions(false));
 		const actor = actorFromInteraction(interaction);
 		const bestOf = selectedBestOf(interaction.options.getInteger(BEST_OF_OPTION));
 		const hardFearless =
 			interaction.options.getBoolean(HARD_FEARLESS_OPTION) ?? DEFAULT_HARD_FEARLESS;
+		const expectedStartAt = expectedStartAtFromKstInput(
+			interaction.options.getString(EXPECTED_START_OPTION, true)
+		);
+		if (!expectedStartAt) {
+			await interaction.reply(
+				botEphemeralReply(
+					botNotice({
+						tone: 'warning',
+						title: '내전 모집을 시작할 수 없습니다.',
+						body: `예상 시작 시각은 KST 24시간 형식으로 입력해 주세요. 예: \`${expectedStartInputExample}\``
+					})
+				)
+			);
+			return;
+		}
+
+		await interaction.deferReply(botDeferOptions(false));
 		const snapshot = await api.createRecruitment(
 			interaction.guildId,
-			{ actor, bestOf, hardFearless },
+			{ actor, bestOf, hardFearless, expectedStartAt },
 			{ idempotencyKey: interaction.id }
 		);
 		const rendered = renderRecruitmentMessage(snapshot, config.webOrigin);

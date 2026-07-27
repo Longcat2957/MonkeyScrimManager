@@ -5,13 +5,17 @@ const guildId = '1525851181157580861';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const idempotencyKey = '01900000-0000-7000-8000-000000000002';
-const options = { bestOf: 5 as const, hardFearless: true };
+const options = {
+	bestOf: 5 as const,
+	hardFearless: true,
+	expectedStartAt: '2026-07-26T20:00:00+09:00'
+};
 
 const snapshot = {
 	recruitment: {
 		id: recruitmentId,
 		displayNumber: 214,
-		title: '일반 내전 모집 #214',
+		title: '일반 내전 모집 #214 · 예상 시작 2026-07-26 20:00 (KST)',
 		status: 'OPEN' as const,
 		targetCount: 10 as const,
 		bestOf: 5 as const,

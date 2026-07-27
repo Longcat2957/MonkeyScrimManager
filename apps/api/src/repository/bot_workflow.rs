@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, types::Json};
 use thiserror::Error;
-use time::{Duration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+use time::{Duration, OffsetDateTime, UtcOffset};
 use uuid::Uuid;
 
 use super::workflow::AuctionFormat;
@@ -259,6 +259,8 @@ pub enum BotRecruitmentCommand {
     Create {
         actor: BotActor,
         rules: RecruitmentSeriesRules,
+        #[serde(with = "time::serde::rfc3339")]
+        expected_start_at: OffsetDateTime,
     },
     BindMessage {
         actor: BotActor,
@@ -1825,13 +1827,19 @@ pub async fn execute_recruitment_command(
 ) -> Result<RecruitmentSnapshot, BotWorkflowError> {
     validate_recruitment_command(&command)?;
 
-    if let BotRecruitmentCommand::Create { actor, rules } = &command {
+    if let BotRecruitmentCommand::Create {
+        actor,
+        rules,
+        expected_start_at,
+    } = &command
+    {
         let request_hash = request_hash(guild_id, &command)?;
         return execute_recruitment_create(
             pool,
             guild_id,
             RecruitmentCreateActor::Bot(actor.clone()),
             *rules,
+            *expected_start_at,
             IdempotencyPrincipalType::Bot,
             BOT_PRINCIPAL_ID,
             idempotency_key.as_str(),
@@ -1881,16 +1889,24 @@ pub async fn create_web_recruitment(
     guild_id: &GuildId,
     actor_id: &UserId,
     rules: RecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<RecruitmentSnapshot, BotWorkflowError> {
     validate_recruitment_series_rules(&rules)?;
-    let request_hash = request_hash(guild_id, &WebRecruitmentCreateRequest { rules })?;
+    let request_hash = request_hash(
+        guild_id,
+        &WebRecruitmentCreateRequest {
+            rules,
+            expected_start_at,
+        },
+    )?;
     execute_recruitment_create(
         pool,
         guild_id,
         RecruitmentCreateActor::Session(actor_id.clone()),
         rules,
+        expected_start_at,
         IdempotencyPrincipalType::User,
         actor_id.as_str(),
         idempotency_key,
@@ -3686,6 +3702,7 @@ async fn execute_recruitment_create(
     guild_id: &GuildId,
     actor: RecruitmentCreateActor,
     rules: RecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     principal_type: IdempotencyPrincipalType,
     principal_id: &str,
     idempotency_key: &str,
@@ -3705,6 +3722,7 @@ async fn execute_recruitment_create(
             let guild_id = guild_id.clone();
             let actor = actor.clone();
             let rules = rules;
+            let expected_start_at = expected_start_at;
             let principal_id = principal_id.clone();
             let idempotency_key = idempotency_key.clone();
             let request_id = request_id.clone();
@@ -3716,6 +3734,7 @@ async fn execute_recruitment_create(
                     &guild_id,
                     &actor,
                     rules,
+                    expected_start_at,
                     principal_type,
                     &principal_id,
                     &idempotency_key,
@@ -6309,6 +6328,7 @@ async fn execute_recruitment_create_attempt(
     guild_id: &GuildId,
     actor: &RecruitmentCreateActor,
     rules: RecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     principal_type: IdempotencyPrincipalType,
     principal_id: &str,
     idempotency_key: &str,
@@ -6354,6 +6374,7 @@ async fn execute_recruitment_create_attempt(
         guild_id,
         &actor_id,
         rules,
+        expected_start_at,
         prepared.recruitment_id,
         prepared.now,
     )
@@ -8928,6 +8949,7 @@ async fn insert_recruitment(
     guild_id: &GuildId,
     actor_id: &UserId,
     rules: RecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     recruitment_id: RecruitmentId,
     now: OffsetDateTime,
 ) -> Result<RecruitmentSnapshot, AttemptError> {
@@ -8952,7 +8974,7 @@ async fn insert_recruitment(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AttemptError::MissingRecruitmentCounter)?;
-    let title = format!("일반 내전 모집 #{display_number}");
+    let title = recruitment_title(display_number, expected_start_at)?;
 
     sqlx::query(
         "INSERT INTO recruitments (
@@ -9069,17 +9091,36 @@ async fn insert_auction_recruitment(
     auction_recruitment_snapshot(transaction, guild_id, recruitment_id, actor_id).await
 }
 
+fn expected_start_label(expected_start_at: OffsetDateTime) -> Result<String, AttemptError> {
+    let korea_standard_time =
+        UtcOffset::from_hms(9, 0, 0).map_err(|_| AttemptError::InvariantViolation)?;
+    let expected_start = expected_start_at.to_offset(korea_standard_time);
+    Ok(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        expected_start.year(),
+        u8::from(expected_start.month()),
+        expected_start.day(),
+        expected_start.hour(),
+        expected_start.minute(),
+    ))
+}
+
+fn recruitment_title(
+    display_number: i64,
+    expected_start_at: OffsetDateTime,
+) -> Result<String, AttemptError> {
+    let expected_start = expected_start_label(expected_start_at)?;
+    Ok(format!(
+        "일반 내전 모집 #{display_number} · 예상 시작 {expected_start} (KST)"
+    ))
+}
+
 fn auction_recruitment_title(
     format: AuctionFormat,
     display_number: i64,
     expected_start_at: OffsetDateTime,
 ) -> Result<String, AttemptError> {
-    let korea_standard_time =
-        UtcOffset::from_hms(9, 0, 0).map_err(|_| AttemptError::InvariantViolation)?;
-    let expected_start = expected_start_at
-        .to_offset(korea_standard_time)
-        .format(&Rfc3339)
-        .map_err(|_| AttemptError::InvariantViolation)?;
+    let expected_start = expected_start_label(expected_start_at)?;
     Ok(format!(
         "{}인 경매 내전 모집 #{display_number} · 예상 시작 {expected_start} (KST)",
         format.participant_count()
@@ -20495,6 +20536,8 @@ impl RecruitmentCreateActor {
 #[derive(Serialize)]
 struct WebRecruitmentCreateRequest {
     rules: RecruitmentSeriesRules,
+    #[serde(with = "time::serde::rfc3339")]
+    expected_start_at: OffsetDateTime,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -22702,6 +22745,7 @@ mod tests {
             BotRecruitmentCommand::Create {
                 actor: operator.clone(),
                 rules: RecruitmentSeriesRules::default(),
+                expected_start_at: OffsetDateTime::UNIX_EPOCH,
             },
             BotRecruitmentCommand::BindMessage {
                 actor: operator.clone(),

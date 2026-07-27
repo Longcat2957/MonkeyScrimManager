@@ -150,7 +150,9 @@ describe('Discord interaction error reporting', () => {
 	});
 
 	it('renders component validation failures as a private V2 notice with an interaction reference', async () => {
-		const reply = vi.fn(async (_response?: unknown) => undefined);
+		const reply = vi.fn(async (response?: unknown) => {
+			void response;
+		});
 		const interaction = {
 			id: '400000000000000003',
 			guildId: null,
@@ -285,7 +287,8 @@ function recruitInteraction(): {
 		},
 		options: {
 			getInteger: () => null,
-			getBoolean: () => null
+			getBoolean: () => null,
+			getString: () => '2026-07-26 20:00'
 		},
 		context: 0,
 		authorizingIntegrationOwners: {},

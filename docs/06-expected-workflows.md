@@ -155,12 +155,12 @@ Web /g/{guildId}/series 내전 모집
 
 ```txt
 /내전모집
-  -> BO1/BO3/BO5, 하드 피어리스 선택
+  -> KST 예상 시작 시각, BO1/BO3/BO5, 하드 피어리스 선택
   -> 선택 규칙을 가진 recruitments(guild_id) 생성
   -> Discord 모집 메시지 발행
 
 Web 내전 모집 (ACTIVE guild member)
-  -> BO1/BO3/BO5와 하드 피어리스 선택
+  -> KST 예상 시작 시각, BO1/BO3/BO5와 하드 피어리스 선택
   -> 모집 채널 설정 여부 확인
   -> 선택 규칙을 포함한 recruitments(guild_id), 빈 entry draft, RECRUITMENT_MESSAGE_CREATE outbox row를 한 transaction으로 생성
   -> /g/{guildId}/recruitments/{id} 엔트리 모집 화면 이동

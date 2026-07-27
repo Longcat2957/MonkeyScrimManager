@@ -19,6 +19,7 @@ const guildId = '200000000000000001';
 const userId = '100000000000000001';
 const interactionId = '400000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
+const expectedStartInput = '2026-07-26 20:00';
 const expectedStartAt = '2026-07-26T20:00:00+09:00';
 
 const snapshot: AuctionRecruitmentSnapshot = {
@@ -59,7 +60,7 @@ function interaction(
 		semifinalBestOf?: number;
 		finalBestOf?: number;
 		hardFearless?: boolean;
-		expectedStartAt?: string;
+		expectedStartInput?: string;
 	} = {}
 ) {
 	const deferReply = vi.fn(async () => undefined);
@@ -87,7 +88,7 @@ function interaction(
 				getBoolean: (name: string) =>
 					name === '하드피어리스' ? (options.hardFearless ?? null) : null,
 				getString: (name: string) =>
-					name === '예상시작' ? (options.expectedStartAt ?? expectedStartAt) : null
+					name === '예상시작' ? (options.expectedStartInput ?? expectedStartInput) : null
 			},
 			inCachedGuild: () => true,
 			deferReply,
@@ -219,6 +220,17 @@ describe('/경매모집', () => {
 		expect(renderedReply(current.reply)).toContain(
 			'10인 경매 내전은 4강이 없으므로 `4강` 형식을 설정할 수 없습니다.'
 		);
+	});
+
+	it('rejects an invalid KST expected-start value before creating an auction', async () => {
+		const createAuctionRecruitment = vi.fn(async () => snapshot);
+		const current = interaction(20, { expectedStartInput: '2026-02-30 20:00' });
+
+		await auctionRecruitCommand.execute(current.value, context(createAuctionRecruitment));
+
+		expect(createAuctionRecruitment).not.toHaveBeenCalled();
+		expect(current.deferReply).not.toHaveBeenCalled();
+		expect(renderedReply(current.reply)).toContain('KST 24시간 형식');
 	});
 });
 

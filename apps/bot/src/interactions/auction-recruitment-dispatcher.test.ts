@@ -52,7 +52,9 @@ function context(
 
 function auctionButton(action: 'join' | 'leave') {
 	const deferUpdate = vi.fn(async () => undefined);
-	const editReply = vi.fn(async (_reply?: unknown) => undefined);
+	const editReply = vi.fn(async (reply?: unknown) => {
+		void reply;
+	});
 	return {
 		value: {
 			id: interactionId,
@@ -78,7 +80,9 @@ function auctionButton(action: 'join' | 'leave') {
 
 function auctionLaneSelect() {
 	const deferUpdate = vi.fn(async () => undefined);
-	const editReply = vi.fn(async (_reply?: unknown) => undefined);
+	const editReply = vi.fn(async (reply?: unknown) => {
+		void reply;
+	});
 	return {
 		value: {
 			id: interactionId,

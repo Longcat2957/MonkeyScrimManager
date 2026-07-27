@@ -20,7 +20,7 @@ const serviceToken = 's'.repeat(32);
 const notificationId = '01900000-0000-7000-8000-000000000301';
 const leaseToken = '01900000-0000-7000-8000-000000000302';
 const expectedStartAt = '2026-07-26T11:00:00Z';
-const expectedStartLabel = '2026-07-26T20:00:00+09:00 (KST)';
+const expectedStartLabel = '2026-07-26 20:00 (KST)';
 
 const actor: Actor = {
 	id: userId,
@@ -229,7 +229,11 @@ describe('MonkeyBotApiClient', () => {
 			{ actor, gameName: 'Longcat', tagLine: 'KR1', platform: 'KR' },
 			context
 		);
-		await client.createRecruitment(guildId, { actor, bestOf: 3, hardFearless: false }, context);
+		await client.createRecruitment(
+			guildId,
+			{ actor, bestOf: 3, hardFearless: false, expectedStartAt },
+			context
+		);
 		await client.bindRecruitmentMessage(
 			guildId,
 			recruitmentId,
@@ -286,7 +290,8 @@ describe('MonkeyBotApiClient', () => {
 		expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
 			actor,
 			bestOf: 3,
-			hardFearless: false
+			hardFearless: false,
+			expectedStartAt
 		});
 	});
 
@@ -299,7 +304,7 @@ describe('MonkeyBotApiClient', () => {
 		await expect(
 			client.createRecruitment(
 				guildId,
-				{ actor, bestOf: 3, hardFearless: false },
+				{ actor, bestOf: 3, hardFearless: false, expectedStartAt },
 				{ idempotencyKey: '400000000000000002' }
 			)
 		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
@@ -555,7 +560,7 @@ describe('MonkeyBotApiClient', () => {
 		await expect(
 			client.createRecruitment(
 				guildId,
-				{ actor, bestOf: 3, hardFearless: false },
+				{ actor, bestOf: 3, hardFearless: false, expectedStartAt },
 				{ idempotencyKey: '400000000000000005' }
 			)
 		).resolves.toMatchObject({
@@ -571,7 +576,7 @@ describe('MonkeyBotApiClient', () => {
 		await expect(
 			invalidClient.createRecruitment(
 				guildId,
-				{ actor, bestOf: 3, hardFearless: false },
+				{ actor, bestOf: 3, hardFearless: false, expectedStartAt },
 				{ idempotencyKey: '400000000000000006' }
 			)
 		).rejects.toBeInstanceOf(MonkeyBotApiContractError);
@@ -757,7 +762,7 @@ describe('MonkeyBotApiClient', () => {
 		const client = createClient(fetchMock, 100);
 		const request = client.createRecruitment(
 			guildId,
-			{ actor, bestOf: 3, hardFearless: false },
+			{ actor, bestOf: 3, hardFearless: false, expectedStartAt },
 			{ idempotencyKey: '400000000000000004' }
 		);
 		const assertion = expect(request).rejects.toMatchObject({

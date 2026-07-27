@@ -291,7 +291,8 @@ async fn run_bot_workflow() -> TestResult {
     let create_request = json!({
         "actor": actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A]),
         "bestOf": 5,
-        "hardFearless": true
+        "hardFearless": true,
+        "expectedStartAt": "2026-07-26T11:00:00Z"
     });
     let invalid_best_of = bot_request(
         &app,
@@ -302,7 +303,8 @@ async fn run_bot_workflow() -> TestResult {
         &json!({
             "actor": actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A]),
             "bestOf": 2,
-            "hardFearless": true
+            "hardFearless": true,
+            "expectedStartAt": "2026-07-26T11:00:00Z"
         }),
     )
     .await?;
@@ -350,6 +352,10 @@ async fn run_bot_workflow() -> TestResult {
     assert_eq!(created["data"]["recruitment"]["targetCount"], 10);
     assert_eq!(created["data"]["recruitment"]["bestOf"], 5);
     assert_eq!(created["data"]["recruitment"]["hardFearless"], true);
+    assert_eq!(
+        created["data"]["recruitment"]["title"],
+        "일반 내전 모집 #1 · 예상 시작 2026-07-26 20:00 (KST)"
+    );
     assert!(created["data"]["recruitment"]["updatedAt"].is_string());
     assert_eq!(created["data"]["participants"], json!([]));
 
@@ -397,7 +403,10 @@ async fn run_bot_workflow() -> TestResult {
         &format!("/api/guilds/{GUILD_A}/recruitments"),
         BOT_TOKEN,
         "non-operator-create",
-        &json!({ "actor": non_operator }),
+        &json!({
+            "actor": non_operator,
+            "expectedStartAt": "2026-07-26T11:00:00Z"
+        }),
     )
     .await?;
     assert_eq!(non_operator_created.status(), StatusCode::CREATED);

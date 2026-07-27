@@ -298,8 +298,9 @@ API 한 번으로 확정한다. 선택 group 추가는 별도 revision mutation�
 ### `/g/[guildId]/series`
 
 일반 내전의 작업 목록과 완료 series를 표시한다. 상단 `내전 모집` action은 즉시 생성하지 않고 작은
-설정 dialog를 연다. dialog는 `BO1 | BO3 | BO5` 세그먼트와 `하드 피어리스` boolean toggle만 제공하며,
-선택값을 모집 create API에 명시적으로 전송한다. 생성 뒤에는 모집 detail로 이동한다. 규칙은 모집에서
+설정 dialog를 연다. dialog는 예상 시작 날짜와 24시간 `HH:mm`, `BO1 | BO3 | BO5` 세그먼트, `하드 피어리스`
+boolean toggle을 제공하며, 시작 시각은 RFC 3339 timestamp로, 선택값은 모집 create API에 명시적으로
+전송한다. 생성 뒤에는 모집 detail로 이동한다. 규칙은 모집에서
 immutable로 저장되므로 entry 또는 pick-ban 화면에 수정 control을 중복으로 두지 않는다.
 `?create=1`은 같은 dialog의 deep-link이며 다른 값은 무시한다. 실제 생성 권한과 CSRF, season/channel 조건은
 기존 create command가 다시 검증한다.
@@ -527,8 +528,8 @@ WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 - actionable 모집, 진행 중 tournament, 완료/보관 tournament는 각각 독립 `nextCursor`를 가진다. 각
   section의 `더 불러오기`는 해당 cursor만 이어 읽고 ID 기준으로 중복을 제거한다. 진행 중 section은 모집과
   tournament cursor가 모두 남아 있으면 둘을 함께 읽은 뒤 같은 작업 목록으로 병합한다.
-- ACTIVE guild member가 10인 또는 20인 형식, 예상 시작 시각, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
-  dialog를 제공한다. 예상 시작 시각은 local datetime input에서 RFC 3339 timestamp로 전송하며, 생성된
+- ACTIVE guild member가 10인 또는 20인 형식, 예상 시작 날짜와 24시간 `HH:mm`, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
+  dialog를 제공한다. 예상 시작 시각은 RFC 3339 timestamp로 전송하며, 생성된
   모집 제목은 backend가 KST 표기로 확정한다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
   목록을 낙관적으로 추가하지 않고, `201` snapshot의 `recruitment.href`로 OPEN 모집 상세 화면에 이동한다.
 - `?create=1`은 같은 생성 dialog만 여는 deep-link다. 다른 값은 무시하고 실제 모집 mutation은 기존 확인

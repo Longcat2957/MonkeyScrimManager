@@ -13,7 +13,7 @@ const recruitmentId = '01900000-0000-7000-8000-000000000501';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const idempotencyKey = '01900000-0000-7000-8000-000000000002';
 const expectedStartAt = '2026-07-26T11:00:00Z';
-const expectedStartLabel = '2026-07-26T20:00:00+09:00 (KST)';
+const expectedStartLabel = '2026-07-26 20:00 (KST)';
 
 const openSnapshot = {
 	recruitment: {

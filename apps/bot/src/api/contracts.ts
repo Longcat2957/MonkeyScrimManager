@@ -163,7 +163,8 @@ export const createRecruitmentRequestSchema = z
 	.object({
 		actor: actorSchema,
 		bestOf: seriesBestOfSchema,
-		hardFearless: z.boolean()
+		hardFearless: z.boolean(),
+		expectedStartAt: timestampSchema
 	})
 	.strict();
 

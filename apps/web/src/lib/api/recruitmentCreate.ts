@@ -17,6 +17,7 @@ export type RecruitmentCreateSnapshot = RecruitmentSnapshot;
 export type RecruitmentCreateOptions = {
 	bestOf: SeriesBestOf;
 	hardFearless: boolean;
+	expectedStartAt: string;
 };
 
 export class RecruitmentCreateApiError extends Error {

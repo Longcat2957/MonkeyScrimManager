@@ -524,13 +524,20 @@ Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`를 사
 두 경로 모두 다음 규칙을 같은 create command에 전달한다.
 
 ```json
-{ "bestOf": 3, "hardFearless": true }
+{
+	"bestOf": 3,
+	"hardFearless": true,
+	"expectedStartAt": "2026-07-26T20:00:00+09:00"
+}
 ```
 
 `bestOf`는 `1 | 3 | 5`, `hardFearless`는 boolean이다. Web과 최신 Bot은 항상 명시적으로 보내며,
 호환 목적의 누락값만 server가 `BO3`, `true`로 해석한다. 둘 다 ACTIVE guild member면 생성할 수 있다.
 `bestOf`가 이 범위를 벗어나면 server는 `422 invalid_recruitment_best_of`와
 `details { field: "bestOf", allowedValues: [1,3,5], receivedValue }`를 반환한다.
+`expectedStartAt`은 시간대가 포함된 RFC 3339 timestamp가 필수이며, 누락·형식 오류는
+`422 invalid_expected_start_at`과 `details.field="expectedStartAt"`을 반환한다. 생성 제목에는 KST
+24시간 표기(`YYYY-MM-DD HH:mm (KST)`)로 고정한다.
 Bot은 생성 전에 actor user/member/role snapshot을 동기화하고, backend는 ACTIVE season과 guild counter를
 잠근 뒤 규칙을 가진 OPEN 모집과 빈 entry draft를 함께 만든다.
 
@@ -562,7 +569,8 @@ reference를 연결한다.
 		"roleIds": ["300000000000000001"]
 	},
 	"bestOf": 3,
-	"hardFearless": true
+	"hardFearless": true,
+	"expectedStartAt": "2026-07-26T20:00:00+09:00"
 }
 ```
 
@@ -1063,8 +1071,8 @@ Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`, `form
 
 `format`은 `TEN_PERSON | TWENTY_PERSON`만 허용하고 target count는 각각 10/20으로 server가 파생한다.
 `expectedStartAt`은 시간대가 포함된 RFC 3339 timestamp가 필수이며, 누락·형식 오류는
-`422 invalid_expected_start_at`으로 안전하게 설명한다. 생성 제목의 예상 시작 표기는 KST offset과
-`(KST)`를 사용한다.
+`422 invalid_expected_start_at`으로 안전하게 설명한다. 생성 제목의 예상 시작 표기는 KST 24시간
+`YYYY-MM-DD HH:mm`과 `(KST)`를 사용한다.
 `finalBestOf`와 non-null `semifinalBestOf`는 `1 | 3 | 5`다. 10인은 `semifinalBestOf=null`만 허용하고, 20인은
 두 준결승이 공유하는 non-null `semifinalBestOf`와 독립 `finalBestOf`를 사용한다. 생략한 호환 필드는
 BO3/하드 피어리스 사용으로 정규화한다.

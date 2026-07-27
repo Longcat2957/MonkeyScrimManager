@@ -28,7 +28,13 @@ describe('general series page', () => {
 		expect(source).toContain('createRecruitment(');
 		expect(source).toContain('let createDialogOpen = $derived(Boolean(data.openCreateDialog));');
 		expect(source).toContain('let createHardFearless = $state(true);');
-		expect(source).toContain('{ bestOf: createBestOf, hardFearless: createHardFearless }');
+		expect(source).toContain("let createExpectedStartDate = $state('');");
+		expect(source).toContain("let createExpectedStartTime = $state('');");
+		expect(source).toContain('expectedStartIsoFromInput(');
+		expect(source).toContain(
+			'{ bestOf: createBestOf, hardFearless: createHardFearless, expectedStartAt }'
+		);
+		expect(source).toContain('시간 (24시간)');
 		expect(source).toContain('<Dialog.Root bind:open={createDialogOpen}>');
 		expect(source).toContain('BO{bestOf}');
 		expect(source).toContain("resolve('/g/[guildId]/recruitments/[id]'");

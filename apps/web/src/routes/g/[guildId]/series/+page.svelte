@@ -32,6 +32,8 @@
 	let createDialogOpen = $derived(Boolean(data.openCreateDialog));
 	let createBestOf = $state<SeriesBestOf>(3);
 	let createHardFearless = $state(true);
+	let createExpectedStartDate = $state('');
+	let createExpectedStartTime = $state('');
 
 	function openCreateDialog() {
 		if (creatingRecruitment) return;
@@ -39,6 +41,8 @@
 		createIdempotencyKey = null;
 		createBestOf = 3;
 		createHardFearless = true;
+		createExpectedStartDate = '';
+		createExpectedStartTime = '';
 		createDialogOpen = true;
 	}
 
@@ -54,15 +58,36 @@
 		createIdempotencyKey = null;
 	}
 
+	function expectedStartIsoFromInput(date: string, time: string): string | null {
+		const localDate = date.trim();
+		const localTime = time.trim();
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate) || !/^\d{2}:\d{2}$/.test(localTime)) {
+			return null;
+		}
+		const [hour, minute] = localTime.split(':').map(Number);
+		if (hour > 23 || minute > 59) return null;
+		const parsed = new Date(`${localDate}T${localTime}:00`);
+		if (Number.isNaN(parsed.getTime())) return null;
+		return parsed.toISOString();
+	}
+
 	async function createNewRecruitment() {
 		if (creatingRecruitment) return;
+		const expectedStartAt = expectedStartIsoFromInput(
+			createExpectedStartDate,
+			createExpectedStartTime
+		);
+		if (!expectedStartAt) {
+			createError = '예상 시작 시간을 입력해 주세요.';
+			return;
+		}
 		const idempotencyKey = (createIdempotencyKey ??= globalThis.crypto.randomUUID());
 		creatingRecruitment = true;
 		createError = '';
 		try {
 			const created = await createRecruitment(
 				data.guildId,
-				{ bestOf: createBestOf, hardFearless: createHardFearless },
+				{ bestOf: createBestOf, hardFearless: createHardFearless, expectedStartAt },
 				idempotencyKey
 			);
 			createIdempotencyKey = null;
@@ -287,6 +312,43 @@
 
 			<div class="grid gap-5 p-4">
 				<div class="grid gap-2">
+					<span class="text-[11px] font-semibold text-slate-500">예상 시작 시간</span>
+					<div class="grid grid-cols-2 gap-2">
+						<label class="grid gap-1">
+							<span class="text-[11px] text-slate-500">날짜</span>
+							<input
+								type="date"
+								required
+								bind:value={createExpectedStartDate}
+								disabled={creatingRecruitment}
+								oninput={() => {
+									createError = '';
+									createIdempotencyKey = null;
+								}}
+								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-cyan-300/55 disabled:opacity-35"
+							/>
+						</label>
+						<label class="grid gap-1">
+							<span class="text-[11px] text-slate-500">시간 (24시간)</span>
+							<input
+								type="text"
+								required
+								maxlength="5"
+								placeholder="23:30"
+								pattern="[0-2][0-9]:[0-5][0-9]"
+								bind:value={createExpectedStartTime}
+								disabled={creatingRecruitment}
+								oninput={() => {
+									createError = '';
+									createIdempotencyKey = null;
+								}}
+								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-cyan-300/55 disabled:opacity-35"
+							/>
+						</label>
+					</div>
+				</div>
+
+				<div class="grid gap-2">
 					<span class="text-[11px] font-semibold text-slate-500">시리즈 형식</span>
 					<div
 						class="grid grid-cols-3 border border-[var(--color-app-border)] bg-[var(--color-app-control)] p-1"
@@ -363,7 +425,9 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={creatingRecruitment}
+					disabled={creatingRecruitment ||
+						!createExpectedStartDate.trim() ||
+						!createExpectedStartTime.trim()}
 					onclick={createNewRecruitment}
 					class="inline-flex h-9 items-center gap-1.5 border border-cyan-300/35 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-50 disabled:opacity-35"
 				>

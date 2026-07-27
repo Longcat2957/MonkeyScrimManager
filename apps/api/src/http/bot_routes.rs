@@ -71,6 +71,7 @@ pub struct ActorOnlyRequest {
 struct BrowserCreateRecruitmentRequest {
     best_of: Option<i16>,
     hard_fearless: Option<bool>,
+    expected_start_at: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +80,7 @@ struct BotCreateRecruitmentRequest {
     actor: ActorRequest,
     best_of: Option<i16>,
     hard_fearless: Option<bool>,
+    expected_start_at: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -402,6 +404,8 @@ pub async fn create_recruitment(
         RecruitmentCreatePrincipal::Bot(_) => {
             let request = serde_json::from_value::<BotCreateRecruitmentRequest>(request)
                 .map_err(|_| invalid_request("body", &request_id))?;
+            let expected_start_at =
+                parse_expected_start_at(request.expected_start_at.as_ref(), &request_id)?;
             recruitment_command(
                 &state,
                 &request_id,
@@ -414,6 +418,7 @@ pub async fn create_recruitment(
                         request.best_of,
                         request.hard_fearless,
                     ),
+                    expected_start_at,
                 },
             )
             .await
@@ -421,6 +426,8 @@ pub async fn create_recruitment(
         RecruitmentCreatePrincipal::Session(principal) => {
             let request = serde_json::from_value::<BrowserCreateRecruitmentRequest>(request)
                 .map_err(|_| invalid_browser_create_request(&request_id))?;
+            let expected_start_at =
+                parse_expected_start_at(request.expected_start_at.as_ref(), &request_id)?;
             require_csrf(&headers, &state, &principal, &request_id)?;
             let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
             let snapshot = bot_workflow::create_web_recruitment(
@@ -428,6 +435,7 @@ pub async fn create_recruitment(
                 &guild_id,
                 &principal.session.user_id,
                 RecruitmentSeriesRules::from_optional(request.best_of, request.hard_fearless),
+                expected_start_at,
                 &idempotency_key,
                 &request_id,
             )

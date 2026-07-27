@@ -41,7 +41,7 @@ const MEMBER_ID: &str = "100000000000000001";
 const OUTSIDER_ID: &str = "100000000000000002";
 const CANDIDATE_ID: &str = "100000000000000003";
 const EXPECTED_START_AT: &str = "2026-07-26T11:00:00Z";
-const EXPECTED_START_LABEL: &str = "2026-07-26T20:00:00+09:00 (KST)";
+const EXPECTED_START_LABEL: &str = "2026-07-26 20:00 (KST)";
 const FULL_ROSTER_MEMBER_IDS: [&str; 10] = [
     MEMBER_ID,
     CANDIDATE_ID,
@@ -2837,7 +2837,11 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         "web-recruitment-invalid-best-of",
         true,
-        json!({ "bestOf": 2, "hardFearless": true }),
+        json!({
+            "bestOf": 2,
+            "hardFearless": true,
+            "expectedStartAt": EXPECTED_START_AT
+        }),
         None,
     )
     .await?;
@@ -2867,6 +2871,32 @@ async fn run_flow() -> TestResult {
         0
     );
 
+    let missing_expected_start = browser_mutation(
+        &app,
+        Method::POST,
+        &path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-recruitment-missing-expected-start",
+        true,
+        json!({ "bestOf": 3, "hardFearless": true }),
+        None,
+    )
+    .await?;
+    assert_eq!(
+        missing_expected_start.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let missing_expected_start = body_json(missing_expected_start).await?;
+    assert_eq!(
+        missing_expected_start["error"]["code"],
+        "invalid_expected_start_at"
+    );
+    assert_eq!(
+        missing_expected_start["error"]["details"],
+        json!({ "field": "expectedStartAt" })
+    );
+
     let idempotency_key = "web-recruitment-create-1";
     let created = browser_create(
         &app,
@@ -2884,7 +2914,10 @@ async fn run_flow() -> TestResult {
         .ok_or("web create response did not contain a recruitment ID")?
         .to_owned();
     assert_eq!(created["data"]["recruitment"]["displayNumber"], 1);
-    assert_eq!(created["data"]["recruitment"]["title"], "일반 내전 모집 #1");
+    assert_eq!(
+        created["data"]["recruitment"]["title"],
+        "일반 내전 모집 #1 · 예상 시작 2026-07-26 20:00 (KST)"
+    );
     assert_eq!(created["data"]["recruitment"]["status"], "OPEN");
     assert_eq!(created["data"]["recruitment"]["targetCount"], 10);
     assert_eq!(created["data"]["recruitment"]["bestOf"], 3);
@@ -2927,7 +2960,11 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         idempotency_key,
         true,
-        json!({ "bestOf": 3, "hardFearless": true }),
+        json!({
+            "bestOf": 3,
+            "hardFearless": true,
+            "expectedStartAt": EXPECTED_START_AT
+        }),
         None,
     )
     .await?;
@@ -3192,7 +3229,11 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         "web-recruitment-close-create",
         true,
-        json!({ "bestOf": 5, "hardFearless": true }),
+        json!({
+            "bestOf": 5,
+            "hardFearless": true,
+            "expectedStartAt": EXPECTED_START_AT
+        }),
         None,
     )
     .await?;
@@ -3823,7 +3864,11 @@ async fn browser_create(
         csrf,
         idempotency_key,
         include_csrf,
-        json!({}),
+        json!({
+            "bestOf": 3,
+            "hardFearless": true,
+            "expectedStartAt": EXPECTED_START_AT
+        }),
         authorization,
     )
     .await
