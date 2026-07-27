@@ -197,7 +197,9 @@
 		const allowed =
 			command.kind === 'REVERT_LAST'
 				? snapshot.permissions.canRevertLast
-				: snapshot.permissions.canManageDraft;
+				: command.kind === 'RESET_TO_INITIAL'
+					? snapshot.permissions.canManageDraft || snapshot.permissions.canRevertLast
+					: snapshot.permissions.canManageDraft;
 		if (submitting || !allowed) return;
 		if (command.expectedRevision !== snapshot.tournament.revision) {
 			await recoverAuthoritativeSnapshot('경매 드래프트 버전이 변경되었습니다.');

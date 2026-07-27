@@ -2860,11 +2860,12 @@ paths:
       summary: Execute one auction draft command
       description: >-
         Browser-only active-operator command endpoint. Every command requires a browser
-        Idempotency-Key and expectedRevision. It appends the action history, applies normalized
-        team/candidate/lot/point state, records audit/outbox, and returns the canonical aggregate.
-        A BRACKET_SETUP tournament permits only REVERT_LAST before it is locked or has match
-        artifacts; it clears unlocked slots and returns the tournament to BIDDING without reopening
-        recruitment.
+        Idempotency-Key and expectedRevision. It applies normalized team/candidate/lot/point
+        state, records audit/outbox, and returns the canonical aggregate. Draft bid actions append
+        action history; queue reshuffle and reset are maintenance commands recorded in audit only.
+        A BRACKET_SETUP tournament permits REVERT_LAST and RESET_TO_INITIAL before it is locked or
+        has match artifacts; both clear unlocked slots and return the tournament to BIDDING without
+        reopening recruitment.
       security:
         - SessionCookie: []
           CsrfHeader: []
@@ -10803,11 +10804,13 @@ components:
           enum:
             [
               DRAW_NEXT,
+              RESHUFFLE_CANDIDATES,
               MARK_UNSOLD,
               AWARD_BID,
               ASSIGN_CURRENT,
               ASSIGN_UNSOLD,
               RESTORE_UNSOLD,
+              RESET_TO_INITIAL,
               REVERT_LAST
             ]
     AuctionTournamentDraftState:
@@ -10885,11 +10888,13 @@ components:
     AuctionTournamentDraftCommand:
       oneOf:
         - $ref: '#/components/schemas/DrawNextAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/ReshuffleCandidatesAuctionTournamentDraftCommand'
         - $ref: '#/components/schemas/MarkUnsoldAuctionTournamentDraftCommand'
         - $ref: '#/components/schemas/AwardBidAuctionTournamentDraftCommand'
         - $ref: '#/components/schemas/AssignCurrentAuctionTournamentDraftCommand'
         - $ref: '#/components/schemas/AssignUnsoldAuctionTournamentDraftCommand'
         - $ref: '#/components/schemas/RestoreUnsoldAuctionTournamentDraftCommand'
+        - $ref: '#/components/schemas/ResetToInitialAuctionTournamentDraftCommand'
         - $ref: '#/components/schemas/RevertLastAuctionTournamentDraftCommand'
       discriminator:
         propertyName: kind
@@ -10900,6 +10905,17 @@ components:
       properties:
         kind:
           const: DRAW_NEXT
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    ReshuffleCandidatesAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision]
+      properties:
+        kind:
+          const: RESHUFFLE_CANDIDATES
         expectedRevision:
           type: integer
           format: int64
@@ -10981,6 +10997,17 @@ components:
           minimum: 0
         memberId:
           $ref: '#/components/schemas/UserIdentifier'
+    ResetToInitialAuctionTournamentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [kind, expectedRevision]
+      properties:
+        kind:
+          const: RESET_TO_INITIAL
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
     RevertLastAuctionTournamentDraftCommand:
       type: object
       additionalProperties: false

@@ -6,6 +6,8 @@
 		Gavel,
 		ListChecks,
 		PackageOpen,
+		RotateCcw,
+		Shuffle,
 		Swords,
 		Trophy,
 		Undo2,
@@ -50,6 +52,7 @@
 	let showTargetDetails = $state(false);
 	let revertDialogOpen = $state(false);
 	let candidateDialogOpen = $state(false);
+	let resetDialogOpen = $state(false);
 	let scoreTimerStartedAt = 0;
 	let scoreTimerRemainingMs = $state(BID_TIMER_DURATION_MS);
 
@@ -80,6 +83,10 @@
 	const canManageDraft = $derived(snapshot.permissions.canManageDraft && !submitting);
 	const canDraw = $derived(
 		canManageDraft && !currentTarget && !allPlaced && queuedCandidates.length > 0
+	);
+	const canReshuffleCandidates = $derived(canManageDraft && queuedCandidates.length > 1);
+	const canResetToInitial = $derived(
+		!submitting && (snapshot.permissions.canManageDraft || snapshot.permissions.canRevertLast)
 	);
 	const canRevert = $derived(snapshot.permissions.canRevertLast && !submitting);
 	const revertLabel = $derived(
@@ -162,6 +169,14 @@
 
 	function drawNext() {
 		void submit({ kind: 'DRAW_NEXT', expectedRevision: snapshot.tournament.revision });
+	}
+
+	function reshuffleCandidates() {
+		if (!canReshuffleCandidates) return;
+		void submit({
+			kind: 'RESHUFFLE_CANDIDATES',
+			expectedRevision: snapshot.tournament.revision
+		});
 	}
 
 	function markUnsold() {
@@ -265,9 +280,23 @@
 		candidateDialogOpen = true;
 	}
 
+	function openResetDialog() {
+		if (!canResetToInitial) return;
+		resetDialogOpen = true;
+	}
+
 	function resetScoreTimer() {
 		scoreTimerStartedAt = Date.now();
 		scoreTimerRemainingMs = BID_TIMER_DURATION_MS;
+	}
+
+	async function resetToInitialState() {
+		if (!canResetToInitial) return;
+		const applied = await submit({
+			kind: 'RESET_TO_INITIAL',
+			expectedRevision: snapshot.tournament.revision
+		});
+		if (applied) resetDialogOpen = false;
 	}
 
 	async function revertLastAction() {
@@ -283,6 +312,7 @@
 		bidInputs = {};
 		showTargetDetails = false;
 		candidateDialogOpen = false;
+		resetDialogOpen = false;
 		clearDragState();
 	}
 
@@ -882,13 +912,31 @@
 					<p class="text-xs text-slate-500">{candidateDialogCount}명</p>
 				</div>
 				<div class="grid min-h-0 content-center gap-3 p-3">
-					<button
-						type="button"
-						class="inline-flex h-10 items-center justify-center gap-1.5 border border-cyan-400/30 px-3 text-sm font-semibold text-cyan-100 hover:bg-cyan-400/10"
-						onclick={openCandidateDialog}
-					>
-						<ListChecks size={15} aria-hidden="true" /> 후보 목록
-					</button>
+					<div class="grid gap-1.5 sm:grid-cols-3">
+						<button
+							type="button"
+							class="inline-flex h-10 items-center justify-center gap-1.5 border border-cyan-400/30 px-3 text-sm font-semibold text-cyan-100 hover:bg-cyan-400/10"
+							onclick={openCandidateDialog}
+						>
+							<ListChecks size={15} aria-hidden="true" /> 후보 목록
+						</button>
+						<button
+							type="button"
+							class="inline-flex h-10 items-center justify-center gap-1.5 border border-cyan-400/20 px-3 text-sm font-semibold text-slate-300 hover:bg-cyan-400/10 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+							disabled={!canReshuffleCandidates}
+							onclick={reshuffleCandidates}
+						>
+							<Shuffle size={15} aria-hidden="true" /> 순서 섞기
+						</button>
+						<button
+							type="button"
+							class="inline-flex h-10 items-center justify-center gap-1.5 border border-rose-300/25 px-3 text-sm font-semibold text-rose-100 hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+							disabled={!canResetToInitial}
+							onclick={openResetDialog}
+						>
+							<RotateCcw size={15} aria-hidden="true" /> 초기화
+						</button>
+					</div>
 					<div class="grid grid-cols-3 gap-px bg-[var(--color-app-border-muted)]">
 						<div class="bg-[var(--color-app-surface)] p-2 text-center">
 							<p class="text-[11px] text-slate-500">현재</p>
@@ -1175,6 +1223,47 @@
 						{/each}
 					</div>
 				</section>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
+<Dialog.Root bind:open={resetDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+		<Dialog.Content
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-4 shadow-2xl shadow-black/50 outline-none"
+		>
+			<div class="flex items-center justify-between gap-3">
+				<Dialog.Title class="text-sm font-semibold text-slate-50">경매 초기화</Dialog.Title>
+				<Dialog.Close
+					disabled={submitting}
+					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
+					aria-label="경매 초기화 창 닫기"
+				>
+					<X size={16} aria-hidden="true" />
+				</Dialog.Close>
+			</div>
+			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
+				현재 매물, 유찰, 낙찰/수동 배치, 입찰 기록을 지우고 팀장과 시작 포인트만 남긴 초기 입찰
+				상태로 되돌립니다.
+			</Dialog.Description>
+			<div class="mt-4 flex justify-end gap-2">
+				<Dialog.Close
+					disabled={submitting}
+					class="h-8 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
+				>
+					취소
+				</Dialog.Close>
+				<button
+					type="button"
+					disabled={!canResetToInitial}
+					onclick={() => void resetToInitialState()}
+					class="inline-flex h-8 items-center gap-1.5 border border-rose-300/35 bg-rose-400/10 px-3 text-xs font-semibold text-rose-100 enabled:hover:bg-rose-400/16 disabled:cursor-not-allowed disabled:opacity-35"
+				>
+					<RotateCcw size={14} aria-hidden="true" />
+					초기화
+				</button>
 			</div>
 		</Dialog.Content>
 	</Dialog.Portal>

@@ -19,6 +19,18 @@ describe('AuctionTournamentBidDraftWorkbench', () => {
 		expect(source).toContain('onclick={() => assignUnsoldMemberToTeam(team, member.userId)}');
 	});
 
+	it('offers queued-candidate reshuffle through the draft command endpoint', () => {
+		expect(source).toContain('function reshuffleCandidates');
+		expect(source).toContain("kind: 'RESHUFFLE_CANDIDATES'");
+		expect(source).toContain('순서 섞기');
+	});
+
+	it('offers a confirmed reset to the auction initial state', () => {
+		expect(source).toContain('function resetToInitialState');
+		expect(source).toContain("kind: 'RESET_TO_INITIAL'");
+		expect(source).toContain('경매 초기화');
+	});
+
 	it('exposes the bid countdown as a progress bar', () => {
 		expect(source).toContain('role="progressbar"');
 		expect(source).toContain('aria-valuenow={scoreTimerRemainingMs}');

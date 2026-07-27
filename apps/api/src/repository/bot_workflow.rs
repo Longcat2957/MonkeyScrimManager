@@ -7423,11 +7423,18 @@ async fn execute_web_auction_tournament_create_attempt(
         .execute(&mut **transaction)
         .await?;
     }
-    for (queue_position, participant) in joined
+    let bid_candidate_ids = joined
         .iter()
         .filter(|row| !captain_ids.contains(&row.user_id))
-        .enumerate()
-    {
+        .map(|participant| participant.user_id.clone())
+        .collect::<Vec<_>>();
+    let bid_candidate_order =
+        randomized_auction_candidate_user_ids(transaction, &bid_candidate_ids).await?;
+    for (queue_position, user_id) in bid_candidate_order.iter().enumerate() {
+        let participant = joined_by_user
+            .get(user_id)
+            .copied()
+            .ok_or(AttemptError::InvariantViolation)?;
         sqlx::query(
             "INSERT INTO auction_bid_candidates (
                  guild_id, tournament_id, user_id, declared_lane, mmr_at_start, snapshot_origin,
@@ -11008,8 +11015,11 @@ async fn ensure_auction_draft_command_allowed(
     match tournament.status {
         AuctionTournamentStatus::Bidding => Ok(()),
         AuctionTournamentStatus::BracketSetup
-            if matches!(command, AuctionTournamentDraftCommand::RevertLast { .. })
-                && tournament.bracket_locked_at.is_none() =>
+            if matches!(
+                command,
+                AuctionTournamentDraftCommand::RevertLast { .. }
+                    | AuctionTournamentDraftCommand::ResetToInitial { .. }
+            ) && tournament.bracket_locked_at.is_none() =>
         {
             Ok(())
         }
@@ -11316,6 +11326,264 @@ async fn insert_auction_action(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+async fn randomized_auction_candidate_user_ids(
+    transaction: &mut DatabaseTransaction,
+    source: &[UserId],
+) -> Result<Vec<UserId>, AttemptError> {
+    if source.len() <= 1 {
+        return Ok(source.to_vec());
+    }
+
+    let source_ids = source
+        .iter()
+        .map(|user_id| user_id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let randomized_ids = sqlx::query_scalar::<_, String>(
+        "SELECT requested.user_id
+         FROM unnest($1::text[]) AS requested(user_id)
+         ORDER BY random(), requested.user_id",
+    )
+    .bind(&source_ids)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut source_by_id = source
+        .iter()
+        .map(|user_id| (user_id.as_str().to_owned(), user_id.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut randomized = randomized_ids
+        .into_iter()
+        .map(|user_id| {
+            source_by_id
+                .remove(&user_id)
+                .ok_or(AttemptError::InvariantViolation)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    rotate_if_order_preserved(source, &mut randomized);
+    Ok(randomized)
+}
+
+fn rotate_if_order_preserved<T: Eq>(source: &[T], order: &mut [T]) {
+    if source.len() > 1 && source == order {
+        order.rotate_left(1);
+    }
+}
+
+async fn reshuffle_auction_queued_candidates(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+    candidates: &[AuctionTournamentCandidateLockRow],
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    let queued = candidates
+        .iter()
+        .filter(|candidate| candidate.state == "QUEUED")
+        .collect::<Vec<_>>();
+    if queued.len() <= 1 {
+        return Ok(());
+    }
+    let source = queued
+        .iter()
+        .map(|candidate| candidate.user_id.clone())
+        .collect::<Vec<_>>();
+    let positions = queued
+        .iter()
+        .map(|candidate| candidate.queue_position)
+        .collect::<Vec<_>>();
+    let randomized = randomized_auction_candidate_user_ids(transaction, &source).await?;
+    assign_auction_candidate_queue_positions(
+        transaction,
+        guild_id,
+        tournament_id,
+        &randomized,
+        &positions,
+        now,
+        false,
+    )
+    .await
+}
+
+async fn reset_auction_tournament_draft_to_initial(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+    actor_id: &UserId,
+    candidates: &[AuctionTournamentCandidateLockRow],
+    now: OffsetDateTime,
+) -> Result<(), AttemptError> {
+    clear_unlocked_auction_bracket_slots(transaction, guild_id, tournament_id, actor_id, now)
+        .await?;
+    sqlx::query(
+        "DELETE FROM auction_point_ledger
+         WHERE guild_id = $1 AND tournament_id = $2 AND reason = 'REVERSAL'",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM auction_point_ledger
+         WHERE guild_id = $1 AND tournament_id = $2 AND reason = 'BID_DEBIT'",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM auction_team_members
+         WHERE guild_id = $1 AND tournament_id = $2 AND acquired_via <> 'CAPTAIN'",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM auction_actions
+         WHERE guild_id = $1 AND tournament_id = $2 AND kind = 'REVERT_LAST'",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM auction_actions
+         WHERE guild_id = $1 AND tournament_id = $2",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM auction_lots
+         WHERE guild_id = $1 AND tournament_id = $2",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE auction_teams
+         SET current_points = initial_points, point_revision = 0
+         WHERE guild_id = $1 AND tournament_id = $2",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .execute(&mut **transaction)
+    .await?;
+
+    let source = candidates
+        .iter()
+        .map(|candidate| candidate.user_id.clone())
+        .collect::<Vec<_>>();
+    let positions = candidates
+        .iter()
+        .map(|candidate| candidate.queue_position)
+        .collect::<Vec<_>>();
+    let randomized = randomized_auction_candidate_user_ids(transaction, &source).await?;
+    assign_auction_candidate_queue_positions(
+        transaction,
+        guild_id,
+        tournament_id,
+        &randomized,
+        &positions,
+        now,
+        true,
+    )
+    .await
+}
+
+async fn assign_auction_candidate_queue_positions(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+    ordered_user_ids: &[UserId],
+    queue_positions: &[i64],
+    now: OffsetDateTime,
+    reset_state: bool,
+) -> Result<(), AttemptError> {
+    if ordered_user_ids.is_empty() {
+        return Ok(());
+    }
+    if ordered_user_ids.len() != queue_positions.len() {
+        return Err(AttemptError::InvariantViolation);
+    }
+    let user_ids = ordered_user_ids
+        .iter()
+        .map(|user_id| user_id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let max_position = queue_positions
+        .iter()
+        .copied()
+        .max()
+        .ok_or(AttemptError::InvariantViolation)?;
+    let temporary_offset = max_position
+        .checked_add(
+            i64::try_from(ordered_user_ids.len()).map_err(|_| AttemptError::InvariantViolation)?,
+        )
+        .and_then(|value| value.checked_add(1))
+        .ok_or(AttemptError::InvariantViolation)?;
+    let expected_rows =
+        u64::try_from(ordered_user_ids.len()).map_err(|_| AttemptError::InvariantViolation)?;
+
+    let bumped = sqlx::query(
+        "UPDATE auction_bid_candidates
+         SET queue_position = queue_position + $3
+         WHERE guild_id = $1
+           AND tournament_id = $2
+           AND user_id = ANY($4::text[])",
+    )
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .bind(temporary_offset)
+    .bind(&user_ids)
+    .execute(&mut **transaction)
+    .await?;
+    if bumped.rows_affected() != expected_rows {
+        return Err(AttemptError::InvariantViolation);
+    }
+
+    let query = if reset_state {
+        "WITH assignment AS (
+             SELECT requested.user_id, requested.queue_position
+             FROM unnest($3::text[], $4::bigint[]) AS requested(user_id, queue_position)
+         )
+         UPDATE auction_bid_candidates AS candidate
+         SET queue_position = assignment.queue_position,
+             state = 'QUEUED',
+             draw_count = 0,
+             updated_at = $5
+         FROM assignment
+         WHERE candidate.guild_id = $1
+           AND candidate.tournament_id = $2
+           AND candidate.user_id = assignment.user_id"
+    } else {
+        "WITH assignment AS (
+             SELECT requested.user_id, requested.queue_position
+             FROM unnest($3::text[], $4::bigint[]) AS requested(user_id, queue_position)
+         )
+         UPDATE auction_bid_candidates AS candidate
+         SET queue_position = assignment.queue_position,
+             updated_at = $5
+         FROM assignment
+         WHERE candidate.guild_id = $1
+           AND candidate.tournament_id = $2
+           AND candidate.user_id = assignment.user_id"
+    };
+    let assigned = sqlx::query(query)
+        .bind(guild_id)
+        .bind(tournament_id.as_uuid())
+        .bind(&user_ids)
+        .bind(queue_positions)
+        .bind(now)
+        .execute(&mut **transaction)
+        .await?;
+    if assigned.rows_affected() == expected_rows {
+        Ok(())
+    } else {
+        Err(AttemptError::InvariantViolation)
+    }
 }
 
 async fn insert_auction_active_lot(
@@ -11730,6 +11998,17 @@ async fn apply_auction_tournament_draft_command(
             .await?;
             Ok(AuctionTournamentStatus::Bidding)
         }
+        AuctionTournamentDraftCommand::ReshuffleCandidates { .. } => {
+            reshuffle_auction_queued_candidates(
+                transaction,
+                guild_id,
+                tournament_id,
+                candidates,
+                prepared.now,
+            )
+            .await?;
+            Ok(AuctionTournamentStatus::Bidding)
+        }
         AuctionTournamentDraftCommand::MarkUnsold { member_id, .. } => {
             let target = current_auction_draft_target(candidates, lots)?
                 .ok_or(AttemptError::AuctionDraftCurrentTargetRequired)?;
@@ -12072,6 +12351,18 @@ async fn apply_auction_tournament_draft_command(
                 member_id,
                 "UNSOLD",
                 "ACTIVE",
+                prepared.now,
+            )
+            .await?;
+            Ok(AuctionTournamentStatus::Bidding)
+        }
+        AuctionTournamentDraftCommand::ResetToInitial { .. } => {
+            reset_auction_tournament_draft_to_initial(
+                transaction,
+                guild_id,
+                tournament_id,
+                actor_id,
+                candidates,
                 prepared.now,
             )
             .await?;
@@ -20657,6 +20948,9 @@ pub enum AuctionTournamentDraftCommand {
     DrawNext {
         expected_revision: i64,
     },
+    ReshuffleCandidates {
+        expected_revision: i64,
+    },
     MarkUnsold {
         expected_revision: i64,
         member_id: UserId,
@@ -20681,6 +20975,9 @@ pub enum AuctionTournamentDraftCommand {
         expected_revision: i64,
         member_id: UserId,
     },
+    ResetToInitial {
+        expected_revision: i64,
+    },
     RevertLast {
         expected_revision: i64,
     },
@@ -20690,6 +20987,7 @@ impl AuctionTournamentDraftCommand {
     pub(crate) fn expected_revision(&self) -> i64 {
         match self {
             Self::DrawNext { expected_revision }
+            | Self::ReshuffleCandidates { expected_revision }
             | Self::MarkUnsold {
                 expected_revision, ..
             }
@@ -20705,6 +21003,7 @@ impl AuctionTournamentDraftCommand {
             | Self::RestoreUnsold {
                 expected_revision, ..
             }
+            | Self::ResetToInitial { expected_revision }
             | Self::RevertLast { expected_revision } => *expected_revision,
         }
     }
@@ -20712,11 +21011,13 @@ impl AuctionTournamentDraftCommand {
     fn kind(&self) -> &'static str {
         match self {
             Self::DrawNext { .. } => "DRAW_NEXT",
+            Self::ReshuffleCandidates { .. } => "RESHUFFLE_CANDIDATES",
             Self::MarkUnsold { .. } => "MARK_UNSOLD",
             Self::AwardBid { .. } => "AWARD_BID",
             Self::AssignCurrent { .. } => "ASSIGN_CURRENT",
             Self::AssignUnsold { .. } => "ASSIGN_UNSOLD",
             Self::RestoreUnsold { .. } => "RESTORE_UNSOLD",
+            Self::ResetToInitial { .. } => "RESET_TO_INITIAL",
             Self::RevertLast { .. } => "REVERT_LAST",
         }
     }
@@ -22984,6 +23285,50 @@ mod tests {
                 "unexpected": true
             }))
             .is_err()
+        );
+        let reshuffle = serde_json::from_value::<AuctionTournamentDraftCommand>(json!({
+            "kind": "RESHUFFLE_CANDIDATES",
+            "expectedRevision": 8
+        }))
+        .expect("valid auction reshuffle command");
+        assert!(matches!(
+            reshuffle,
+            AuctionTournamentDraftCommand::ReshuffleCandidates {
+                expected_revision: 8
+            }
+        ));
+        let reset = serde_json::from_value::<AuctionTournamentDraftCommand>(json!({
+            "kind": "RESET_TO_INITIAL",
+            "expectedRevision": 9
+        }))
+        .expect("valid auction reset command");
+        assert!(matches!(
+            reset,
+            AuctionTournamentDraftCommand::ResetToInitial {
+                expected_revision: 9
+            }
+        ));
+    }
+
+    #[test]
+    fn auction_candidate_random_order_never_preserves_source_when_possible() {
+        let source = vec![
+            UserId::parse("100000000000000001").expect("user 1"),
+            UserId::parse("100000000000000002").expect("user 2"),
+            UserId::parse("100000000000000003").expect("user 3"),
+        ];
+        let mut order = source.clone();
+
+        rotate_if_order_preserved(&source, &mut order);
+
+        assert_ne!(order, source);
+        assert_eq!(
+            order,
+            vec![
+                UserId::parse("100000000000000002").expect("user 2"),
+                UserId::parse("100000000000000003").expect("user 3"),
+                UserId::parse("100000000000000001").expect("user 1"),
+            ]
         );
     }
 

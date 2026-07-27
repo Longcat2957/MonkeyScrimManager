@@ -540,7 +540,10 @@ async fn assert_auction_tournament_cancel_preview(
     let browser_preview = get(app, &active_path, Some(member_cookie)).await?;
     assert_eq!(browser_preview.status(), StatusCode::OK);
     let browser_preview = body_json(browser_preview).await?;
-    assert_eq!(browser_preview["data"]["tournament"]["id"], ACTIVE_TOURNAMENT);
+    assert_eq!(
+        browser_preview["data"]["tournament"]["id"],
+        ACTIVE_TOURNAMENT
+    );
     assert_eq!(browser_preview["data"]["tournament"]["status"], "IN_GAME");
     assert_eq!(browser_preview["data"]["tournament"]["revision"], 7);
 
@@ -570,16 +573,13 @@ async fn assert_browser_auction_tournament_cancel(app: &Router) -> TestResult {
     let response = body_json(response).await?;
     assert_eq!(response["data"]["tournamentId"], ACTIVE_TOURNAMENT);
     assert_eq!(response["data"]["tournamentStatus"], "CANCELLED");
-    assert_eq!(response["data"]["sourceRecruitmentId"], AUCTION_ACTIVE_SOURCE);
+    assert_eq!(
+        response["data"]["sourceRecruitmentId"],
+        AUCTION_ACTIVE_SOURCE
+    );
     assert_eq!(response["data"]["reversedGameCount"], 0);
 
-    let replay = browser_post(
-        app,
-        &path,
-        "01900000-0000-7000-8000-000000000911",
-        body,
-    )
-    .await?;
+    let replay = browser_post(app, &path, "01900000-0000-7000-8000-000000000911", body).await?;
     assert_eq!(replay.status(), StatusCode::OK);
     assert_eq!(body_json(replay).await?["data"], response["data"]);
     Ok(())

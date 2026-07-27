@@ -132,11 +132,13 @@ export const auctionTournamentCurrentTargetProfileSchema = z
 
 export const auctionTournamentDraftCommandKindSchema = z.enum([
 	'DRAW_NEXT',
+	'RESHUFFLE_CANDIDATES',
 	'MARK_UNSOLD',
 	'AWARD_BID',
 	'ASSIGN_CURRENT',
 	'ASSIGN_UNSOLD',
 	'RESTORE_UNSOLD',
+	'RESET_TO_INITIAL',
 	'REVERT_LAST'
 ]);
 
@@ -212,6 +214,7 @@ export const auctionTournamentDraftSnapshotSchema = z
 
 export const auctionTournamentDraftCommandSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('DRAW_NEXT'), expectedRevision: revisionSchema }).strict(),
+	z.object({ kind: z.literal('RESHUFFLE_CANDIDATES'), expectedRevision: revisionSchema }).strict(),
 	z
 		.object({
 			kind: z.literal('MARK_UNSOLD'),
@@ -251,6 +254,7 @@ export const auctionTournamentDraftCommandSchema = z.discriminatedUnion('kind', 
 			memberId: userIdSchema
 		})
 		.strict(),
+	z.object({ kind: z.literal('RESET_TO_INITIAL'), expectedRevision: revisionSchema }).strict(),
 	z.object({ kind: z.literal('REVERT_LAST'), expectedRevision: revisionSchema }).strict()
 ]);
 

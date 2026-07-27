@@ -2871,29 +2871,33 @@ async fn run_flow() -> TestResult {
         0
     );
 
-    let missing_expected_start = browser_mutation(
+    let invalid_expected_start = browser_mutation(
         &app,
         Method::POST,
         &path,
         MEMBER_SESSION,
         MEMBER_CSRF,
-        "web-recruitment-missing-expected-start",
+        "web-recruitment-invalid-expected-start",
         true,
-        json!({ "bestOf": 3, "hardFearless": true }),
+        json!({
+            "bestOf": 3,
+            "hardFearless": true,
+            "expectedStartAt": "2026-07-26T20:00:00"
+        }),
         None,
     )
     .await?;
     assert_eq!(
-        missing_expected_start.status(),
+        invalid_expected_start.status(),
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    let missing_expected_start = body_json(missing_expected_start).await?;
+    let invalid_expected_start = body_json(invalid_expected_start).await?;
     assert_eq!(
-        missing_expected_start["error"]["code"],
+        invalid_expected_start["error"]["code"],
         "invalid_expected_start_at"
     );
     assert_eq!(
-        missing_expected_start["error"]["details"],
+        invalid_expected_start["error"]["details"],
         json!({ "field": "expectedStartAt" })
     );
 

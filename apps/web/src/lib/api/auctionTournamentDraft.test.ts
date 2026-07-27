@@ -263,4 +263,35 @@ describe('auction tournament draft API client', () => {
 			`다른 운영자가 먼저 입찰을 반영했습니다. (요청 ID: ${requestId})`
 		);
 	});
+
+	it('sends queue reshuffle and force-reset commands through the draft command route', async () => {
+		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return envelope();
+		});
+		installBrowser(fetcher);
+
+		await executeAuctionTournamentDraftCommand(
+			guildId,
+			tournamentId,
+			{ kind: 'RESHUFFLE_CANDIDATES', expectedRevision: 7 },
+			idempotencyKey
+		);
+		await executeAuctionTournamentDraftCommand(
+			guildId,
+			tournamentId,
+			{ kind: 'RESET_TO_INITIAL', expectedRevision: 7 },
+			'01900000-0000-7000-8000-000000000003'
+		);
+
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+			kind: 'RESHUFFLE_CANDIDATES',
+			expectedRevision: 7
+		});
+		expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+			kind: 'RESET_TO_INITIAL',
+			expectedRevision: 7
+		});
+	});
 });
