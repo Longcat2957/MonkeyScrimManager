@@ -17,7 +17,7 @@ import type { BotCommand } from './types.js';
 const BEST_OF_OPTION = '형식';
 const HARD_FEARLESS_OPTION = '하드피어리스';
 const DEFAULT_BEST_OF = 3;
-const DEFAULT_HARD_FEARLESS = false;
+const DEFAULT_HARD_FEARLESS = true;
 
 export const recruitCommand: BotCommand = {
 	data: new SlashCommandBuilder()

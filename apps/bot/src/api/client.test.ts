@@ -19,6 +19,8 @@ const requestId = '01900000-0000-7000-8000-000000000001';
 const serviceToken = 's'.repeat(32);
 const notificationId = '01900000-0000-7000-8000-000000000301';
 const leaseToken = '01900000-0000-7000-8000-000000000302';
+const expectedStartAt = '2026-07-26T11:00:00Z';
+const expectedStartLabel = '2026-07-26T20:00:00+09:00 (KST)';
 
 const actor: Actor = {
 	id: userId,
@@ -54,7 +56,7 @@ const auctionSnapshot: AuctionRecruitmentSnapshot = {
 	recruitment: {
 		id: auctionRecruitmentId,
 		displayNumber: 215,
-		title: '20인 경매 내전 모집 #215',
+		title: `20인 경매 내전 모집 #215 · 예상 시작 ${expectedStartLabel}`,
 		format: 'TWENTY_PERSON',
 		rules: { hardFearless: false, semifinalBestOf: 3, finalBestOf: 3 },
 		participantCount: 20,
@@ -319,7 +321,8 @@ describe('MonkeyBotApiClient', () => {
 					format: 'TWENTY_PERSON',
 					semifinalBestOf: 1,
 					finalBestOf: 5,
-					hardFearless: true
+					hardFearless: true,
+					expectedStartAt
 				},
 				{ idempotencyKey: '400000000000000007' }
 			)
@@ -333,7 +336,8 @@ describe('MonkeyBotApiClient', () => {
 			format: 'TWENTY_PERSON',
 			semifinalBestOf: 1,
 			finalBestOf: 5,
-			hardFearless: true
+			hardFearless: true,
+			expectedStartAt
 		});
 		const headers = new Headers((init as RequestInit).headers);
 		expect(headers.get('idempotency-key')).toBe('400000000000000007');

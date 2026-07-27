@@ -7,6 +7,8 @@ import { renderAuctionRecruitmentMessage } from './auction-recruitment-message.j
 const guildId = '200000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const webOrigin = new URL('https://dev.monkeybot.lol');
+const expectedStartAt = '2026-07-26T11:00:00Z';
+const expectedStartLabel = '2026-07-26T20:00:00+09:00 (KST)';
 
 function snapshot(
 	status: AuctionRecruitmentSnapshot['recruitment']['status'],
@@ -17,7 +19,7 @@ function snapshot(
 		recruitment: {
 			id: recruitmentId,
 			displayNumber: 214,
-			title: '금요 경매 내전',
+			title: `금요 경매 내전 · 예상 시작 ${expectedStartLabel}`,
 			format,
 			rules:
 				format === 'TEN_PERSON'
@@ -65,6 +67,7 @@ describe('renderAuctionRecruitmentMessage', () => {
 		expect(serialized).toContain('참가 라인 선택 후 참가');
 		expect(serialized).toContain('"max_values":1');
 		expect(serialized).toContain('BO3 · 일반');
+		expect(serialized).toContain(expectedStartLabel);
 	});
 
 	it('keeps leave and lane controls but hides join after a full 20-person roster', () => {

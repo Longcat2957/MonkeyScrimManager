@@ -67,6 +67,9 @@
 	let cancelDialogOpen = $state(false);
 	let cancelError = $state('');
 	let cancelIdempotencyKey = $state<string | null>(null);
+	let createAuctionRecruitmentDialogOpen = $state(false);
+	let createAuctionRecruitmentExpectedStartAt = $state('');
+	let createAuctionRecruitmentError = $state('');
 	let activeRouteKey = $state<string | null>(null);
 	let realtimeConnectionState = $state<RealtimeConnectionState>('reconnecting');
 	let realtimeConflict = $state(false);
@@ -236,6 +239,9 @@
 		cancelDialogOpen = false;
 		cancelError = '';
 		cancelIdempotencyKey = null;
+		createAuctionRecruitmentDialogOpen = false;
+		createAuctionRecruitmentExpectedStartAt = '';
+		createAuctionRecruitmentError = '';
 		idempotencyKeys.invalidate('entry-draft-move');
 		idempotencyKeys.invalidate('entry-draft-reset');
 		idempotencyKeys.invalidate('entry-draft-create-series');
@@ -463,6 +469,21 @@
 		}
 	}
 
+	function expectedStartIsoFromInput(value: string): string | null {
+		const trimmed = value.trim();
+		if (!trimmed) return null;
+		const parsed = new Date(trimmed);
+		if (Number.isNaN(parsed.getTime())) return null;
+		return parsed.toISOString();
+	}
+
+	function openCreateAuctionRecruitmentDialog() {
+		if (!snapshot || !canCreateAuctionRecruitment || mutationLocked) return;
+		createAuctionRecruitmentError = '';
+		createAuctionRecruitmentExpectedStartAt = '';
+		createAuctionRecruitmentDialogOpen = true;
+	}
+
 	async function createAuctionRecruitment() {
 		const route = currentEntryRoute();
 		const currentSnapshot = snapshot;
@@ -470,15 +491,20 @@
 			!isCurrentRoute(route) ||
 			!currentSnapshot ||
 			!canCreateAuctionRecruitment ||
-			!hasCompleteAssignments ||
 			mutationLocked
 		) {
+			return;
+		}
+		const expectedStartAt = expectedStartIsoFromInput(createAuctionRecruitmentExpectedStartAt);
+		if (!expectedStartAt) {
+			createAuctionRecruitmentError = '예상 시작 시간을 입력해 주세요.';
 			return;
 		}
 
 		const operation = {
 			sourceRecruitmentId: currentSnapshot.recruitment.id,
-			expectedRevision: currentSnapshot.recruitment.revision
+			expectedRevision: currentSnapshot.recruitment.revision,
+			expectedStartAt
 		};
 		const idempotencyKey = idempotencyKeys.keyFor(
 			'entry-draft-create-auction-recruitment',
@@ -493,18 +519,22 @@
 				route.recruitmentId,
 				{
 					expectedRevision: operation.expectedRevision,
+					expectedStartAt: operation.expectedStartAt,
 					idempotencyKey
 				}
 			);
 			if (!isCurrentRoute(route)) return;
+			createAuctionRecruitmentDialogOpen = false;
 			idempotencyKeys.complete('entry-draft-create-auction-recruitment');
 			await goto(auctionRecruitment.links.draft ?? auctionRecruitment.recruitment.href);
 		} catch (cause) {
 			if (!isCurrentRoute(route)) return;
 			if (isEntryDraftAuthoritativeStateError(cause)) {
+				createAuctionRecruitmentDialogOpen = false;
 				await recoverAfterRevisionConflict(cause, 'createAuctionRecruitment', route);
 			} else {
-				mutationError = entryDraftErrorText(cause);
+				createAuctionRecruitmentError = entryDraftErrorText(cause);
+				mutationError = createAuctionRecruitmentError;
 			}
 		} finally {
 			if (isCurrentRoute(route)) {
@@ -641,8 +671,8 @@
 				{#if canShowCreateAuctionRecruitment}
 					<button
 						type="button"
-						disabled={mutationLocked || !canCreateAuctionRecruitment || !hasCompleteAssignments}
-						onclick={createAuctionRecruitment}
+						disabled={mutationLocked || !canCreateAuctionRecruitment}
+						onclick={openCreateAuctionRecruitmentDialog}
 						class="inline-flex h-10 items-center gap-1.5 border border-emerald-300/35 bg-emerald-400/10 px-3 text-xs font-semibold text-emerald-50 enabled:hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
 					>
 						{#if mutation === 'createAuctionRecruitment'}
@@ -784,6 +814,75 @@
 		/>
 	{/if}
 </div>
+
+<Dialog.Root bind:open={createAuctionRecruitmentDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+		<Dialog.Content
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)] shadow-2xl shadow-black/50 outline-none"
+		>
+			<header
+				class="flex h-12 items-center justify-between border-b border-[var(--color-app-border)] px-4"
+			>
+				<Dialog.Title class="text-sm font-semibold text-slate-50">경매 모집 전환</Dialog.Title>
+				<Dialog.Close
+					disabled={isMutating}
+					class="grid size-8 place-items-center text-slate-400 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:opacity-35"
+					aria-label="경매 모집 전환 창 닫기"
+				>
+					<X size={16} aria-hidden="true" />
+				</Dialog.Close>
+			</header>
+			<div class="grid gap-3 p-4">
+				<Dialog.Description class="text-xs leading-5 text-slate-400">
+					모집 #{snapshot?.recruitment.displayNumber}의 현재 참가자를 경매 후보로 가져옵니다.
+				</Dialog.Description>
+				<label class="grid gap-2">
+					<span class="text-[11px] font-semibold text-slate-500">예상 시작 시간</span>
+					<input
+						type="datetime-local"
+						required
+						bind:value={createAuctionRecruitmentExpectedStartAt}
+						disabled={isMutating}
+						oninput={() => {
+							createAuctionRecruitmentError = '';
+							idempotencyKeys.invalidate('entry-draft-create-auction-recruitment');
+						}}
+						class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-emerald-300/55 disabled:opacity-35"
+					/>
+				</label>
+				{#if createAuctionRecruitmentError}
+					<p
+						class="border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs leading-5 text-rose-300"
+						role="alert"
+					>
+						{createAuctionRecruitmentError}
+					</p>
+				{/if}
+			</div>
+			<footer class="flex justify-end gap-2 border-t border-[var(--color-app-border)] px-4 py-3">
+				<Dialog.Close
+					disabled={isMutating}
+					class="h-9 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
+				>
+					취소
+				</Dialog.Close>
+				<button
+					type="button"
+					disabled={isMutating || !createAuctionRecruitmentExpectedStartAt.trim()}
+					onclick={createAuctionRecruitment}
+					class="inline-flex h-9 items-center gap-1.5 border border-emerald-300/35 bg-emerald-400/10 px-3 text-xs font-semibold text-emerald-100 enabled:hover:bg-emerald-400/16 disabled:cursor-not-allowed disabled:opacity-35"
+				>
+					{#if mutation === 'createAuctionRecruitment'}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 전환 중
+					{:else}
+						<Gavel size={14} aria-hidden="true" /> 경매 모집 전환
+					{/if}
+				</button>
+			</footer>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
 
 <Dialog.Root bind:open={reopenDialogOpen}>
 	<Dialog.Portal>

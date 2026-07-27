@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, types::Json};
 use thiserror::Error;
-use time::{Duration, OffsetDateTime};
+use time::{Duration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 use super::workflow::AuctionFormat;
@@ -308,7 +308,7 @@ impl Default for RecruitmentSeriesRules {
     fn default() -> Self {
         Self {
             best_of: DEFAULT_RECRUITMENT_BEST_OF,
-            hard_fearless: false,
+            hard_fearless: true,
         }
     }
 }
@@ -317,7 +317,7 @@ impl RecruitmentSeriesRules {
     pub fn from_optional(best_of: Option<i16>, hard_fearless: Option<bool>) -> Self {
         Self {
             best_of: best_of.unwrap_or(DEFAULT_RECRUITMENT_BEST_OF),
-            hard_fearless: hard_fearless.unwrap_or(false),
+            hard_fearless: hard_fearless.unwrap_or(true),
         }
     }
 }
@@ -338,7 +338,7 @@ impl AuctionRecruitmentSeriesRules {
         hard_fearless: Option<bool>,
     ) -> Self {
         Self {
-            hard_fearless: hard_fearless.unwrap_or(false),
+            hard_fearless: hard_fearless.unwrap_or(true),
             semifinal_best_of: match format {
                 AuctionFormat::TenPerson => semifinal_best_of,
                 AuctionFormat::TwentyPerson => {
@@ -1892,10 +1892,15 @@ pub async fn execute_auction_recruitment_command(
     actor: BotActor,
     format: AuctionFormat,
     rules: AuctionRecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
 ) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
     validate_actor(&actor)?;
     validate_auction_recruitment_series_rules(format, &rules)?;
-    let command = AuctionRecruitmentCreateRequest { format, rules };
+    let command = AuctionRecruitmentCreateRequest {
+        format,
+        rules,
+        expected_start_at,
+    };
     let request_hash = request_hash(guild_id, &command)?;
     execute_auction_recruitment_create(
         pool,
@@ -1903,6 +1908,7 @@ pub async fn execute_auction_recruitment_command(
         AuctionRecruitmentCreateActor::Bot(actor),
         format,
         rules,
+        expected_start_at,
         IdempotencyPrincipalType::Bot,
         BOT_PRINCIPAL_ID,
         idempotency_key.as_str(),
@@ -1961,11 +1967,16 @@ pub async fn create_web_auction_recruitment(
     actor_id: &UserId,
     format: AuctionFormat,
     rules: AuctionRecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
     validate_auction_recruitment_series_rules(format, &rules)?;
-    let command = AuctionRecruitmentCreateRequest { format, rules };
+    let command = AuctionRecruitmentCreateRequest {
+        format,
+        rules,
+        expected_start_at,
+    };
     let request_hash = request_hash(guild_id, &command)?;
     execute_auction_recruitment_create(
         pool,
@@ -1973,6 +1984,7 @@ pub async fn create_web_auction_recruitment(
         AuctionRecruitmentCreateActor::Session(actor_id.clone()),
         format,
         rules,
+        expected_start_at,
         IdempotencyPrincipalType::User,
         actor_id.as_str(),
         idempotency_key,
@@ -3112,6 +3124,7 @@ pub async fn convert_web_entry_draft_to_auction_recruitment(
     actor_id: &UserId,
     source_recruitment_id: RecruitmentId,
     expected_revision: i64,
+    expected_start_at: OffsetDateTime,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
@@ -3124,6 +3137,7 @@ pub async fn convert_web_entry_draft_to_auction_recruitment(
     let command = WebEntryDraftAuctionConversionCommand {
         source_recruitment_id,
         expected_revision,
+        expected_start_at,
     };
     let request_hash = request_hash(guild_id, &command)?;
     let guild_id = guild_id.clone();
@@ -3617,6 +3631,7 @@ async fn execute_auction_recruitment_create(
     actor: AuctionRecruitmentCreateActor,
     format: AuctionFormat,
     rules: AuctionRecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     principal_type: IdempotencyPrincipalType,
     principal_id: &str,
     idempotency_key: &str,
@@ -3647,6 +3662,7 @@ async fn execute_auction_recruitment_create(
                     &actor,
                     format,
                     rules,
+                    expected_start_at,
                     principal_type,
                     &principal_id,
                     &idempotency_key,
@@ -5050,35 +5066,19 @@ async fn execute_web_entry_draft_auction_conversion_attempt(
         return Err(AttemptError::EntryDraftAlreadyConvertedToSeries);
     }
 
-    let assignments = locked_full_entry_assignments(
+    let participants = locked_entry_draft_auction_conversion_participants(
         transaction,
         guild_id,
         command.source_recruitment_id,
         recruitment.target_count,
-    )
-    .await?;
-    let mmr_rows = mmr::ensure_and_lock_mmr_rows(
-        transaction,
-        guild_id,
         SeasonId::from_uuid(recruitment.season_id),
-        assignments.iter().map(|assignment| MmrLaneKey {
-            user_id: assignment.user_id.clone(),
-            lane: assignment.lane,
-        }),
         prepared.now,
     )
     .await?;
-    let mmr_by_assignment = mmr_rows
-        .into_iter()
-        .map(|row| ((row.key.user_id, row.key.lane), row.mmr))
-        .collect::<HashMap<_, _>>();
-    if mmr_by_assignment.len() != assignments.len() {
-        return Err(AttemptError::InvariantViolation);
-    }
 
     let format = AuctionFormat::TenPerson;
     let display_number = next_auction_recruitment_display_number(transaction, guild_id).await?;
-    let title = format!("10인 경매 내전 모집 #{display_number}");
+    let title = auction_recruitment_title(format, display_number, command.expected_start_at)?;
     sqlx::query(
         "INSERT INTO auction_recruitments (
              guild_id, id, season_id, display_number, title, format, target_count,
@@ -5129,11 +5129,7 @@ async fn execute_web_entry_draft_auction_conversion_attempt(
         .await?;
     }
 
-    for (index, assignment) in assignments.iter().enumerate() {
-        let mmr_at_join = mmr_by_assignment
-            .get(&(assignment.user_id.clone(), assignment.lane))
-            .copied()
-            .ok_or(AttemptError::InvariantViolation)?;
+    for (index, participant) in participants.iter().enumerate() {
         let offset = Duration::milliseconds(
             i64::try_from(index).map_err(|_| AttemptError::InvariantViolation)?,
         );
@@ -5141,13 +5137,14 @@ async fn execute_web_entry_draft_auction_conversion_attempt(
             "INSERT INTO auction_recruitment_participants (
                  guild_id, recruitment_id, user_id, status, declared_lane, mmr_at_join,
                  snapshot_origin, joined_at, withdrawn_at
-             ) VALUES ($1, $2, $3, 'JOINED', $4, $5, 'CAPTURED', $6, NULL)",
+             ) VALUES ($1, $2, $3, 'JOINED', $4, $5, $6, $7, NULL)",
         )
         .bind(guild_id)
         .bind(prepared.auction_recruitment_id.as_uuid())
-        .bind(&assignment.user_id)
-        .bind(assignment.lane)
-        .bind(mmr_at_join)
+        .bind(&participant.user_id)
+        .bind(participant.declared_lane)
+        .bind(participant.mmr_at_join)
+        .bind(participant.snapshot_origin)
         .bind(prepared.now + offset)
         .execute(&mut **transaction)
         .await?;
@@ -5226,7 +5223,11 @@ async fn execute_web_entry_draft_auction_conversion_attempt(
             before_summary: Some(json!({
                 "sourceRecruitmentId": command.source_recruitment_id,
                 "sourceRecruitmentRevision": recruitment.revision,
-                "assignmentCount": assignments.len(),
+                "participantCount": participants.len(),
+                "declaredLaneCount": participants
+                    .iter()
+                    .filter(|participant| participant.declared_lane.is_some())
+                    .count(),
             })),
             after_summary: Some(serde_json::to_value(&snapshot)?),
             now: prepared.now,
@@ -6244,6 +6245,7 @@ async fn execute_auction_recruitment_create_attempt(
     actor: &AuctionRecruitmentCreateActor,
     format: AuctionFormat,
     rules: AuctionRecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     principal_type: IdempotencyPrincipalType,
     principal_id: &str,
     idempotency_key: &str,
@@ -6285,6 +6287,7 @@ async fn execute_auction_recruitment_create_attempt(
         &actor_id,
         format,
         rules,
+        expected_start_at,
         prepared.recruitment_id,
         prepared.now,
     )
@@ -8749,6 +8752,7 @@ async fn insert_auction_recruitment(
     actor_id: &UserId,
     format: AuctionFormat,
     rules: AuctionRecruitmentSeriesRules,
+    expected_start_at: OffsetDateTime,
     recruitment_id: AuctionRecruitmentId,
     now: OffsetDateTime,
 ) -> Result<AuctionRecruitmentSnapshot, AttemptError> {
@@ -8772,10 +8776,7 @@ async fn insert_auction_recruitment(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AttemptError::MissingAuctionRecruitmentCounter)?;
-    let title = format!(
-        "{}인 경매 내전 모집 #{display_number}",
-        format.participant_count()
-    );
+    let title = auction_recruitment_title(format, display_number, expected_start_at)?;
 
     sqlx::query(
         "INSERT INTO auction_recruitments (
@@ -8825,6 +8826,23 @@ async fn insert_auction_recruitment(
     }
 
     auction_recruitment_snapshot(transaction, guild_id, recruitment_id, actor_id).await
+}
+
+fn auction_recruitment_title(
+    format: AuctionFormat,
+    display_number: i64,
+    expected_start_at: OffsetDateTime,
+) -> Result<String, AttemptError> {
+    let korea_standard_time =
+        UtcOffset::from_hms(9, 0, 0).map_err(|_| AttemptError::InvariantViolation)?;
+    let expected_start = expected_start_at
+        .to_offset(korea_standard_time)
+        .format(&Rfc3339)
+        .map_err(|_| AttemptError::InvariantViolation)?;
+    Ok(format!(
+        "{}인 경매 내전 모집 #{display_number} · 예상 시작 {expected_start} (KST)",
+        format.participant_count()
+    ))
 }
 
 async fn auction_recruitment_snapshot(
@@ -13478,16 +13496,25 @@ async fn entry_draft_snapshot(
         &assignment_rows,
         recruitment.target_count,
     );
-    let can_create_series = recruitment.status == RecruitmentStatus::Closed
+    let participant_count =
+        i64::try_from(participants.len()).map_err(|_| AttemptError::InvariantViolation)?;
+    let has_full_roster = recruitment.target_count == RECRUITMENT_TARGET_COUNT
+        && participant_count == i64::from(recruitment.target_count);
+    let can_create_series =
+        recruitment.status == RecruitmentStatus::Closed && is_operator && has_complete_assignments;
+    let active_series_exists = if recruitment.status == RecruitmentStatus::Closed
         && is_operator
-        && has_complete_assignments;
-    let active_series_exists = if can_create_series {
+        && (has_complete_assignments || has_full_roster)
+    {
         active_series_exists_for_source_recruitment(transaction, guild_id, recruitment_id).await?
     } else {
         false
     };
-    let can_create_auction_recruitment =
-        can_create_series && recruitment.converted_at.is_none() && !active_series_exists;
+    let can_create_auction_recruitment = recruitment.status == RecruitmentStatus::Closed
+        && is_operator
+        && has_full_roster
+        && recruitment.converted_at.is_none()
+        && !active_series_exists;
     let can_cancel = matches!(
         recruitment.status,
         RecruitmentStatus::Open | RecruitmentStatus::Closed
@@ -18306,6 +18333,89 @@ async fn locked_full_entry_assignments(
         .collect())
 }
 
+async fn locked_entry_draft_auction_conversion_participants(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    recruitment_id: RecruitmentId,
+    target_count: i16,
+    season_id: SeasonId,
+    now: OffsetDateTime,
+) -> Result<Vec<AuctionConversionParticipant>, AttemptError> {
+    let rows = sqlx::query_as::<_, EntryDraftAuctionConversionParticipantRow>(
+        "SELECT participant.user_id, assignment.lane AS declared_lane
+         FROM recruitment_participants AS participant
+         LEFT JOIN recruitment_entry_assignments AS assignment
+           ON assignment.guild_id = participant.guild_id
+          AND assignment.recruitment_id = participant.recruitment_id
+          AND assignment.user_id = participant.user_id
+         WHERE participant.guild_id = $1
+           AND participant.recruitment_id = $2
+           AND participant.status = 'JOINED'
+         ORDER BY participant.joined_at, participant.user_id
+         FOR UPDATE OF participant",
+    )
+    .bind(guild_id)
+    .bind(recruitment_id.as_uuid())
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    let joined_count = i64::try_from(rows.len()).map_err(|_| AttemptError::InvariantViolation)?;
+    let declared_lane_count = rows
+        .iter()
+        .filter(|row| row.declared_lane.is_some())
+        .count();
+    if target_count != RECRUITMENT_TARGET_COUNT || joined_count != i64::from(target_count) {
+        return Err(AttemptError::EntryDraftIncomplete {
+            joined: joined_count,
+            assigned: i64::try_from(declared_lane_count)
+                .map_err(|_| AttemptError::InvariantViolation)?,
+            target: target_count,
+        });
+    }
+
+    let mmr_rows = mmr::ensure_and_lock_mmr_rows(
+        transaction,
+        guild_id,
+        season_id,
+        rows.iter().filter_map(|row| {
+            row.declared_lane.map(|lane| MmrLaneKey {
+                user_id: row.user_id.clone(),
+                lane,
+            })
+        }),
+        now,
+    )
+    .await?;
+    let mmr_by_assignment = mmr_rows
+        .into_iter()
+        .map(|row| ((row.key.user_id, row.key.lane), row.mmr))
+        .collect::<HashMap<_, _>>();
+    if mmr_by_assignment.len() != declared_lane_count {
+        return Err(AttemptError::InvariantViolation);
+    }
+
+    rows.into_iter()
+        .map(|row| {
+            let mmr_at_join = row
+                .declared_lane
+                .and_then(|lane| mmr_by_assignment.get(&(row.user_id.clone(), lane)).copied());
+            if row.declared_lane.is_some() && mmr_at_join.is_none() {
+                return Err(AttemptError::InvariantViolation);
+            }
+            Ok(AuctionConversionParticipant {
+                user_id: row.user_id,
+                declared_lane: row.declared_lane,
+                mmr_at_join,
+                snapshot_origin: if row.declared_lane.is_some() {
+                    "CAPTURED"
+                } else {
+                    "UNAVAILABLE"
+                },
+            })
+        })
+        .collect()
+}
+
 async fn active_series_exists_for_source_recruitment(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -19191,9 +19301,7 @@ fn ensure_auction_tournament_source_ready(status: RecruitmentStatus) -> Result<(
     }
 }
 
-fn ensure_entry_draft_auction_source_ready(
-    status: RecruitmentStatus,
-) -> Result<(), AttemptError> {
+fn ensure_entry_draft_auction_source_ready(status: RecruitmentStatus) -> Result<(), AttemptError> {
     if status == RecruitmentStatus::Closed {
         Ok(())
     } else {
@@ -20009,6 +20117,8 @@ struct WebRecruitmentCreateRequest {
 struct AuctionRecruitmentCreateRequest {
     format: AuctionFormat,
     rules: AuctionRecruitmentSeriesRules,
+    #[serde(with = "time::serde::rfc3339")]
+    expected_start_at: OffsetDateTime,
 }
 
 #[derive(Clone, Serialize)]
@@ -20240,6 +20350,8 @@ struct WebSeriesCreateCommand {
 struct WebEntryDraftAuctionConversionCommand {
     source_recruitment_id: RecruitmentId,
     expected_revision: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    expected_start_at: OffsetDateTime,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -21274,6 +21386,20 @@ struct SeriesEntryAssignment {
     lane: Lane,
 }
 
+#[derive(Debug, FromRow)]
+struct EntryDraftAuctionConversionParticipantRow {
+    user_id: UserId,
+    declared_lane: Option<Lane>,
+}
+
+#[derive(Debug)]
+struct AuctionConversionParticipant {
+    user_id: UserId,
+    declared_lane: Option<Lane>,
+    mmr_at_join: Option<f64>,
+    snapshot_origin: &'static str,
+}
+
 impl EntryDraftAssignmentRow {
     fn into_snapshot(self) -> Result<EntryDraftAssignmentSnapshot, AttemptError> {
         if !matches!(self.team.as_str(), "TEAM_1" | "TEAM_2") {
@@ -22257,7 +22383,7 @@ mod tests {
     #[test]
     fn recruitment_rules_are_bounded_and_defaulted() {
         assert_eq!(RecruitmentSeriesRules::default().best_of, 3);
-        assert!(!RecruitmentSeriesRules::default().hard_fearless);
+        assert!(RecruitmentSeriesRules::default().hard_fearless);
         assert!(
             validate_recruitment_series_rules(&RecruitmentSeriesRules {
                 best_of: 1,
@@ -22299,7 +22425,7 @@ mod tests {
         assert_eq!(
             ten_person,
             AuctionRecruitmentSeriesRules {
-                hard_fearless: false,
+                hard_fearless: true,
                 semifinal_best_of: None,
                 final_best_of: 3,
             }

@@ -31,14 +31,14 @@
 	let createIdempotencyKey = $state<string | null>(null);
 	let createDialogOpen = $derived(Boolean(data.openCreateDialog));
 	let createBestOf = $state<SeriesBestOf>(3);
-	let createHardFearless = $state(false);
+	let createHardFearless = $state(true);
 
 	function openCreateDialog() {
 		if (creatingRecruitment) return;
 		createError = '';
 		createIdempotencyKey = null;
 		createBestOf = 3;
-		createHardFearless = false;
+		createHardFearless = true;
 		createDialogOpen = true;
 	}
 

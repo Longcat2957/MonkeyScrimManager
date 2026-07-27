@@ -27,6 +27,7 @@ describe('general series page', () => {
 		expect(body).toContain('진행 중인 내전이 없습니다.');
 		expect(source).toContain('createRecruitment(');
 		expect(source).toContain('let createDialogOpen = $derived(Boolean(data.openCreateDialog));');
+		expect(source).toContain('let createHardFearless = $state(true);');
 		expect(source).toContain('{ bestOf: createBestOf, hardFearless: createHardFearless }');
 		expect(source).toContain('<Dialog.Root bind:open={createDialogOpen}>');
 		expect(source).toContain('BO{bestOf}');

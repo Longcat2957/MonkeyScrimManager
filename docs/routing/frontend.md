@@ -357,6 +357,7 @@ delivery를 queue에 맡긴다. UI는
 - 참가자 팀/라인 배치.
 - server가 반환한 draft snapshot을 기준으로 한 즉시 저장.
 - `CLOSED` 모집을 다시 `OPEN` 모집 단계로 되돌리기.
+- 정확히 10명이 JOINED한 `CLOSED` 일반 모집을 예상 시작 시각과 함께 10인 경매 모집으로 전환하기.
 - 현재 배치를 미리보기로 확인.
 
 Bot 딥링크:
@@ -369,6 +370,7 @@ Backend 데이터:
 - `PATCH /api/guilds/:guildId/recruitments/:id/entry-draft`
 - `POST /api/guilds/:guildId/recruitments/:id/entry-draft/reset`
 - `POST /api/guilds/:guildId/recruitments/:id/reopen`
+- `POST /api/guilds/:guildId/recruitments/:id/auction-recruitment`
 - creator/operator cancel: `DELETE /api/guilds/:guildId/recruitments/:id` with no body
 
 더미 참가자 배치는 persistent DB/API 개발 도구로만 처리한다. 일반 엔트리 모집과 엔트리 편성 route에는
@@ -378,8 +380,10 @@ route는 mount 시 `EntryDraftSnapshot`을 조회하고 loading/error/retry stat
 controlled `participants`/`assignments`를 받고, drag/click 이동과 초기화는 현재 draft revision,
 CSRF, 새 browser idempotency key를 사용해 mutation한다. mutation 성공 후에는 optimistic local patch 대신
 반환된 snapshot 전체로 화면을 교체한다. `canEdit`/`canReset`/`canReopen`이 false면 해당 action을 숨기거나
-read-only로 둔다. `canCancel`은 creator 또는 active operator가 `OPEN|CLOSED` 모집을 취소할 수 있음을 뜻하며,
-성공하면 series 작업 목록으로 이동한다. 모집 되돌리기 성공 시 모집 detail route로 이동한다.
+read-only로 둔다. `canCreateAuctionRecruitment`가 true면 lane assignment 완료 여부와 무관하게 예상 시작
+시각 dialog를 열 수 있으며, local datetime input은 RFC 3339 timestamp로 전송한다. 성공하면 응답의 경매
+모집 draft 링크로 이동한다. `canCancel`은 creator 또는 active operator가 `OPEN|CLOSED` 모집을 취소할 수
+있음을 뜻하며, 성공하면 series 작업 목록으로 이동한다. 모집 되돌리기 성공 시 모집 detail route로 이동한다.
 
 route는 same-origin `/ws`에서 모집 topic과 entry-draft topic을 함께 구독하고, 두 topic이 모두 포함된
 `subscribed` ack 뒤에만 `RealtimeEditStateBar`를 connected로 표시한다. 전자는 roster/status/capability
@@ -519,8 +523,9 @@ WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 - actionable 모집, 진행 중 tournament, 완료/보관 tournament는 각각 독립 `nextCursor`를 가진다. 각
   section의 `더 불러오기`는 해당 cursor만 이어 읽고 ID 기준으로 중복을 제거한다. 진행 중 section은 모집과
   tournament cursor가 모두 남아 있으면 둘을 함께 읽은 뒤 같은 작업 목록으로 병합한다.
-- ACTIVE guild member가 10인 또는 20인 형식, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
-  dialog를 제공한다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
+- ACTIVE guild member가 10인 또는 20인 형식, 예상 시작 시각, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
+  dialog를 제공한다. 예상 시작 시각은 local datetime input에서 RFC 3339 timestamp로 전송하며, 생성된
+  모집 제목은 backend가 KST 표기로 확정한다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
   목록을 낙관적으로 추가하지 않고, `201` snapshot의 `recruitment.href`로 OPEN 모집 상세 화면에 이동한다.
 - `?create=1`은 같은 생성 dialog만 여는 deep-link다. 다른 값은 무시하고 실제 모집 mutation은 기존 확인
   버튼과 create command를 거쳐야 한다.
@@ -611,7 +616,7 @@ WebSocket: 사용하지 않는다. 저장과 생성 성공 뒤에는 response의
 목적:
 
 - `BIDDING` 단계의 경매 토너먼트 드래프트.
-- 후보 draw, 낙찰, 유찰, 유찰 복구와 마지막 입찰/드래그 배치 단계 되돌리기를 제공한다.
+- 후보 draw, 낙찰, 유찰, 유찰의 현재 매물 복구 또는 빈 팀 직접 수동 배치와 마지막 입찰/드래그 배치 단계 되돌리기를 제공한다.
 - 현재 매물 기본 화면은 프로필, Riot tier, 모집 시점 MMR, 해당 tournament season의 내전 요약을 보여준다.
   `상세보기`는 라인별 MMR, 확정 내전의 주력 챔피언·최근 게임, 신청 라인의 선호 챔피언, cached Riot 요약을
   기존 정보 영역으로 확장한다. Riot cache가 비어 있으면 해당 영역만 빈 상태로 유지하며 provider refresh는

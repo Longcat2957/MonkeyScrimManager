@@ -405,7 +405,7 @@ async fn run_bot_workflow() -> TestResult {
     assert_eq!(non_operator_created["data"]["recruitment"]["bestOf"], 3);
     assert_eq!(
         non_operator_created["data"]["recruitment"]["hardFearless"],
-        false
+        true
     );
     let non_operator_recruitment_id = non_operator_created["data"]["recruitment"]["id"]
         .as_str()
@@ -662,6 +662,7 @@ async fn assert_auction_recruitment_force_cancel(app: &Router, pool: &sqlx::PgPo
             "semifinalBestOf": null,
             "finalBestOf": 3,
             "hardFearless": false,
+            "expectedStartAt": "2026-07-26T11:00:00Z",
         }),
     )
     .await?;

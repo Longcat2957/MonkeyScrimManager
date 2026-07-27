@@ -136,7 +136,8 @@
 	let createFormat = $state<AuctionRecruitmentDto['format']>('TEN_PERSON');
 	let createSemifinalBestOf = $state<AuctionBestOf>(3);
 	let createFinalBestOf = $state<AuctionBestOf>(3);
-	let createHardFearless = $state(false);
+	let createHardFearless = $state(true);
+	let createExpectedStartAt = $state('');
 	const consumedRecruitmentCursors = new SvelteSet<string>();
 	const consumedActiveTournamentCursors = new SvelteSet<string>();
 	const consumedCompletedTournamentCursors = new SvelteSet<string>();
@@ -346,7 +347,8 @@
 		createFormat = 'TEN_PERSON';
 		createSemifinalBestOf = 3;
 		createFinalBestOf = 3;
-		createHardFearless = false;
+		createHardFearless = true;
+		createExpectedStartAt = '';
 		createDialogOpen = true;
 	}
 
@@ -374,8 +376,21 @@
 		createIdempotencyKey = null;
 	}
 
+	function expectedStartIsoFromInput(value: string): string | null {
+		const trimmed = value.trim();
+		if (!trimmed) return null;
+		const parsed = new Date(trimmed);
+		if (Number.isNaN(parsed.getTime())) return null;
+		return parsed.toISOString();
+	}
+
 	async function createNewAuctionRecruitment() {
 		if (creatingRecruitment) return;
+		const expectedStartAt = expectedStartIsoFromInput(createExpectedStartAt);
+		if (!expectedStartAt) {
+			createError = '예상 시작 시간을 입력해 주세요.';
+			return;
+		}
 		const idempotencyKey = (createIdempotencyKey ??= globalThis.crypto.randomUUID());
 		creatingRecruitment = true;
 		createError = '';
@@ -386,7 +401,8 @@
 					format: createFormat,
 					semifinalBestOf: createFormat === 'TWENTY_PERSON' ? createSemifinalBestOf : null,
 					finalBestOf: createFinalBestOf,
-					hardFearless: createHardFearless
+					hardFearless: createHardFearless,
+					expectedStartAt
 				},
 				idempotencyKey
 			);
@@ -668,6 +684,20 @@
 					</div>
 				</div>
 
+				<label class="grid gap-2">
+					<span class="text-[11px] font-semibold text-slate-500">예상 시작 시간</span>
+					<input
+						type="datetime-local"
+						required
+						bind:value={createExpectedStartAt}
+						disabled={creatingRecruitment}
+						oninput={() => {
+							createIdempotencyKey = null;
+						}}
+						class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-cyan-300/55 disabled:opacity-35"
+					/>
+				</label>
+
 				<button
 					type="button"
 					role="switch"
@@ -725,7 +755,7 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={creatingRecruitment}
+					disabled={creatingRecruitment || !createExpectedStartAt.trim()}
 					onclick={createNewAuctionRecruitment}
 					class="inline-flex h-9 items-center gap-1.5 border border-cyan-300/35 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-50 disabled:opacity-35"
 				>

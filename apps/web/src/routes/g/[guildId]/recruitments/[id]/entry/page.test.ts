@@ -40,12 +40,15 @@ describe('entry draft page route binding', () => {
 		expect(source).toContain('시리즈 시작');
 	});
 
-	it('converts a complete entry draft into an auction recruitment draft from a dedicated capability', () => {
+	it('converts a closed full roster into an auction recruitment draft from a dedicated capability', () => {
 		expect(source).toContain('canCreateAuctionRecruitment = $derived(');
 		expect(source).toContain('snapshot?.capabilities.canCreateAuctionRecruitment');
+		expect(source).toContain('openCreateAuctionRecruitmentDialog');
+		expect(source).toContain('createAuctionRecruitmentExpectedStartAt');
 		expect(source).toContain('createAuctionRecruitmentFromEntryDraft(');
 		expect(source).toContain("'entry-draft-create-auction-recruitment'");
 		expect(source).toContain('expectedRevision: currentSnapshot.recruitment.revision');
+		expect(source).toContain('expectedStartAt');
 		expect(source).toContain(
 			'await goto(auctionRecruitment.links.draft ?? auctionRecruitment.recruitment.href);'
 		);

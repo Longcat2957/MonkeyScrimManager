@@ -40,6 +40,8 @@ const GUILD_ID: &str = "200000000000000001";
 const MEMBER_ID: &str = "100000000000000001";
 const OUTSIDER_ID: &str = "100000000000000002";
 const CANDIDATE_ID: &str = "100000000000000003";
+const EXPECTED_START_AT: &str = "2026-07-26T11:00:00Z";
+const EXPECTED_START_LABEL: &str = "2026-07-26T20:00:00+09:00 (KST)";
 const FULL_ROSTER_MEMBER_IDS: [&str; 10] = [
     MEMBER_ID,
     CANDIDATE_ID,
@@ -88,11 +90,14 @@ async fn active_operator_can_convert_a_complete_entry_draft_into_a_series() -> T
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn active_operator_can_convert_a_complete_entry_draft_into_auction_recruitment(
-) -> TestResult {
-    tokio::time::timeout(Duration::from_secs(120), run_entry_to_auction_conversion_flow())
-        .await
-        .map_err(|_| "entry-to-auction conversion endpoint test exceeded 120 seconds")??;
+async fn active_operator_can_convert_a_closed_entry_recruitment_into_auction_recruitment()
+-> TestResult {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        run_entry_to_auction_conversion_flow(),
+    )
+    .await
+    .map_err(|_| "entry-to-auction conversion endpoint test exceeded 120 seconds")??;
     Ok(())
 }
 
@@ -170,9 +175,8 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     let app = build_router(state);
 
     let recruitment_id = seed_closed_entry_recruitment(&pool, 1, 5, true).await?;
-    let path =
-        format!("/api/guilds/{GUILD_ID}/recruitments/{recruitment_id}/auction-recruitment");
-    let request_body = || json!({ "expectedRevision": 7 });
+    let path = format!("/api/guilds/{GUILD_ID}/recruitments/{recruitment_id}/auction-recruitment");
+    let request_body = || json!({ "expectedRevision": 7, "expectedStartAt": EXPECTED_START_AT });
 
     let cross_guild = browser_mutation(
         &app,
@@ -210,27 +214,37 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
         "operator_required"
     );
 
-    let incomplete = browser_mutation(
+    let invalid_expected_start = browser_mutation(
         &app,
         Method::POST,
         &path,
         MEMBER_SESSION,
         MEMBER_CSRF,
-        "entry-auction-incomplete",
+        "entry-auction-invalid-expected-start",
         true,
-        request_body(),
+        json!({ "expectedRevision": 7, "expectedStartAt": "2026-07-26T20:00:00" }),
         None,
     )
     .await?;
-    assert_eq!(incomplete.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let incomplete = body_json(incomplete).await?;
-    assert_eq!(incomplete["error"]["code"], "entry_draft_incomplete");
-    assert_eq!(incomplete["error"]["details"]["joinedCount"], 10);
-    assert_eq!(incomplete["error"]["details"]["assignedCount"], 0);
-    assert_eq!(incomplete["error"]["details"]["targetCount"], 10);
+    assert_eq!(
+        invalid_expected_start.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let invalid_expected_start = body_json(invalid_expected_start).await?;
+    assert_eq!(
+        invalid_expected_start["error"]["code"],
+        "invalid_expected_start_at"
+    );
+    assert_eq!(
+        invalid_expected_start["error"]["message"],
+        "예상 시작 시간은 시간대가 포함된 ISO 8601 형식이어야 합니다."
+    );
+    assert_eq!(
+        invalid_expected_start["error"]["details"]["field"],
+        "expectedStartAt"
+    );
 
-    let series_converted_recruitment_id =
-        seed_closed_entry_recruitment(&pool, 2, 3, false).await?;
+    let series_converted_recruitment_id = seed_closed_entry_recruitment(&pool, 2, 3, false).await?;
     seed_complete_entry_assignments(&pool, &series_converted_recruitment_id).await?;
     seed_active_series_for_recruitment(&pool, &series_converted_recruitment_id).await?;
     let already_series_entry = browser_get(
@@ -243,8 +257,7 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     .await?;
     assert_eq!(already_series_entry.status(), StatusCode::OK);
     assert_eq!(
-        body_json(already_series_entry).await?["data"]["capabilities"]
-            ["canCreateAuctionRecruitment"],
+        body_json(already_series_entry).await?["data"]["capabilities"]["canCreateAuctionRecruitment"],
         false
     );
     let already_series = browser_mutation(
@@ -267,7 +280,6 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
         "entry_draft_already_converted_to_series"
     );
 
-    seed_complete_entry_assignments(&pool, &recruitment_id).await?;
     let created = browser_mutation(
         &app,
         Method::POST,
@@ -287,6 +299,11 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
         .ok_or("auction conversion response did not contain an ID")?
         .to_owned();
     assert_eq!(created["data"]["recruitment"]["format"], "TEN_PERSON");
+    assert!(
+        created["data"]["recruitment"]["title"]
+            .as_str()
+            .is_some_and(|title| title.contains(EXPECTED_START_LABEL))
+    );
     assert_eq!(created["data"]["recruitment"]["status"], "CLOSED");
     assert_eq!(created["data"]["recruitment"]["revision"], 1);
     assert_eq!(created["data"]["recruitment"]["participantCount"], 10);
@@ -310,7 +327,7 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
         .ok_or("auction conversion response did not contain participants")?;
     assert_eq!(participants.len(), 10);
     assert_eq!(participants[0]["id"], MEMBER_ID);
-    assert_eq!(participants[0]["declaredLane"], "TOP");
+    assert_eq!(participants[0]["declaredLane"], Value::Null);
 
     let replay = browser_mutation(
         &app,
@@ -356,9 +373,24 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     .await?;
     assert_eq!(source_state, ("CONVERTED".to_owned(), 8, true));
 
-    let auction_state = sqlx::query_as::<_, (Uuid, String, i16, Option<i16>, i16, bool, String, i64, bool, String)>(
+    let auction_state = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            i16,
+            Option<i16>,
+            i16,
+            bool,
+            String,
+            i64,
+            bool,
+            String,
+            String,
+        ),
+    >(
         "SELECT season_id, format, target_count, semifinal_best_of, final_best_of,
-                hard_fearless, status, revision, closed_at IS NOT NULL, created_by
+                hard_fearless, status, revision, closed_at IS NOT NULL, created_by, title
          FROM auction_recruitments
          WHERE guild_id = $1 AND id = $2",
     )
@@ -376,18 +408,19 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     assert_eq!(auction_state.7, 1);
     assert!(auction_state.8);
     assert_eq!(auction_state.9, MEMBER_ID);
+    assert!(auction_state.10.contains(EXPECTED_START_LABEL));
 
     let copied_participants = sqlx::query_as::<_, (i64, i64, i64, i64)>(
         "SELECT
              count(*),
              count(*) FILTER (
                  WHERE status = 'JOINED'
-                   AND declared_lane IS NOT NULL
-                   AND mmr_at_join = 1500
-                   AND snapshot_origin = 'CAPTURED'
+                   AND declared_lane IS NULL
+                   AND mmr_at_join IS NULL
+                   AND snapshot_origin = 'UNAVAILABLE'
              ),
-             count(*) FILTER (WHERE user_id = $3 AND declared_lane = 'TOP'),
-             count(*) FILTER (WHERE user_id = $4 AND declared_lane = 'JUNGLE')
+             count(*) FILTER (WHERE user_id = $3 AND declared_lane IS NULL),
+             count(*) FILTER (WHERE user_id = $4 AND declared_lane IS NULL)
          FROM auction_recruitment_participants
          WHERE guild_id = $1 AND recruitment_id = $2",
     )
@@ -408,7 +441,7 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     .bind(Uuid::parse_str(SEASON_ID)?)
     .fetch_one(&pool)
     .await?;
-    assert_eq!(initialized_mmr_rows, 10);
+    assert_eq!(initialized_mmr_rows, 0);
 
     let setup_state = sqlx::query_as::<_, (i64, i64)>(
         "SELECT
@@ -440,6 +473,10 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     assert_eq!(
         auction_notification.2["snapshot"]["recruitment"]["status"],
         "CLOSED"
+    );
+    assert_eq!(
+        auction_notification.2["snapshot"]["recruitment"]["title"],
+        created["data"]["recruitment"]["title"]
     );
     assert_eq!(
         auction_notification.2["snapshot"]["links"]["draft"],
@@ -883,7 +920,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(before_assignments.status(), StatusCode::OK);
     assert_eq!(
         body_json(before_assignments).await?["data"]["capabilities"]["canCreateAuctionRecruitment"],
-        false
+        true
     );
 
     seed_complete_entry_assignments(&pool, &recruitment_id).await?;
@@ -1319,7 +1356,10 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(side_selected.status(), StatusCode::OK);
     let side_selected = body_json(side_selected).await?;
     assert_eq!(side_selected["data"]["series"]["revision"], 1);
-    assert_eq!(side_selected["data"]["currentGame"]["sidePreset"], "DEFAULT");
+    assert_eq!(
+        side_selected["data"]["currentGame"]["sidePreset"],
+        "DEFAULT"
+    );
     assert_eq!(side_selected["data"]["currentGame"]["sideSelected"], true);
 
     let draft_updated = browser_mutation(
@@ -2677,7 +2717,7 @@ async fn run_flow() -> TestResult {
     assert_eq!(created["data"]["recruitment"]["status"], "OPEN");
     assert_eq!(created["data"]["recruitment"]["targetCount"], 10);
     assert_eq!(created["data"]["recruitment"]["bestOf"], 3);
-    assert_eq!(created["data"]["recruitment"]["hardFearless"], false);
+    assert_eq!(created["data"]["recruitment"]["hardFearless"], true);
     assert_eq!(created["data"]["recruitment"]["createdById"], MEMBER_ID);
     assert_eq!(created["data"]["participants"], json!([]));
     assert_eq!(
@@ -2716,7 +2756,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         idempotency_key,
         true,
-        json!({ "bestOf": 3, "hardFearless": false }),
+        json!({ "bestOf": 3, "hardFearless": true }),
         None,
     )
     .await?;

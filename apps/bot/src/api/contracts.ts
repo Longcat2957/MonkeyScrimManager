@@ -341,7 +341,8 @@ export const createAuctionRecruitmentRequestSchema = z
 		format: auctionRecruitmentFormatSchema,
 		semifinalBestOf: auctionBestOfSchema.nullable(),
 		finalBestOf: auctionBestOfSchema,
-		hardFearless: z.boolean()
+		hardFearless: z.boolean(),
+		expectedStartAt: timestampSchema
 	})
 	.strict()
 	.superRefine(({ format, semifinalBestOf }, context) => {

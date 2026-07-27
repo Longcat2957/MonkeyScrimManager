@@ -16,6 +16,7 @@ import { apiRoute } from '$lib/routing';
 import { z } from 'zod';
 
 const idempotencyKeySchema = z.uuid();
+const expectedStartAtSchema = z.iso.datetime({ offset: true });
 const auctionRecruitmentSnapshotEnvelopeSchema = z
 	.object({ data: auctionRecruitmentSnapshotSchema, meta: responseMetaSchema })
 	.strict();
@@ -28,6 +29,7 @@ export type AuctionRecruitmentCreateOptions = {
 	semifinalBestOf: AuctionBestOf | null;
 	finalBestOf: AuctionBestOf;
 	hardFearless: boolean;
+	expectedStartAt: string;
 };
 
 export type AuctionRecruitmentMemberOptions = {
@@ -196,6 +198,14 @@ export async function createAuctionRecruitment(
 			'하드 피어리스 설정이 올바르지 않습니다.',
 			0,
 			'invalid_hard_fearless',
+			null
+		);
+	}
+	if (!expectedStartAtSchema.safeParse(options.expectedStartAt).success) {
+		throw new AuctionRecruitmentApiError(
+			'예상 시작 시간이 올바르지 않습니다.',
+			0,
+			'invalid_expected_start_at',
 			null
 		);
 	}

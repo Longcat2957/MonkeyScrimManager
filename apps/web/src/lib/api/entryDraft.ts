@@ -14,6 +14,7 @@ import { z } from 'zod';
 
 const idempotencyKeySchema = z.uuid();
 const revisionSchema = z.number().int().nonnegative();
+const expectedStartAtSchema = z.iso.datetime({ offset: true });
 const entryDraftEnvelopeSchema = z
 	.object({ data: entryDraftSnapshotSchema, meta: responseMetaSchema })
 	.strict();
@@ -328,7 +329,7 @@ export async function createSeriesFromEntryDraft(
 export async function createAuctionRecruitmentFromEntryDraft(
 	guildId: string,
 	recruitmentId: string,
-	command: { expectedRevision: number; idempotencyKey: string }
+	command: { expectedRevision: number; expectedStartAt: string; idempotencyKey: string }
 ): Promise<AuctionRecruitmentSnapshot> {
 	if (!z.uuid().safeParse(recruitmentId).success) {
 		throw new EntryDraftApiError(
@@ -346,6 +347,14 @@ export async function createAuctionRecruitmentFromEntryDraft(
 			null
 		);
 	}
+	if (!expectedStartAtSchema.safeParse(command.expectedStartAt).success) {
+		throw new EntryDraftApiError(
+			'예상 시작 시간이 올바르지 않습니다.',
+			0,
+			'invalid_expected_start_at',
+			null
+		);
+	}
 
 	let response: Response;
 	try {
@@ -355,7 +364,10 @@ export async function createAuctionRecruitmentFromEntryDraft(
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: mutationHeaders(command.idempotencyKey),
-				body: JSON.stringify({ expectedRevision: command.expectedRevision })
+				body: JSON.stringify({
+					expectedRevision: command.expectedRevision,
+					expectedStartAt: command.expectedStartAt
+				})
 			}
 		);
 	} catch (cause) {

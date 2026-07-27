@@ -11,12 +11,14 @@ const guildId = '1525851181157580861';
 const recruitmentId = '01900000-0000-7000-8000-000000000501';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const idempotencyKey = '01900000-0000-7000-8000-000000000002';
+const expectedStartAt = '2026-07-26T11:00:00Z';
+const expectedStartLabel = '2026-07-26T20:00:00+09:00 (KST)';
 
 const openSnapshot = {
 	recruitment: {
 		id: recruitmentId,
 		displayNumber: 42,
-		title: '경매 모집 #42',
+		title: `경매 모집 #42 · 예상 시작 ${expectedStartLabel}`,
 		format: 'TEN_PERSON' as const,
 		rules: {
 			hardFearless: false,
@@ -66,7 +68,8 @@ describe('auction recruitment API client', () => {
 					format: 'TEN_PERSON',
 					semifinalBestOf: null,
 					finalBestOf: 3,
-					hardFearless: false
+					hardFearless: false,
+					expectedStartAt
 				},
 				idempotencyKey
 			)
@@ -81,7 +84,8 @@ describe('auction recruitment API client', () => {
 				format: 'TEN_PERSON',
 				semifinalBestOf: null,
 				finalBestOf: 3,
-				hardFearless: false
+				hardFearless: false,
+				expectedStartAt
 			})
 		});
 		const headers = new Headers(init?.headers);
@@ -178,7 +182,8 @@ describe('auction recruitment API client', () => {
 				format: 'TWENTY_PERSON',
 				semifinalBestOf: 3,
 				finalBestOf: 5,
-				hardFearless: true
+				hardFearless: true,
+				expectedStartAt
 			},
 			idempotencyKey
 		).catch((cause) => cause);

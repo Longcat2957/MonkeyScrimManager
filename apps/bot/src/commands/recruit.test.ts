@@ -116,7 +116,7 @@ describe('/내전모집', () => {
 	});
 
 	it.each([
-		{ bestOf: null, hardFearless: null, expectedBestOf: 3, expectedHardFearless: false },
+		{ bestOf: null, hardFearless: null, expectedBestOf: 3, expectedHardFearless: true },
 		{ bestOf: 5, hardFearless: true, expectedBestOf: 5, expectedHardFearless: true }
 	])('sends selected rules to the recruitment API', async (testCase) => {
 		const createRecruitment = vi.fn(async () => snapshot);

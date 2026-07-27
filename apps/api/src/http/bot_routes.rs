@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     domain::{
@@ -87,6 +88,7 @@ struct BrowserCreateAuctionRecruitmentRequest {
     semifinal_best_of: Option<i16>,
     final_best_of: Option<i16>,
     hard_fearless: Option<bool>,
+    expected_start_at: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +99,7 @@ struct BotCreateAuctionRecruitmentRequest {
     semifinal_best_of: Option<i16>,
     final_best_of: Option<i16>,
     hard_fearless: Option<bool>,
+    expected_start_at: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -197,6 +200,7 @@ pub(crate) struct BrowserEntryDraftRevisionRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BrowserEntryDraftAuctionConversionRequest {
     expected_revision: i64,
+    expected_start_at: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -442,6 +446,8 @@ pub async fn create_auction_recruitment(
         RecruitmentCreatePrincipal::Bot(_) => {
             let request = serde_json::from_value::<BotCreateAuctionRecruitmentRequest>(request)
                 .map_err(|_| invalid_request("body", &request_id))?;
+            let expected_start_at =
+                parse_expected_start_at(request.expected_start_at.as_ref(), &request_id)?;
             let rules = AuctionRecruitmentSeriesRules::from_optional(
                 request.format,
                 request.semifinal_best_of,
@@ -457,6 +463,7 @@ pub async fn create_auction_recruitment(
                 actor(request.actor, &request_id)?,
                 request.format,
                 rules,
+                expected_start_at,
             )
             .await
             .map_err(|error| command_error(error, &request_id))?;
@@ -465,6 +472,8 @@ pub async fn create_auction_recruitment(
         RecruitmentCreatePrincipal::Session(principal) => {
             let request = serde_json::from_value::<BrowserCreateAuctionRecruitmentRequest>(request)
                 .map_err(|_| invalid_browser_auction_recruitment_create_request(&request_id))?;
+            let expected_start_at =
+                parse_expected_start_at(request.expected_start_at.as_ref(), &request_id)?;
             let rules = AuctionRecruitmentSeriesRules::from_optional(
                 request.format,
                 request.semifinal_best_of,
@@ -479,6 +488,7 @@ pub async fn create_auction_recruitment(
                 &principal.session.user_id,
                 request.format,
                 rules,
+                expected_start_at,
                 &idempotency_key,
                 &request_id,
             )
@@ -1523,6 +1533,8 @@ pub async fn convert_entry_draft_to_auction_recruitment(
             &request_id,
         ));
     }
+    let expected_start_at =
+        parse_expected_start_at(request.expected_start_at.as_ref(), &request_id)?;
     require_csrf(&headers, &state, &principal, &request_id)?;
     let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
     let snapshot = bot_workflow::convert_web_entry_draft_to_auction_recruitment(
@@ -1531,6 +1543,7 @@ pub async fn convert_entry_draft_to_auction_recruitment(
         &principal.session.user_id,
         recruitment_id,
         request.expected_revision,
+        expected_start_at,
         &idempotency_key,
         &request_id,
     )
@@ -1607,6 +1620,31 @@ fn invalid_request(field: &'static str, request_id: &RequestId) -> ApiError {
         "invalid_bot_command",
         "Bot command 요청 형식이 올바르지 않습니다.",
         Some(serde_json::json!({ "field": field })),
+    )
+}
+
+fn parse_expected_start_at(
+    value: Option<&Value>,
+    request_id: &RequestId,
+) -> Result<OffsetDateTime, ApiError> {
+    let Some(value) = value.and_then(Value::as_str) else {
+        return Err(invalid_expected_start_at(request_id));
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(invalid_expected_start_at(request_id));
+    }
+
+    OffsetDateTime::parse(value, &Rfc3339).map_err(|_| invalid_expected_start_at(request_id))
+}
+
+fn invalid_expected_start_at(request_id: &RequestId) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        request_id,
+        "invalid_expected_start_at",
+        "예상 시작 시간은 시간대가 포함된 ISO 8601 형식이어야 합니다.",
+        Some(serde_json::json!({ "field": "expectedStartAt" })),
     )
 }
 
@@ -3020,7 +3058,9 @@ fn web_auction_tournament_cancel_error(
     request_id: &RequestId,
 ) -> ApiError {
     match error {
-        BotWorkflowError::InvalidCommand(_) => invalid_browser_auction_tournament_cancel_request(request_id),
+        BotWorkflowError::InvalidCommand(_) => {
+            invalid_browser_auction_tournament_cancel_request(request_id)
+        }
         BotWorkflowError::MembershipRequired => ApiError::new(
             StatusCode::FORBIDDEN,
             request_id,
@@ -3391,10 +3431,7 @@ fn web_entry_draft_mutation_error(error: BotWorkflowError, request_id: &RequestI
     }
 }
 
-fn web_entry_auction_conversion_error(
-    error: BotWorkflowError,
-    request_id: &RequestId,
-) -> ApiError {
+fn web_entry_auction_conversion_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
     match error {
         BotWorkflowError::InvalidCommand(_) => {
             invalid_browser_entry_auction_conversion_request(request_id)
@@ -3442,7 +3479,7 @@ fn web_entry_auction_conversion_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             request_id,
             "entry_draft_incomplete",
-            "참가자 10명을 양 팀의 모든 라인에 배치한 뒤 경매 모집으로 전환할 수 있습니다.",
+            "참가자 10명을 채운 뒤 경매 모집으로 전환할 수 있습니다.",
             Some(serde_json::json!({
                 "joinedCount": joined,
                 "assignedCount": assigned,
@@ -3649,6 +3686,7 @@ mod tests {
                 "semifinalBestOf": 1,
                 "finalBestOf": 5,
                 "hardFearless": true,
+                "expectedStartAt": "2026-07-26T11:00:00Z",
             }))
             .expect("flat auction create request should deserialize");
 
@@ -3656,6 +3694,10 @@ mod tests {
         assert_eq!(request.semifinal_best_of, Some(1));
         assert_eq!(request.final_best_of, Some(5));
         assert_eq!(request.hard_fearless, Some(true));
+        assert_eq!(
+            request.expected_start_at,
+            Some(serde_json::json!("2026-07-26T11:00:00Z"))
+        );
         assert!(
             serde_json::from_value::<BrowserCreateAuctionRecruitmentRequest>(serde_json::json!({
                 "format": "TEN_PERSON",
@@ -3663,6 +3705,28 @@ mod tests {
             }),)
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn expected_start_at_has_a_specific_validation_error() {
+        use axum::{body::to_bytes, response::IntoResponse};
+
+        let request_id = RequestId("test-request".to_owned());
+        let invalid_value = serde_json::json!("2026-07-26T20:00:00");
+        let response = parse_expected_start_at(Some(&invalid_value), &request_id)
+            .expect_err("a timezone-less expected start must be rejected")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error body should be readable");
+        let body: Value = serde_json::from_slice(&body).expect("error body should be JSON");
+        assert_eq!(body["error"]["code"], "invalid_expected_start_at");
+        assert_eq!(
+            body["error"]["message"],
+            "예상 시작 시간은 시간대가 포함된 ISO 8601 형식이어야 합니다."
+        );
+        assert_eq!(body["error"]["details"]["field"], "expectedStartAt");
     }
 
     #[tokio::test]

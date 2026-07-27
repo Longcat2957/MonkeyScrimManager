@@ -19,6 +19,8 @@ const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const participantId = '1525847677542207548';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const idempotencyKey = '01900000-0000-7000-8000-000000000002';
+const expectedStartAt = '2026-07-26T11:00:00Z';
+const expectedStartLabel = '2026-07-26T20:00:00+09:00 (KST)';
 const auctionRecruitmentId = '01900000-0000-7000-8000-000000000501';
 
 const snapshot: EntryDraftSnapshot = {
@@ -67,7 +69,7 @@ const auctionSnapshot: AuctionRecruitmentSnapshot = {
 	recruitment: {
 		id: auctionRecruitmentId,
 		displayNumber: 42,
-		title: '10인 경매 내전 모집 #42',
+		title: `10인 경매 내전 모집 #42 · 예상 시작 ${expectedStartLabel}`,
 		format: 'TEN_PERSON',
 		rules: {
 			hardFearless: true,
@@ -224,6 +226,7 @@ describe('entry draft API client', () => {
 		await expect(
 			createAuctionRecruitmentFromEntryDraft(guildId, recruitmentId, {
 				expectedRevision: 3,
+				expectedStartAt,
 				idempotencyKey
 			})
 		).resolves.toEqual(auctionSnapshot);
@@ -231,7 +234,7 @@ describe('entry draft API client', () => {
 		const [path, init] = fetcher.mock.calls[0]!;
 		expect(path).toBe(`/api/guilds/${guildId}/recruitments/${recruitmentId}/auction-recruitment`);
 		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
-		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 3 });
+		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 3, expectedStartAt });
 		const headers = new Headers(init?.headers);
 		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
 		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
@@ -255,6 +258,7 @@ describe('entry draft API client', () => {
 
 		const error = await createAuctionRecruitmentFromEntryDraft(guildId, recruitmentId, {
 			expectedRevision: 3,
+			expectedStartAt,
 			idempotencyKey
 		}).catch((cause) => cause);
 
@@ -300,6 +304,7 @@ describe('entry draft API client', () => {
 		await expect(
 			createAuctionRecruitmentFromEntryDraft(guildId, recruitmentId, {
 				expectedRevision: 3,
+				expectedStartAt,
 				idempotencyKey
 			})
 		).rejects.toMatchObject({ status: 0, code: 'csrf_token_missing' });

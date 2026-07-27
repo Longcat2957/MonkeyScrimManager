@@ -1,6 +1,17 @@
 <script lang="ts">
 	import { Dialog } from 'bits-ui';
-	import { CircleSlash, Dice5, Gavel, PackageOpen, Swords, Trophy, Undo2, X } from 'lucide-svelte';
+	import {
+		CircleSlash,
+		Dice5,
+		Gavel,
+		ListChecks,
+		PackageOpen,
+		Swords,
+		Trophy,
+		Undo2,
+		X
+	} from 'lucide-svelte';
+	import { onMount } from 'svelte';
 	import type { ChampionCatalog } from '$lib/datadragon';
 	import { formatMmr } from '$lib/numberFormat';
 	import ChampionFace from '$lib/components/champion/ChampionFace.svelte';
@@ -31,12 +42,16 @@
 		SUPPORT: '서포트'
 	} as const;
 	const teamMemberSlots = [1, 2, 3, 4, 5] as const;
+	const BID_TIMER_DURATION_MS = 10_000;
 
 	let bidInputs = $state<Record<string, string>>({});
 	let draggedTargetId = $state<string | null>(null);
 	let overTeamId = $state<string | null>(null);
 	let showTargetDetails = $state(false);
 	let revertDialogOpen = $state(false);
+	let candidateDialogOpen = $state(false);
+	let scoreTimerStartedAt = 0;
+	let scoreTimerRemainingMs = $state(BID_TIMER_DURATION_MS);
 
 	const teams = $derived(snapshot.teams);
 	const currentTarget = $derived(snapshot.draft.currentTarget);
@@ -56,6 +71,11 @@
 			(candidate) => candidate.state === 'QUEUED' || candidate.state === 'ACTIVE'
 		).length
 	);
+	const candidateDialogCount = $derived(
+		(currentTarget ? 1 : 0) + queuedCandidates.length + unsold.length
+	);
+	const scoreTimerPercent = $derived((scoreTimerRemainingMs / BID_TIMER_DURATION_MS) * 100);
+	const scoreTimerSeconds = $derived(Math.ceil(scoreTimerRemainingMs / 1000));
 	const allPlaced = $derived(expectedTotal > 0 && placedCount >= expectedTotal);
 	const canManageDraft = $derived(snapshot.permissions.canManageDraft && !submitting);
 	const canDraw = $derived(
@@ -65,6 +85,18 @@
 	const revertLabel = $derived(
 		snapshot.tournament.status === 'BRACKET_SETUP' ? '입찰 단계로 되돌리기' : '마지막 입찰 되돌리기'
 	);
+
+	onMount(() => {
+		resetScoreTimer();
+		const interval = globalThis.setInterval(() => {
+			scoreTimerRemainingMs = Math.max(
+				0,
+				BID_TIMER_DURATION_MS - (Date.now() - scoreTimerStartedAt)
+			);
+		}, 100);
+
+		return () => globalThis.clearInterval(interval);
+	});
 
 	function playerInitial(displayName: string): string {
 		return displayName.trim().slice(0, 1).toLocaleUpperCase('ko-KR') || '?';
@@ -146,8 +178,11 @@
 	}
 
 	function canReceiveDrop(team: AuctionTournamentTeam): boolean {
-		if (!canManageDraft || team.members.length >= 5) return false;
-		return Boolean(currentTarget || isUnsoldMemberId(draggedTargetId));
+		return Boolean(canManageDraft && currentTarget && team.members.length < 5);
+	}
+
+	function canAssignUnsoldToTeam(team: AuctionTournamentTeam): boolean {
+		return Boolean(canManageDraft && !currentTarget && team.members.length < 5);
 	}
 
 	function bidNumber(teamId: string): number | null {
@@ -162,7 +197,10 @@
 		if (!currentTarget || !canManageDraft || team.members.length >= 5) return;
 		const current = bidNumber(team.id) ?? 0;
 		const next = Math.max(0, Math.min(team.currentPoints, current + delta));
-		bidInputs = { ...bidInputs, [team.id]: String(next) };
+		const nextValue = String(next);
+		if ((bidInputs[team.id] ?? '') === nextValue) return;
+		bidInputs = { ...bidInputs, [team.id]: nextValue };
+		resetScoreTimer();
 	}
 
 	function canFinalizeBid(team: AuctionTournamentTeam): boolean {
@@ -200,7 +238,7 @@
 	}
 
 	function assignUnsoldMemberToTeam(team: AuctionTournamentTeam, memberId: string) {
-		if (!isUnsoldMemberId(memberId) || !canReceiveDrop(team)) return;
+		if (!isUnsoldMemberId(memberId) || !canAssignUnsoldToTeam(team)) return;
 		void submit({
 			kind: 'ASSIGN_UNSOLD',
 			memberId,
@@ -223,6 +261,15 @@
 		revertDialogOpen = true;
 	}
 
+	function openCandidateDialog() {
+		candidateDialogOpen = true;
+	}
+
+	function resetScoreTimer() {
+		scoreTimerStartedAt = Date.now();
+		scoreTimerRemainingMs = BID_TIMER_DURATION_MS;
+	}
+
 	async function revertLastAction() {
 		if (!canRevert) return;
 		const applied = await submit({
@@ -235,6 +282,7 @@
 	function resetTransientState() {
 		bidInputs = {};
 		showTargetDetails = false;
+		candidateDialogOpen = false;
 		clearDragState();
 	}
 
@@ -242,13 +290,6 @@
 		if (!currentTarget || !event.dataTransfer || !canManageDraft) return;
 		draggedTargetId = currentTarget.userId;
 		event.dataTransfer.setData('text/plain', currentTarget.userId);
-		event.dataTransfer.effectAllowed = 'move';
-	}
-
-	function startUnsoldDrag(event: globalThis.DragEvent, member: AuctionTournamentDraftCandidate) {
-		if (!event.dataTransfer || !canManageDraft) return;
-		draggedTargetId = member.userId;
-		event.dataTransfer.setData('text/plain', member.userId);
 		event.dataTransfer.effectAllowed = 'move';
 	}
 
@@ -270,8 +311,6 @@
 		const memberId = event.dataTransfer.getData('text/plain');
 		if (currentTarget && memberId === currentTarget.userId) {
 			assignCurrentTargetToTeam(team);
-		} else if (isUnsoldMemberId(memberId)) {
-			assignUnsoldMemberToTeam(team, memberId);
 		}
 		clearDragState();
 	}
@@ -311,6 +350,21 @@
 </script>
 
 <div class="grid gap-2">
+	<div
+		class="h-1 w-full overflow-hidden bg-slate-800/80"
+		role="progressbar"
+		aria-label="입찰 조정 타이머"
+		aria-valuemin={0}
+		aria-valuemax={BID_TIMER_DURATION_MS}
+		aria-valuenow={scoreTimerRemainingMs}
+		aria-valuetext={`${scoreTimerSeconds}초 남음`}
+	>
+		<div
+			class="h-full bg-amber-300 transition-[width] duration-100 ease-linear"
+			style={`width: ${scoreTimerPercent}%`}
+		></div>
+	</div>
+
 	<section class="border-y border-[var(--color-app-border-muted)] bg-[var(--color-app-surface)]">
 		<div class="grid gap-px bg-[var(--color-app-border-muted)] sm:grid-cols-2 xl:grid-cols-4">
 			<div class="bg-[var(--color-app-surface)] px-3 py-3">
@@ -824,48 +878,37 @@
 				<div
 					class="flex items-center justify-between gap-3 border-b border-[var(--color-app-border-muted)] px-3 py-2"
 				>
-					<p class="text-base font-semibold text-slate-100">유찰</p>
-					<p class="text-xs text-slate-500">팀 배치 또는 재등록</p>
+					<p class="text-base font-semibold text-slate-100">후보 현황</p>
+					<p class="text-xs text-slate-500">{candidateDialogCount}명</p>
 				</div>
-				<div role="list" class="grid min-h-0 content-start gap-1.5 overflow-y-auto p-2">
-					{#each unsold as member (member.userId)}
-						<div
-							role="listitem"
-							draggable={canManageDraft}
-							ondragstart={(event) => startUnsoldDrag(event, member)}
-							ondragend={clearDragState}
-							class={`grid min-w-0 gap-2 border border-amber-300/10 bg-amber-300/[0.045] p-2 text-left text-sm text-slate-100 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center ${
-								draggedTargetId === member.userId ? 'opacity-60' : ''
-							}`}
-							aria-label={`${member.displayName} 유찰 후보`}
-						>
-							<div class="flex min-w-0 items-center gap-2">
-								<span
-									class="grid size-8 shrink-0 place-items-center border border-amber-300/20 bg-slate-950/70 text-xs font-semibold text-amber-100"
-								>
-									{playerInitial(member.displayName)}
-								</span>
-								<span class="min-w-0 flex-1">
-									<span class="block truncate text-sm font-semibold">{member.displayName}</span>
-									<span class="block truncate text-[11px] text-slate-500">
-										{playerLaneLabel(member)} · MMR {mmrLabel(member.mmrAtStart)}
-									</span>
-								</span>
-							</div>
-							<div class="flex justify-end gap-1">
-								<button
-									type="button"
-									class="h-8 px-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-40"
-									disabled={!canManageDraft || Boolean(currentTarget)}
-									onclick={() => restoreUnsoldToTarget(member.userId)}
-								>
-									재등록
-								</button>
-							</div>
+				<div class="grid min-h-0 content-center gap-3 p-3">
+					<button
+						type="button"
+						class="inline-flex h-10 items-center justify-center gap-1.5 border border-cyan-400/30 px-3 text-sm font-semibold text-cyan-100 hover:bg-cyan-400/10"
+						onclick={openCandidateDialog}
+					>
+						<ListChecks size={15} aria-hidden="true" /> 후보 목록
+					</button>
+					<div class="grid grid-cols-3 gap-px bg-[var(--color-app-border-muted)]">
+						<div class="bg-[var(--color-app-surface)] p-2 text-center">
+							<p class="text-[11px] text-slate-500">현재</p>
+							<p class="mt-1 text-sm font-semibold text-cyan-100 tabular-nums">
+								{currentTarget ? 1 : 0}
+							</p>
 						</div>
-					{:else}
-						<p class="py-2 text-center text-base text-slate-500">아직 유찰 없음</p>
-					{/each}
+						<div class="bg-[var(--color-app-surface)] p-2 text-center">
+							<p class="text-[11px] text-slate-500">대기</p>
+							<p class="mt-1 text-sm font-semibold text-slate-100 tabular-nums">
+								{queuedCandidates.length}
+							</p>
+						</div>
+						<div class="bg-[var(--color-app-surface)] p-2 text-center">
+							<p class="text-[11px] text-slate-500">유찰 후보</p>
+							<p class="mt-1 text-sm font-semibold text-amber-100 tabular-nums">
+								{unsold.length}
+							</p>
+						</div>
+					</div>
 				</div>
 			</section>
 		</div>
@@ -926,7 +969,10 @@
 									disabled={!canManageDraft || !currentTarget || team.members.length >= 5}
 									value={bidInputs[team.id] ?? ''}
 									oninput={(event) => {
-										bidInputs = { ...bidInputs, [team.id]: event.currentTarget.value };
+										const nextValue = event.currentTarget.value;
+										if ((bidInputs[team.id] ?? '') === nextValue) return;
+										bidInputs = { ...bidInputs, [team.id]: nextValue };
+										resetScoreTimer();
 									}}
 									aria-label={`${team.teamName} 입찰가`}
 								/>
@@ -994,6 +1040,145 @@
 		</section>
 	</div>
 </div>
+
+<Dialog.Root bind:open={candidateDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+		<Dialog.Content
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-1.5rem)] max-w-2xl -translate-x-1/2 -translate-y-1/2 overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)] shadow-2xl shadow-black/50 outline-none"
+		>
+			<header
+				class="flex h-12 items-center justify-between border-b border-[var(--color-app-border)] px-4"
+			>
+				<Dialog.Title class="text-sm font-semibold text-slate-50">후보 목록</Dialog.Title>
+				<Dialog.Close
+					disabled={submitting}
+					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
+					aria-label="후보 목록 창 닫기"
+				>
+					<X size={16} aria-hidden="true" />
+				</Dialog.Close>
+			</header>
+			<div class="grid max-h-[70vh] gap-4 overflow-y-auto p-4">
+				<section class="grid gap-2">
+					<div class="flex items-center justify-between gap-3">
+						<p class="text-xs font-semibold text-cyan-100">현재 후보</p>
+						<span class="text-[11px] font-semibold text-slate-500">{currentTarget ? 1 : 0}명</span>
+					</div>
+					{#if currentTarget}
+						<div
+							class="grid min-w-0 gap-2 border border-cyan-400/20 bg-cyan-400/[0.055] p-2 text-sm text-slate-100"
+						>
+							<div class="flex min-w-0 items-center gap-2">
+								<span
+									class="grid size-8 shrink-0 place-items-center border border-cyan-300/25 bg-slate-950/70 text-xs font-semibold text-cyan-100"
+								>
+									{playerInitial(currentTarget.displayName)}
+								</span>
+								<span class="min-w-0 flex-1">
+									<span class="block truncate text-sm font-semibold">
+										{currentTarget.displayName}
+									</span>
+									<span class="block truncate text-[11px] text-slate-500">
+										{playerLaneLabel(currentTarget)} · MMR {mmrLabel(currentTarget.mmrAtStart)}
+									</span>
+								</span>
+							</div>
+						</div>
+					{:else}
+						<p class="bg-[var(--color-app-bg-soft)] px-3 py-2 text-sm text-slate-500">
+							현재 후보 없음
+						</p>
+					{/if}
+				</section>
+
+				<section class="grid gap-2">
+					<div class="flex items-center justify-between gap-3">
+						<p class="text-xs font-semibold text-slate-300">대기/큐</p>
+						<span class="text-[11px] font-semibold text-slate-500">{queuedCandidates.length}명</span
+						>
+					</div>
+					<div class="grid gap-1.5">
+						{#each queuedCandidates as member (member.userId)}
+							<div
+								class="flex min-w-0 items-center gap-2 bg-[var(--color-app-bg-soft)] p-2 text-sm text-slate-100"
+							>
+								<span
+									class="grid size-8 shrink-0 place-items-center border border-slate-700 bg-slate-950/70 text-xs font-semibold text-slate-300"
+								>
+									{playerInitial(member.displayName)}
+								</span>
+								<span class="min-w-0 flex-1">
+									<span class="block truncate text-sm font-semibold">{member.displayName}</span>
+									<span class="block truncate text-[11px] text-slate-500">
+										{playerLaneLabel(member)} · MMR {mmrLabel(member.mmrAtStart)}
+									</span>
+								</span>
+							</div>
+						{:else}
+							<p class="bg-[var(--color-app-bg-soft)] px-3 py-2 text-sm text-slate-500">
+								대기 후보 없음
+							</p>
+						{/each}
+					</div>
+				</section>
+
+				<section class="grid gap-2">
+					<div class="flex items-center justify-between gap-3">
+						<p class="text-xs font-semibold text-amber-100">유찰 후보</p>
+						<span class="text-[11px] font-semibold text-slate-500">{unsold.length}명</span>
+					</div>
+					<div class="grid gap-1.5">
+						{#each unsold as member (member.userId)}
+							<div
+								class="grid min-w-0 gap-2 border border-amber-300/10 bg-amber-300/[0.045] p-2 text-sm text-slate-100 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+							>
+								<div class="flex min-w-0 items-center gap-2">
+									<span
+										class="grid size-8 shrink-0 place-items-center border border-amber-300/20 bg-slate-950/70 text-xs font-semibold text-amber-100"
+									>
+										{playerInitial(member.displayName)}
+									</span>
+									<span class="min-w-0 flex-1">
+										<span class="block truncate text-sm font-semibold">{member.displayName}</span>
+										<span class="block truncate text-[11px] text-slate-500">
+											{playerLaneLabel(member)} · MMR {mmrLabel(member.mmrAtStart)}
+										</span>
+									</span>
+								</div>
+								<div class="flex flex-wrap justify-end gap-1">
+									{#each teams as team (team.id)}
+										<button
+											type="button"
+											class="h-8 px-2 text-xs font-semibold text-amber-100 hover:bg-amber-300/10 disabled:cursor-not-allowed disabled:opacity-40"
+											disabled={!canAssignUnsoldToTeam(team)}
+											aria-label={`${member.displayName} ${team.teamName}에 수동 배치`}
+											onclick={() => assignUnsoldMemberToTeam(team, member.userId)}
+										>
+											{team.teamName} 배치
+										</button>
+									{/each}
+									<button
+										type="button"
+										class="h-8 px-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+										disabled={!canManageDraft || Boolean(currentTarget)}
+										onclick={() => restoreUnsoldToTarget(member.userId)}
+									>
+										재등록
+									</button>
+								</div>
+							</div>
+						{:else}
+							<p class="bg-[var(--color-app-bg-soft)] px-3 py-2 text-sm text-slate-500">
+								유찰 후보 없음
+							</p>
+						{/each}
+					</div>
+				</section>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
 
 <Dialog.Root bind:open={revertDialogOpen}>
 	<Dialog.Portal>

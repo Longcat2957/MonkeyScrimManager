@@ -1911,6 +1911,78 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/auction-recruitment:
+    post:
+      operationId: createGuildAuctionRecruitmentFromEntryDraft
+      summary: Convert a closed general recruitment into a 10-person auction recruitment
+      description: >-
+        Browser-session command for a current active operator only. The source recruitment must be
+        CLOSED, expectedRevision must equal its current recruitment revision, exactly ten
+        participants must be JOINED, and the source cannot already have an active series or prior
+        conversion. Lane assignments are not required. The transaction creates a CLOSED
+        TEN_PERSON auction recruitment with the source rules, copies the joined roster, records a
+        KST expected-start label in its generated title, and atomically records audit, idempotency,
+        realtime, and Discord delivery work.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntryDraftAuctionConversionRequest'
+      responses:
+        '201':
+          description: Auction recruitment created or an identical browser command replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes recruitment_revision_conflict for a stale expectedRevision,
+            entry_draft_auction_source_not_ready when the source is not CLOSED,
+            entry_draft_already_converted_to_series, recruitment_channel_not_configured, or an
+            idempotency conflict.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: >-
+            Includes invalid_expected_start_at when expectedStartAt is absent or not an RFC 3339
+            timestamp with a timezone, or entry_draft_incomplete when fewer than ten participants
+            have joined.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}/series:
     get:
       operationId: listGuildSeries
@@ -2282,7 +2354,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          $ref: '#/components/responses/UnprocessableEntity'
+          description: >-
+            Includes invalid_expected_start_at when expectedStartAt is absent or not an RFC 3339
+            timestamp with a timezone.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -6082,13 +6163,13 @@ components:
           default: 3
         hardFearless:
           type: boolean
-          default: false
+          default: true
     WebCreateRecruitmentRequest:
       type: object
       additionalProperties: false
       description: >-
         The authenticated session supplies the actor; callers cannot choose another user.
-        Omitted compatibility values use BO3 and hardFearless=false.
+        Omitted compatibility values use BO3 and hardFearless=true.
       properties:
         bestOf:
           type: integer
@@ -6096,11 +6177,11 @@ components:
           default: 3
         hardFearless:
           type: boolean
-          default: false
+          default: true
     CreateAuctionRecruitmentRequest:
       type: object
       additionalProperties: false
-      required: [actor, format]
+      required: [actor, format, expectedStartAt]
       properties:
         actor:
           $ref: '#/components/schemas/DiscordActor'
@@ -6116,11 +6197,17 @@ components:
           default: 3
         hardFearless:
           type: boolean
-          default: false
+          default: true
+        expectedStartAt:
+          type: string
+          format: date-time
+          description: >-
+            Required RFC 3339 expected start time with an explicit timezone offset. The server
+            stores a Korea Standard Time (KST) display label in the generated recruitment title.
     WebCreateAuctionRecruitmentRequest:
       type: object
       additionalProperties: false
-      required: [format]
+      required: [format, expectedStartAt]
       description: >-
         The authenticated session supplies the actor. Browser callers select the auction format
         and match rules but cannot choose a Discord user, capacity, season, display number, or channel.
@@ -6137,7 +6224,13 @@ components:
           default: 3
         hardFearless:
           type: boolean
-          default: false
+          default: true
+        expectedStartAt:
+          type: string
+          format: date-time
+          description: >-
+            Required RFC 3339 expected start time with an explicit timezone offset. The server
+            stores a Korea Standard Time (KST) display label in the generated recruitment title.
     WebCloseAuctionRecruitmentRequest:
       type: object
       additionalProperties: false
@@ -6558,7 +6651,8 @@ components:
     EntryDraftCapabilities:
       type: object
       additionalProperties: false
-      required: [canEdit, canReset, canCreateSeries, canReopen, canCancel]
+      required:
+        [canEdit, canReset, canCreateSeries, canCreateAuctionRecruitment, canReopen, canCancel]
       properties:
         canEdit:
           type: boolean
@@ -6570,6 +6664,13 @@ components:
             True only when the viewer is a current active operator, the recruitment is CLOSED, and
             all ten JOINED participants occupy one distinct TEAM_1/TEAM_2 lane slot. The create
             command still revalidates this state transactionally.
+        canCreateAuctionRecruitment:
+          type: boolean
+          description: >-
+            True only when the viewer is a current active operator, the recruitment is CLOSED, it
+            has exactly ten JOINED participants, it has not already been converted, and no active
+            series exists for the source recruitment. Lane assignments are not required. The
+            conversion command still revalidates this state transactionally.
         canReopen:
           type: boolean
         canCancel:
@@ -6631,6 +6732,22 @@ components:
           type: integer
           format: int64
           minimum: 0
+    EntryDraftAuctionConversionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, expectedStartAt]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Current source recruitment revision, not the entry-draft revision.
+        expectedStartAt:
+          type: string
+          format: date-time
+          description: >-
+            Required RFC 3339 expected start time with an explicit timezone offset. The server
+            stores a Korea Standard Time (KST) display label in the generated recruitment title.
     CreateSeriesFromEntryDraftRequest:
       type: object
       additionalProperties: false

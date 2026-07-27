@@ -19,12 +19,13 @@ const guildId = '200000000000000001';
 const userId = '100000000000000001';
 const interactionId = '400000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
+const expectedStartAt = '2026-07-26T20:00:00+09:00';
 
 const snapshot: AuctionRecruitmentSnapshot = {
 	recruitment: {
 		id: recruitmentId,
 		displayNumber: 214,
-		title: '20인 경매 내전 모집 #214',
+		title: `20인 경매 내전 모집 #214 · 예상 시작 ${expectedStartAt} (KST)`,
 		format: 'TWENTY_PERSON',
 		rules: { hardFearless: true, semifinalBestOf: 1, finalBestOf: 5 },
 		participantCount: 20,
@@ -54,7 +55,12 @@ function context(createAuctionRecruitment: ReturnType<typeof vi.fn>): Interactio
 
 function interaction(
 	participantCount: number,
-	options: { semifinalBestOf?: number; finalBestOf?: number; hardFearless?: boolean } = {}
+	options: {
+		semifinalBestOf?: number;
+		finalBestOf?: number;
+		hardFearless?: boolean;
+		expectedStartAt?: string;
+	} = {}
 ) {
 	const deferReply = vi.fn(async () => undefined);
 	const editReply = vi.fn(async () => undefined);
@@ -79,7 +85,9 @@ function interaction(
 					return null;
 				},
 				getBoolean: (name: string) =>
-					name === '하드피어리스' ? (options.hardFearless ?? null) : null
+					name === '하드피어리스' ? (options.hardFearless ?? null) : null,
+				getString: (name: string) =>
+					name === '예상시작' ? (options.expectedStartAt ?? expectedStartAt) : null
 			},
 			inCachedGuild: () => true,
 			deferReply,
@@ -110,6 +118,11 @@ describe('/경매모집', () => {
 					{ name: '10인', value: 10 },
 					{ name: '20인', value: 20 }
 				]
+			}),
+			expect.objectContaining({
+				name: '예상시작',
+				type: ApplicationCommandOptionType.String,
+				required: true
 			}),
 			expect.objectContaining({
 				name: '결승',
@@ -155,7 +168,8 @@ describe('/경매모집', () => {
 				format: 'TWENTY_PERSON',
 				semifinalBestOf: 1,
 				finalBestOf: 5,
-				hardFearless: true
+				hardFearless: true,
+				expectedStartAt
 			},
 			{ idempotencyKey: interactionId }
 		);
@@ -166,12 +180,13 @@ describe('/경매모집', () => {
 		expect(renderedReply(current.editReply)).toContain('4강');
 		expect(renderedReply(current.editReply)).toContain('BO1');
 		expect(renderedReply(current.editReply)).toContain('하드 피어리스');
+		expect(renderedReply(current.editReply)).toContain(expectedStartAt);
 		expect(renderedReply(current.editReply)).toContain(
 			`http://localhost:5173/g/${guildId}/auction/recruitments/${recruitmentId}`
 		);
 	});
 
-	it('uses BO3 and normal rules by default for a 10-person auction', async () => {
+	it('uses BO3 and hard fearless by default for a 10-person auction', async () => {
 		const createAuctionRecruitment = vi.fn(async () => snapshot);
 		const current = interaction(10);
 
@@ -183,7 +198,8 @@ describe('/경매모집', () => {
 				format: 'TEN_PERSON',
 				semifinalBestOf: null,
 				finalBestOf: 3,
-				hardFearless: false
+				hardFearless: true,
+				expectedStartAt
 			}),
 			{ idempotencyKey: interactionId }
 		);
