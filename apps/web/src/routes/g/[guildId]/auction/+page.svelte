@@ -137,7 +137,8 @@
 	let createSemifinalBestOf = $state<AuctionBestOf>(3);
 	let createFinalBestOf = $state<AuctionBestOf>(3);
 	let createHardFearless = $state(true);
-	let createExpectedStartAt = $state('');
+	let createExpectedStartDate = $state('');
+	let createExpectedStartTime = $state('');
 	const consumedRecruitmentCursors = new SvelteSet<string>();
 	const consumedActiveTournamentCursors = new SvelteSet<string>();
 	const consumedCompletedTournamentCursors = new SvelteSet<string>();
@@ -348,7 +349,8 @@
 		createSemifinalBestOf = 3;
 		createFinalBestOf = 3;
 		createHardFearless = true;
-		createExpectedStartAt = '';
+		createExpectedStartDate = '';
+		createExpectedStartTime = '';
 		createDialogOpen = true;
 	}
 
@@ -376,17 +378,25 @@
 		createIdempotencyKey = null;
 	}
 
-	function expectedStartIsoFromInput(value: string): string | null {
-		const trimmed = value.trim();
-		if (!trimmed) return null;
-		const parsed = new Date(trimmed);
+	function expectedStartIsoFromInput(date: string, time: string): string | null {
+		const localDate = date.trim();
+		const localTime = time.trim();
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate) || !/^\d{2}:\d{2}$/.test(localTime)) {
+			return null;
+		}
+		const [hour, minute] = localTime.split(':').map(Number);
+		if (hour > 23 || minute > 59) return null;
+		const parsed = new Date(`${localDate}T${localTime}:00`);
 		if (Number.isNaN(parsed.getTime())) return null;
 		return parsed.toISOString();
 	}
 
 	async function createNewAuctionRecruitment() {
 		if (creatingRecruitment) return;
-		const expectedStartAt = expectedStartIsoFromInput(createExpectedStartAt);
+		const expectedStartAt = expectedStartIsoFromInput(
+			createExpectedStartDate,
+			createExpectedStartTime
+		);
 		if (!expectedStartAt) {
 			createError = '예상 시작 시간을 입력해 주세요.';
 			return;
@@ -684,19 +694,40 @@
 					</div>
 				</div>
 
-				<label class="grid gap-2">
+				<div class="grid gap-2">
 					<span class="text-[11px] font-semibold text-slate-500">예상 시작 시간</span>
-					<input
-						type="datetime-local"
-						required
-						bind:value={createExpectedStartAt}
-						disabled={creatingRecruitment}
-						oninput={() => {
-							createIdempotencyKey = null;
-						}}
-						class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-cyan-300/55 disabled:opacity-35"
-					/>
-				</label>
+					<div class="grid grid-cols-2 gap-2">
+						<label class="grid gap-1">
+							<span class="text-[11px] text-slate-500">날짜</span>
+							<input
+								type="date"
+								required
+								bind:value={createExpectedStartDate}
+								disabled={creatingRecruitment}
+								oninput={() => {
+									createIdempotencyKey = null;
+								}}
+								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-cyan-300/55 disabled:opacity-35"
+							/>
+						</label>
+						<label class="grid gap-1">
+							<span class="text-[11px] text-slate-500">시간 (24시간)</span>
+							<input
+								type="text"
+								required
+								maxlength="5"
+								placeholder="23:30"
+								pattern="[0-2][0-9]:[0-5][0-9]"
+								bind:value={createExpectedStartTime}
+								disabled={creatingRecruitment}
+								oninput={() => {
+									createIdempotencyKey = null;
+								}}
+								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-cyan-300/55 disabled:opacity-35"
+							/>
+						</label>
+					</div>
+				</div>
 
 				<button
 					type="button"
@@ -755,7 +786,9 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={creatingRecruitment || !createExpectedStartAt.trim()}
+					disabled={creatingRecruitment ||
+						!createExpectedStartDate.trim() ||
+						!createExpectedStartTime.trim()}
 					onclick={createNewAuctionRecruitment}
 					class="inline-flex h-9 items-center gap-1.5 border border-cyan-300/35 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-50 disabled:opacity-35"
 				>

@@ -29,7 +29,12 @@ function snapshot(status: 'OPEN' | 'CLOSED') {
 			draft:
 				status === 'CLOSED' ? `/g/${guildId}/auction/recruitments/${recruitmentId}/draft` : null
 		},
-		permissions: { canManageMembers: false, canClose: false, canCancel: false }
+		permissions: {
+			canManageMembers: false,
+			canClose: false,
+			canSendParticipantConfirmationDms: true,
+			canCancel: false
+		}
 	};
 }
 

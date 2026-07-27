@@ -44,7 +44,13 @@ describe('entry draft page route binding', () => {
 		expect(source).toContain('canCreateAuctionRecruitment = $derived(');
 		expect(source).toContain('snapshot?.capabilities.canCreateAuctionRecruitment');
 		expect(source).toContain('openCreateAuctionRecruitmentDialog');
-		expect(source).toContain('createAuctionRecruitmentExpectedStartAt');
+		expect(source).toContain('createAuctionRecruitmentExpectedStartDate');
+		expect(source).toContain('createAuctionRecruitmentExpectedStartTime');
+		expect(source).toContain('type="date"');
+		expect(source).toContain('시간 (24시간)');
+		expect(source).toContain('placeholder="23:30"');
+		expect(source).toContain('pattern="[0-2][0-9]:[0-5][0-9]"');
+		expect(source).toContain('T${localTime}:00');
 		expect(source).toContain('createAuctionRecruitmentFromEntryDraft(');
 		expect(source).toContain("'entry-draft-create-auction-recruitment'");
 		expect(source).toContain('expectedRevision: currentSnapshot.recruitment.revision');
@@ -53,6 +59,14 @@ describe('entry draft page route binding', () => {
 			'await goto(auctionRecruitment.links.draft ?? auctionRecruitment.recruitment.href);'
 		);
 		expect(source).toContain('경매 모집 전환');
+	});
+
+	it('shows the separate participant confirmation DM action only from the server capability', () => {
+		expect(source).toContain('canSendParticipantConfirmationDms = $derived(');
+		expect(source).toContain('snapshot?.capabilities.canSendParticipantConfirmationDms');
+		expect(source).toContain('dispatchRecruitmentParticipantConfirmationDms(');
+		expect(source).toContain("'entry-draft-participant-confirmation-dms'");
+		expect(source).toContain('참가 확정 DM 발송');
 	});
 
 	it('requires confirmation before reopening recruitment and explains that the entry draft is preserved', () => {

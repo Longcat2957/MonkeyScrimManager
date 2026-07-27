@@ -2043,6 +2043,12 @@ failure로, retryable 오류도 기본 8회 실패하면 `MAX_ATTEMPTS`로 전�
 `failed_at/failure_code/last_error`를 기록하고 lease를 비운다. terminal row는 worker pending count에서
 제외하고 admin 상태/metric에서 별도 노출한다.
 
+`channel_id`는 notification delivery 대상 snowflake다. 일반 Discord 카드/결과 row에서는 guild channel ID를
+저장하고, 모집 참가 확정 DM (`*_PARTICIPANT_CONFIRMATION_DM_CREATE`) row에서는 recipient Discord user ID를
+저장한다. Bot relay는 payload의 `recipientUserId`와 이 routing snowflake가 일치할 때만 DM을 전송한다.
+이 row는 모집 마감 시 자동으로 만들지 않고, `CLOSED` 모집의 active operator가 수동 발송을 요청할 때만
+해당 마감 revision·recipient 조합의 deduplication key로 적재한다.
+
 ### `bot_instances`
 
 ```text

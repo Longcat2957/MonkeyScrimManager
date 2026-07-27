@@ -61,6 +61,7 @@ export const auctionRecruitmentPermissionsSchema = z
 	.object({
 		canManageMembers: z.boolean(),
 		canClose: z.boolean(),
+		canSendParticipantConfirmationDms: z.boolean(),
 		canCancel: z.boolean()
 	})
 	.strict();

@@ -623,7 +623,8 @@ draft
   assignments[]
     participantId, team TEAM_1|TEAM_2, lane
 capabilities
-  canEdit, canReset, canCreateSeries, canCreateAuctionRecruitment, canReopen, canCancel
+  canEdit, canReset, canCreateSeries, canCreateAuctionRecruitment,
+  canSendParticipantConfirmationDms, canReopen, canCancel
 ```
 
 `capabilities`는 현재 viewer와 상태에서 계산한 snapshot hint다. `canCancel`은 생성자 또는 active
@@ -635,6 +636,7 @@ entry-draft route 자체는 취소 후 `404`가 된다. `canCreateSeries`는 cur
 정확히 10명의 JOINED 참가자가 있고, 아직 전환되지 않았으며 active series가 없을 때 true다. 이 경로는
 lane assignment를 요구하지 않는다. 경매 전환 command도 source 모집 revision과 상태, JOINED 정원, 기존
 전환 불가 상태를 transaction 안에서 다시 검증한다.
+`canSendParticipantConfirmationDms`는 current active operator의 `CLOSED` 모집에서만 true다.
 
 `riotTier`는 참가자의 `origin=RIOT` 주 계정과 일치하는 캐시 전적 snapshot의
 `RANKED_SOLO_5x5`만 compact 표기(`P3`, `E2` 등)로 투영한다. 이 read는 Riot API를 호출하거나 Riot ID,
@@ -745,6 +747,16 @@ Bot request는 operator actor snapshot을, Browser request는 session, CSRF, bro
 body를 사용한다. 두 흐름 모두 current active operator, OPEN, 참가자 10명을 transaction 안에서 다시
 검증하고 CLOSED로 전이한 뒤 entry deep link가 포함된 최신 recruitment snapshot을 반환한다. Browser action은
 이미 bind된 Discord 모집 메시지의 `RECRUITMENT_MESSAGE_UPDATE`를 같은 transaction에 적재한다.
+마감 자체는 참가 확정 DM을 자동 enqueue하지 않는다.
+
+### POST /api/guilds/{guildId}/recruitments/{id}/participant-confirmation-dms
+
+Browser session, CSRF, browser `Idempotency-Key`, 빈 `{}` body를 사용하는 수동 발송 요청이다. current active
+operator만 `CLOSED` 모집에서 호출할 수 있다. canonical `JOINED` Discord 참가자별
+`RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE` notification을 적재하며 개발 더미 사용자는 제외한다.
+같은 CLOSED revision·recipient 조합은 deduplication key로 한 번만 적재된다. 응답은
+`queuedRecipientCount`와 `alreadyQueuedRecipientCount`를 반환한다. Discord DM 차단·권한 오류는 notification
+failure로 남기며 모집 상태를 되돌리지 않는다.
 
 ### POST /api/guilds/{guildId}/series
 
@@ -1083,7 +1095,7 @@ participants[] = id, displayName, declaredLane
 links
   draft: string | null
 permissions
-  canManageMembers, canClose, canCancel
+  canManageMembers, canClose, canSendParticipantConfirmationDms, canCancel
 ```
 
 `draft` link는 CLOSED 모집에만 non-null이다. `canManageMembers`는 OPEN 모집에서 현재 active operator가
@@ -1098,7 +1110,16 @@ Browser session, CSRF, browser `Idempotency-Key`가 필요하다. active operato
 recruitment revision/audit/realtime invalidate를 함께 기록한다. 성공 `200`은 updated
 `AuctionRecruitmentSnapshot`을 반환하며 `links.draft`가 non-null이다. 정원이 부족하면 safe reason
 `auction_recruitment_not_full`, stale/invalid lifecycle이면 해당 conflict reason을 반환한다. bound Discord
-message가 있으면 같은 transaction에 `AUCTION_RECRUITMENT_MESSAGE_UPDATE`를 적재한다.
+message가 있으면 같은 transaction에 `AUCTION_RECRUITMENT_MESSAGE_UPDATE`를 적재한다. 마감 자체는 참가 확정
+DM을 자동 enqueue하지 않는다.
+
+### POST /api/guilds/{guildId}/auction-recruitments/{id}/participant-confirmation-dms
+
+Browser session, CSRF, browser `Idempotency-Key`, 빈 `{}` body를 사용하는 수동 발송 요청이다. current active
+operator만 `CLOSED` 경매 모집에서 호출할 수 있다. canonical `JOINED` Discord 참가자별
+`AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE` notification을 적재하며, 같은 CLOSED revision·recipient
+조합은 한 번만 적재된다. 응답은 `queuedRecipientCount`와 `alreadyQueuedRecipientCount`다. 더미 사용자는
+제외하고, DM delivery 실패는 notification failure로 기록하며 모집 상태는 유지한다.
 
 ### DELETE /api/guilds/{guildId}/auction-recruitments/{id}
 

@@ -4,6 +4,7 @@ import {
 	auctionRecruitmentErrorText,
 	closeAuctionRecruitment,
 	createAuctionRecruitment,
+	dispatchAuctionRecruitmentParticipantConfirmationDms,
 	removeAuctionRecruitmentMember
 } from './auctionRecruitment';
 
@@ -40,7 +41,12 @@ const openSnapshot = {
 		{ id: '1525847677542207548', displayName: 'Longcat', declaredLane: 'MID' as const }
 	],
 	links: { draft: null },
-	permissions: { canManageMembers: false, canClose: false, canCancel: true }
+	permissions: {
+		canManageMembers: false,
+		canClose: false,
+		canSendParticipantConfirmationDms: false,
+		canCancel: true
+	}
 };
 
 function installBrowser(fetcher: typeof globalThis.fetch, cookie = 'monkeybot_csrf=csrf-token') {
@@ -103,7 +109,12 @@ describe('auction recruitment API client', () => {
 				revision: 1
 			},
 			links: { draft: `/g/${guildId}/auction/recruitments/${recruitmentId}/draft` },
-			permissions: { canManageMembers: false, canClose: false, canCancel: true }
+			permissions: {
+				canManageMembers: false,
+				canClose: false,
+				canSendParticipantConfirmationDms: true,
+				canCancel: true
+			}
 		};
 		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
 			void args;
@@ -121,10 +132,38 @@ describe('auction recruitment API client', () => {
 		expect(JSON.parse(String(init?.body))).toEqual({});
 	});
 
+	it('requests participant confirmation DMs through the operator endpoint', async () => {
+		const result = { queuedRecipientCount: 10, alreadyQueuedRecipientCount: 0 };
+		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return Response.json({ data: result, meta: { requestId } });
+		});
+		installBrowser(fetcher);
+
+		await expect(
+			dispatchAuctionRecruitmentParticipantConfirmationDms(guildId, recruitmentId, idempotencyKey)
+		).resolves.toEqual(result);
+
+		const [path, init] = fetcher.mock.calls[0]!;
+		expect(path).toBe(
+			`/api/guilds/${guildId}/auction-recruitments/${recruitmentId}/participant-confirmation-dms`
+		);
+		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+		expect(JSON.parse(String(init?.body))).toEqual({});
+		const headers = new Headers(init?.headers);
+		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
+		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
+	});
+
 	it('adds and removes a guild member through the browser operator routes', async () => {
 		const operatorSnapshot = {
 			...openSnapshot,
-			permissions: { canManageMembers: true, canClose: false, canCancel: true }
+			permissions: {
+				canManageMembers: true,
+				canClose: false,
+				canSendParticipantConfirmationDms: false,
+				canCancel: true
+			}
 		};
 		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
 			void args;

@@ -237,6 +237,17 @@ export const recruitmentMessageNotificationPayloadSchema = z
 	})
 	.strict();
 
+export const recruitmentParticipantConfirmationDmPayloadSchema = z
+	.object({
+		schemaVersion: z.literal(1),
+		guildId: discordSnowflakeSchema,
+		recipientUserId: discordSnowflakeSchema,
+		recruitmentId: uuidSchema,
+		recruitmentTitle: z.string().min(1).max(200),
+		recruitmentHref: z.string().startsWith('/g/')
+	})
+	.strict();
+
 export const auctionRecruitmentFormatSchema = z.enum(['TEN_PERSON', 'TWENTY_PERSON']);
 export const auctionBestOfSchema = z.union([z.literal(1), z.literal(3), z.literal(5)]);
 export const auctionTournamentStatusSchema = z.enum([
@@ -309,6 +320,7 @@ const auctionRecruitmentSnapshotFields = {
 		.object({
 			canManageMembers: z.boolean(),
 			canClose: z.boolean(),
+			canSendParticipantConfirmationDms: z.boolean().optional(),
 			canCancel: z.boolean()
 		})
 		.strict()
@@ -1304,6 +1316,9 @@ export type ActorRequest = z.infer<typeof actorRequestSchema>;
 export type SetPreferredLanesRequest = z.infer<typeof setPreferredLanesRequestSchema>;
 export type RecruitmentMessageNotificationPayload = z.infer<
 	typeof recruitmentMessageNotificationPayloadSchema
+>;
+export type RecruitmentParticipantConfirmationDmPayload = z.infer<
+	typeof recruitmentParticipantConfirmationDmPayloadSchema
 >;
 export type EntryConfirmationSnapshot = z.infer<typeof entryConfirmationSnapshotSchema>;
 export type EntryConfirmationNotificationPayload = z.infer<

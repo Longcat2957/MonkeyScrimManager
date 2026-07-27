@@ -34,6 +34,7 @@ import {
 
 const guildId = '200000000000000001';
 const channelId = '500000000000000001';
+const directMessageRecipientId = '100000000000000001';
 const messageId = '600000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const notificationId = '01900000-0000-7000-8000-000000000301';
@@ -132,6 +133,114 @@ describe('Bot notification relay', () => {
 		);
 		expect(current.acknowledgeNotification).not.toHaveBeenCalled();
 		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('sends a confirmed participant a direct message and uses generic acknowledgement', async () => {
+		const send = vi.fn(async (options: unknown) => {
+			void options;
+			return { id: messageId };
+		});
+		const recipient = { send };
+		const current = createRelay([participantConfirmationDmNotification()], null, recipient);
+
+		await current.relay.poll();
+
+		expect(current.client.users.fetch).toHaveBeenCalledWith(directMessageRecipientId);
+		expect(send).toHaveBeenCalledTimes(1);
+		const sentOptions = send.mock.calls[0]?.[0];
+		expect(sentOptions).toMatchObject({
+			nonce: discordNonce,
+			enforceNonce: true,
+			flags: MessageFlags.IsComponentsV2
+		});
+		expect(sentOptions).not.toHaveProperty('content');
+		const serialized = JSON.stringify(messagePayload(sentOptions));
+		expect(serialized).toContain('참가가 확정되었습니다');
+		expect(serialized).toContain('일반 내전 모집이 마감되었습니다.');
+		expect(serialized).toContain(
+			`https://dev.monkeybot.lol/g/${guildId}/recruitments/${recruitmentId}/entry`
+		);
+		expect(current.acknowledgeNotification).toHaveBeenCalledWith(
+			{
+				instanceId,
+				notificationId,
+				leaseToken,
+				discordMessageId: messageId
+			},
+			expect.any(Object)
+		);
+		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('sends an auction participant confirmation direct message', async () => {
+		const send = vi.fn(async (options: unknown) => {
+			void options;
+			return { id: messageId };
+		});
+		const recipient = { send };
+		const current = createRelay(
+			[
+				participantConfirmationDmNotification(
+					participantConfirmationDmPayload(),
+					'AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+				)
+			],
+			null,
+			recipient
+		);
+
+		await current.relay.poll();
+
+		expect(JSON.stringify(messagePayload(send.mock.calls[0]?.[0]))).toContain(
+			'경매 내전 모집이 마감되었습니다.'
+		);
+		expect(current.acknowledgeNotification).toHaveBeenCalledOnce();
+		expect(current.nackNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('does not send a participant confirmation direct message when its recipient routing differs', async () => {
+		const payload = participantConfirmationDmPayload();
+		payload.recipientUserId = '100000000000000002';
+		const current = createRelay([participantConfirmationDmNotification(payload)], null);
+
+		await current.relay.poll();
+
+		expect(current.client.users.fetch).not.toHaveBeenCalled();
+		expect(current.nackNotification).toHaveBeenCalledWith(
+			expect.objectContaining({
+				failure: {
+					kind: 'HTTP',
+					status: 422,
+					message:
+						'Recruitment participant confirmation DM routing does not match its claimed notification'
+				}
+			}),
+			expect.any(Object)
+		);
+		expect(current.acknowledgeNotification).not.toHaveBeenCalled();
+		current.relay.close();
+	});
+
+	it('records a blocked participant confirmation direct message as a non-retryable Discord failure', async () => {
+		const recipient = {
+			send: vi.fn(async () => {
+				throw directMessageForbidden();
+			})
+		};
+		const current = createRelay([participantConfirmationDmNotification()], null, recipient);
+
+		await current.relay.poll();
+
+		expect(current.nackNotification).toHaveBeenCalledWith(
+			expect.objectContaining({
+				failure: expect.objectContaining({ kind: 'HTTP', status: 403 })
+			}),
+			expect.any(Object)
+		);
+		expect(current.acknowledgeNotification).not.toHaveBeenCalled();
 		current.relay.close();
 	});
 
@@ -714,6 +823,36 @@ function notification(
 	};
 }
 
+function participantConfirmationDmPayload() {
+	return {
+		schemaVersion: 1 as const,
+		guildId,
+		recipientUserId: directMessageRecipientId,
+		recruitmentId,
+		recruitmentTitle: '금요 정기 내전',
+		recruitmentHref: `/g/${guildId}/recruitments/${recruitmentId}/entry`
+	};
+}
+
+function participantConfirmationDmNotification(
+	payload = participantConfirmationDmPayload(),
+	type:
+		| 'RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+		| 'AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE' = 'RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+): BotNotification {
+	return {
+		id: notificationId,
+		guildId,
+		leaseToken,
+		leaseUntil: '2026-07-13T10:00:30Z',
+		channelId: directMessageRecipientId,
+		type,
+		payload,
+		discordNonce,
+		attempts: 1
+	};
+}
+
 type AuctionRecruitmentSnapshot = ReturnType<
 	typeof auctionRecruitmentMessageNotificationPayloadSchema.parse
 >['snapshot'];
@@ -1092,7 +1231,11 @@ function seriesResultPayload(snapshot: SeriesResultNotificationSnapshot): unknow
 	};
 }
 
-function createRelay(notifications: BotNotification[], channel: object | null) {
+function createRelay(
+	notifications: BotNotification[],
+	channel: object | null,
+	directMessageRecipient: object | null = null
+) {
 	const claimNotifications = vi.fn(async () => ({ notifications }));
 	const acknowledgeNotification = vi.fn(async () => ({
 		acknowledged: true as const,
@@ -1129,8 +1272,10 @@ function createRelay(notifications: BotNotification[], channel: object | null) {
 	>;
 	const client = new EventEmitter() as EventEmitter & {
 		channels: { fetch: ReturnType<typeof vi.fn> };
+		users: { fetch: ReturnType<typeof vi.fn> };
 	};
 	client.channels = { fetch: vi.fn(async () => channel) };
+	client.users = { fetch: vi.fn(async () => directMessageRecipient) };
 	const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 	const relay = installBotNotificationRelay(client as unknown as Client, api, logger, {
 		instanceId,
@@ -1174,6 +1319,17 @@ function unknownDiscordMessage(): DiscordAPIError {
 		404,
 		'DELETE',
 		'https://discord.com/api/v10/channels/500000000000000001/messages/600000000000000001',
+		{ body: undefined, files: undefined }
+	);
+}
+
+function directMessageForbidden(): DiscordAPIError {
+	return new DiscordAPIError(
+		{ code: 50_007, message: 'Cannot send messages to this user' },
+		50_007,
+		403,
+		'POST',
+		'https://discord.com/api/v10/users/@me/channels',
 		{ body: undefined, files: undefined }
 	);
 }

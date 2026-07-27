@@ -77,6 +77,9 @@
 - `엔트리 편성 시작`: backend가 허용하는 상태와 권한일 때 모집을 엔트리 편성 단계로 전환하고 Web 작업 링크를 제공한다.
 
 카드 갱신과 entry 확정/결과 알림은 backend notification outbox와 Bot notification relay가 처리한다. Bot 카드가 상태의 source of truth가 아니다.
+모집 마감은 참가 확정 DM을 자동으로 보내지 않는다. current active operator가 Web의 별도 `참가 확정 DM 발송`
+action을 요청했을 때만 해당 CLOSED revision의 `JOINED` Discord 참가자에게 DM을 queue한다. 더미 사용자는
+제외하고, DM 차단·권한 오류는 모집 상태를 되돌리지 않은 채 notification failure로 남긴다.
 
 ## 경매 내전 모집과 운영
 
@@ -96,6 +99,8 @@
 - `참가 라인`: 정확히 한 개의 라인을 선택해 해당 선택으로 참가한다.
 
 모집 card의 생성·갱신·삭제는 API notification outbox가 Discord relay에 전달한다. 입찰, 브래킷, lineup, match의 상세 조작은 Web workflow에서 수행하며 현재 별도 Discord command가 없다.
+경매 모집도 마감만으로 DM을 보내지 않으며, current active operator가 Web의 마감 명단 화면에서 수동 발송을
+요청했을 때만 해당 `JOINED` 참가자에게 경매 내전 참가 확정 DM이 비동기로 전송된다.
 
 ### `/경매인원추가 모집 멤버 [라인]`
 

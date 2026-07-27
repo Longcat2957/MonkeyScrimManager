@@ -2,6 +2,10 @@ import {
 	recruitmentSnapshotSchema,
 	type RecruitmentSnapshot
 } from '$lib/contracts/recruitmentSnapshot';
+import {
+	participantConfirmationDmDispatchResultSchema,
+	type ParticipantConfirmationDmDispatchResult
+} from '$lib/contracts/participantConfirmationDm';
 import { apiErrorEnvelopeSchema, responseMetaSchema, userIdSchema } from '$lib/contracts/workflow';
 import { apiRoute } from '$lib/routing';
 import { z } from 'zod';
@@ -10,9 +14,17 @@ const idempotencyKeySchema = z.uuid();
 const recruitmentSnapshotEnvelopeSchema = z
 	.object({ data: recruitmentSnapshotSchema, meta: responseMetaSchema })
 	.strict();
+const participantConfirmationDmDispatchEnvelopeSchema = z
+	.object({ data: participantConfirmationDmDispatchResultSchema, meta: responseMetaSchema })
+	.strict();
 
 type RecruitmentManagementAction =
-	'load' | 'add_member' | 'remove_member' | 'start_entry' | 'cancel';
+	| 'load'
+	| 'add_member'
+	| 'remove_member'
+	| 'start_entry'
+	| 'dispatch_participant_confirmation_dms'
+	| 'cancel';
 
 export class RecruitmentManagementApiError extends Error {
 	constructor(
@@ -66,6 +78,7 @@ function actionLabel(action: RecruitmentManagementAction): string {
 	if (action === 'add_member') return '참가자 추가';
 	if (action === 'remove_member') return '참가자 제거';
 	if (action === 'start_entry') return '엔트리 편성 시작';
+	if (action === 'dispatch_participant_confirmation_dms') return '참가 확정 DM 발송';
 	return '모집 삭제';
 }
 
@@ -78,6 +91,9 @@ function fallbackErrorMessage(status: number, action: RecruitmentManagementActio
 		if (action === 'add_member') return '참가자 추가에는 길드 운영자 권한이 필요합니다.';
 		if (action === 'remove_member') return '참가자 제거에는 길드 운영자 권한이 필요합니다.';
 		if (action === 'start_entry') return '엔트리 편성 시작에는 길드 운영자 권한이 필요합니다.';
+		if (action === 'dispatch_participant_confirmation_dms') {
+			return '참가 확정 DM 발송에는 길드 운영자 권한이 필요합니다.';
+		}
 		return '이 모집을 삭제할 권한이 없습니다.';
 	}
 	if (status === 404) return '요청한 내전 모집을 찾을 수 없습니다.';
@@ -137,6 +153,25 @@ async function requestMutation(
 		throw responseError(response, await responsePayload(response), action);
 	}
 	return response;
+}
+
+async function requestParticipantConfirmationDms(
+	path: string,
+	init: RequestInit,
+	action: RecruitmentManagementAction
+): Promise<ParticipantConfirmationDmDispatchResult> {
+	const response = await requestMutation(path, init, action);
+	const payload = await responsePayload(response);
+	const parsed = participantConfirmationDmDispatchEnvelopeSchema.safeParse(payload);
+	if (!parsed.success) {
+		throw new RecruitmentManagementApiError(
+			'참가 확정 DM 발송 응답 형식이 올바르지 않습니다.',
+			response.status,
+			'invalid_response',
+			null
+		);
+	}
+	return parsed.data.data;
 }
 
 export async function fetchRecruitmentSnapshot(
@@ -260,6 +295,22 @@ export async function closeRecruitmentForEntry(
 		);
 	}
 	return parsed.data.data;
+}
+
+export async function dispatchRecruitmentParticipantConfirmationDms(
+	guildId: string,
+	recruitmentId: string,
+	idempotencyKey: string
+): Promise<ParticipantConfirmationDmDispatchResult> {
+	return await requestParticipantConfirmationDms(
+		apiRoute(['guilds', guildId, 'recruitments', recruitmentId, 'participant-confirmation-dms']),
+		{
+			method: 'POST',
+			headers: mutationHeaders(idempotencyKey),
+			body: JSON.stringify({})
+		},
+		'dispatch_participant_confirmation_dms'
+	);
 }
 
 export async function cancelRecruitment(

@@ -126,6 +126,10 @@ struct BrowserRemoveAuctionRecruitmentMemberRequest {}
 pub(crate) struct BrowserAuctionRecruitmentLifecycleRequest {}
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BrowserParticipantConfirmationDmRequest {}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BrowserAuctionSetupDraftRequest {
     expected_revision: i64,
@@ -520,6 +524,29 @@ pub async fn close_auction_recruitment(
     .await
     .map_err(|error| web_auction_recruitment_error(error, &request_id))?;
     Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn dispatch_auction_recruitment_participant_confirmation_dms(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, AuctionRecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(_request): Json<BrowserParticipantConfirmationDmRequest>,
+) -> Result<Response, ApiError> {
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::dispatch_web_auction_recruitment_participant_confirmation_dms(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_participant_confirmation_dm_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
 }
 
 pub async fn update_auction_setup_draft(
@@ -1248,6 +1275,29 @@ pub async fn close_recruitment(
             Ok(error::success(StatusCode::OK, &request_id, snapshot))
         }
     }
+}
+
+pub async fn dispatch_recruitment_participant_confirmation_dms(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, recruitment_id)): Path<(GuildId, RecruitmentId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(_request): Json<BrowserParticipantConfirmationDmRequest>,
+) -> Result<Response, ApiError> {
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let result = bot_workflow::dispatch_web_recruitment_participant_confirmation_dms(
+        database(&state, &request_id)?,
+        &guild_id,
+        recruitment_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+    )
+    .await
+    .map_err(|error| web_participant_confirmation_dm_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, result))
 }
 
 pub async fn create_series(
@@ -2067,6 +2117,13 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             request_id,
             "invalid_recruitment_state",
             "현재 모집 상태에서는 이 작업을 수행할 수 없습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::ParticipantConfirmationDmUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "participant_confirmation_dm_unavailable",
+            "마감된 모집에서만 참가 확정 DM을 발송할 수 있습니다.",
             Some(serde_json::json!({ "currentStatus": status.as_str() })),
         ),
         BotWorkflowError::EntryDraftNotEditable(status) => ApiError::new(
@@ -3398,6 +3455,57 @@ fn web_recruitment_mutation_error(error: BotWorkflowError, request_id: &RequestI
             request_id,
             "idempotency_in_progress",
             "같은 모집 변경 요청을 처리하고 있습니다.",
+            None,
+        ),
+        error => command_error(error, request_id),
+    }
+}
+
+fn web_participant_confirmation_dm_error(
+    error: BotWorkflowError,
+    request_id: &RequestId,
+) -> ApiError {
+    match error {
+        BotWorkflowError::MembershipRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "guild_membership_required",
+            "해당 길드의 활성 멤버만 참가 확정 DM을 발송할 수 있습니다.",
+            None,
+        ),
+        BotWorkflowError::OperatorRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            request_id,
+            "operator_required",
+            "참가 확정 DM 발송에는 현재 길드 운영자 권한이 필요합니다.",
+            None,
+        ),
+        BotWorkflowError::RecruitmentNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            request_id,
+            "recruitment_not_found",
+            "요청한 모집을 찾을 수 없습니다.",
+            None,
+        ),
+        BotWorkflowError::ParticipantConfirmationDmUnavailable(status) => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "participant_confirmation_dm_unavailable",
+            "마감된 모집에서만 참가 확정 DM을 발송할 수 있습니다.",
+            Some(serde_json::json!({ "currentStatus": status.as_str() })),
+        ),
+        BotWorkflowError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_conflict",
+            "같은 Idempotency-Key가 다른 요청에 사용되었습니다.",
+            None,
+        ),
+        BotWorkflowError::IdempotencyInProgress => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "idempotency_in_progress",
+            "같은 참가 확정 DM 요청을 처리하고 있습니다.",
             None,
         ),
         error => command_error(error, request_id),

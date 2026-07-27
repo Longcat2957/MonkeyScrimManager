@@ -3,6 +3,10 @@ import {
 	type AuctionRecruitmentSnapshot
 } from '$lib/contracts/auctionRecruitmentSnapshot';
 import {
+	participantConfirmationDmDispatchResultSchema,
+	type ParticipantConfirmationDmDispatchResult
+} from '$lib/contracts/participantConfirmationDm';
+import {
 	apiErrorEnvelopeSchema,
 	auctionBestOfSchema,
 	auctionFormatSchema,
@@ -20,9 +24,18 @@ const expectedStartAtSchema = z.iso.datetime({ offset: true });
 const auctionRecruitmentSnapshotEnvelopeSchema = z
 	.object({ data: auctionRecruitmentSnapshotSchema, meta: responseMetaSchema })
 	.strict();
+const participantConfirmationDmDispatchEnvelopeSchema = z
+	.object({ data: participantConfirmationDmDispatchResultSchema, meta: responseMetaSchema })
+	.strict();
 
 type AuctionRecruitmentAction =
-	'create' | 'load' | 'add_member' | 'remove_member' | 'close' | 'cancel';
+	| 'create'
+	| 'load'
+	| 'add_member'
+	| 'remove_member'
+	| 'close'
+	| 'dispatch_participant_confirmation_dms'
+	| 'cancel';
 
 export type AuctionRecruitmentCreateOptions = {
 	format: AuctionRecruitmentDto['format'];
@@ -90,6 +103,7 @@ function actionLabel(action: AuctionRecruitmentAction): string {
 	if (action === 'add_member') return '참가자 추가';
 	if (action === 'remove_member') return '참가자 제거';
 	if (action === 'close') return '경매 모집 마감';
+	if (action === 'dispatch_participant_confirmation_dms') return '참가 확정 DM 발송';
 	return '경매 모집 삭제';
 }
 
@@ -100,7 +114,9 @@ function fallbackErrorMessage(status: number, action: AuctionRecruitmentAction):
 	if (status === 403)
 		return action === 'add_member' || action === 'remove_member'
 			? '참가자 관리에는 길드 운영자 권한이 필요합니다.'
-			: `이 경매 모집을 ${action === 'create' ? '만들' : '변경할'} 권한이 없습니다.`;
+			: action === 'dispatch_participant_confirmation_dms'
+				? '참가 확정 DM 발송에는 길드 운영자 권한이 필요합니다.'
+				: `이 경매 모집을 ${action === 'create' ? '만들' : '변경할'} 권한이 없습니다.`;
 	if (status === 404)
 		return action === 'create'
 			? '길드 또는 현재 시즌을 찾을 수 없습니다.'
@@ -161,6 +177,42 @@ async function requestAuctionRecruitment(
 	if (!response.ok) throw responseError(response, payload, action);
 
 	const parsed = auctionRecruitmentSnapshotEnvelopeSchema.safeParse(payload);
+	if (!parsed.success) {
+		throw new AuctionRecruitmentApiError(
+			`${actionLabel(action)} 응답 형식이 올바르지 않습니다.`,
+			response.status,
+			'invalid_response',
+			null
+		);
+	}
+	return parsed.data.data;
+}
+
+async function requestParticipantConfirmationDms(
+	path: string,
+	init: RequestInit,
+	action: AuctionRecruitmentAction
+): Promise<ParticipantConfirmationDmDispatchResult> {
+	let response: Response;
+	try {
+		response = await globalThis.fetch(path, {
+			...init,
+			credentials: 'same-origin'
+		});
+	} catch (cause) {
+		if (cause instanceof AuctionRecruitmentApiError) throw cause;
+		throw new AuctionRecruitmentApiError(
+			'API 서버에 연결할 수 없습니다.',
+			0,
+			'network_error',
+			null
+		);
+	}
+
+	const payload = await responsePayload(response);
+	if (!response.ok) throw responseError(response, payload, action);
+
+	const parsed = participantConfirmationDmDispatchEnvelopeSchema.safeParse(payload);
 	if (!parsed.success) {
 		throw new AuctionRecruitmentApiError(
 			`${actionLabel(action)} 응답 형식이 올바르지 않습니다.`,
@@ -321,6 +373,28 @@ export async function closeAuctionRecruitment(
 			body: JSON.stringify({})
 		},
 		'close'
+	);
+}
+
+export async function dispatchAuctionRecruitmentParticipantConfirmationDms(
+	guildId: string,
+	recruitmentId: string,
+	idempotencyKey: string
+): Promise<ParticipantConfirmationDmDispatchResult> {
+	return await requestParticipantConfirmationDms(
+		apiRoute([
+			'guilds',
+			guildId,
+			'auction-recruitments',
+			recruitmentId,
+			'participant-confirmation-dms'
+		]),
+		{
+			method: 'POST',
+			headers: mutationHeaders(idempotencyKey),
+			body: JSON.stringify({})
+		},
+		'dispatch_participant_confirmation_dms'
 	);
 }
 

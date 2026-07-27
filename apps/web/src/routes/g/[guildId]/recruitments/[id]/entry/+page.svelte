@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
-	import { Gavel, LoaderCircle, Play, RefreshCw, Trash2, X } from 'lucide-svelte';
+	import { Gavel, LoaderCircle, Mail, Play, RefreshCw, Trash2, X } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import {
 		createAuctionRecruitmentFromEntryDraft,
@@ -18,6 +18,7 @@
 	import { createOperationIdempotencyKeys } from '$lib/api/operationIdempotency';
 	import {
 		cancelRecruitment,
+		dispatchRecruitmentParticipantConfirmationDms,
 		recruitmentManagementErrorText
 	} from '$lib/api/recruitmentManagement';
 	import EntryDraftBoard from '$lib/components/workflow/EntryDraftBoard.svelte';
@@ -43,7 +44,13 @@
 
 	type EntryView = 'draft' | 'preview';
 	type EntryMutation =
-		'move' | 'reset' | 'createSeries' | 'createAuctionRecruitment' | 'reopen' | 'cancel';
+		| 'move'
+		| 'reset'
+		| 'createSeries'
+		| 'createAuctionRecruitment'
+		| 'sendParticipantConfirmationDms'
+		| 'reopen'
+		| 'cancel';
 	type SnapshotRefreshSource = 'manual' | 'realtime';
 	const defaultRealtimeOfflineMessage = '변경 알림을 받을 수 없습니다.';
 	type EntryRoute = {
@@ -68,7 +75,8 @@
 	let cancelError = $state('');
 	let cancelIdempotencyKey = $state<string | null>(null);
 	let createAuctionRecruitmentDialogOpen = $state(false);
-	let createAuctionRecruitmentExpectedStartAt = $state('');
+	let createAuctionRecruitmentExpectedStartDate = $state('');
+	let createAuctionRecruitmentExpectedStartTime = $state('');
 	let createAuctionRecruitmentError = $state('');
 	let activeRouteKey = $state<string | null>(null);
 	let realtimeConnectionState = $state<RealtimeConnectionState>('reconnecting');
@@ -91,6 +99,9 @@
 	const canCreateSeries = $derived(Boolean(snapshot?.capabilities.canCreateSeries));
 	const canCreateAuctionRecruitment = $derived(
 		Boolean(snapshot?.capabilities.canCreateAuctionRecruitment)
+	);
+	const canSendParticipantConfirmationDms = $derived(
+		Boolean(snapshot?.capabilities.canSendParticipantConfirmationDms)
 	);
 	const canReopen = $derived(Boolean(snapshot?.capabilities.canReopen));
 	const canCancel = $derived(Boolean(snapshot?.capabilities.canCancel));
@@ -240,7 +251,8 @@
 		cancelError = '';
 		cancelIdempotencyKey = null;
 		createAuctionRecruitmentDialogOpen = false;
-		createAuctionRecruitmentExpectedStartAt = '';
+		createAuctionRecruitmentExpectedStartDate = '';
+		createAuctionRecruitmentExpectedStartTime = '';
 		createAuctionRecruitmentError = '';
 		idempotencyKeys.invalidate('entry-draft-move');
 		idempotencyKeys.invalidate('entry-draft-reset');
@@ -349,6 +361,9 @@
 		if (operation === 'createSeries') return 'entry-draft-create-series';
 		if (operation === 'createAuctionRecruitment') {
 			return 'entry-draft-create-auction-recruitment';
+		}
+		if (operation === 'sendParticipantConfirmationDms') {
+			return 'entry-draft-participant-confirmation-dms';
 		}
 		return `entry-draft-${operation}`;
 	}
@@ -469,10 +484,15 @@
 		}
 	}
 
-	function expectedStartIsoFromInput(value: string): string | null {
-		const trimmed = value.trim();
-		if (!trimmed) return null;
-		const parsed = new Date(trimmed);
+	function expectedStartIsoFromInput(date: string, time: string): string | null {
+		const localDate = date.trim();
+		const localTime = time.trim();
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate) || !/^\d{2}:\d{2}$/.test(localTime)) {
+			return null;
+		}
+		const [hour, minute] = localTime.split(':').map(Number);
+		if (hour > 23 || minute > 59) return null;
+		const parsed = new Date(`${localDate}T${localTime}:00`);
 		if (Number.isNaN(parsed.getTime())) return null;
 		return parsed.toISOString();
 	}
@@ -480,7 +500,8 @@
 	function openCreateAuctionRecruitmentDialog() {
 		if (!snapshot || !canCreateAuctionRecruitment || mutationLocked) return;
 		createAuctionRecruitmentError = '';
-		createAuctionRecruitmentExpectedStartAt = '';
+		createAuctionRecruitmentExpectedStartDate = '';
+		createAuctionRecruitmentExpectedStartTime = '';
 		createAuctionRecruitmentDialogOpen = true;
 	}
 
@@ -495,7 +516,10 @@
 		) {
 			return;
 		}
-		const expectedStartAt = expectedStartIsoFromInput(createAuctionRecruitmentExpectedStartAt);
+		const expectedStartAt = expectedStartIsoFromInput(
+			createAuctionRecruitmentExpectedStartDate,
+			createAuctionRecruitmentExpectedStartTime
+		);
 		if (!expectedStartAt) {
 			createAuctionRecruitmentError = '예상 시작 시간을 입력해 주세요.';
 			return;
@@ -536,6 +560,55 @@
 				createAuctionRecruitmentError = entryDraftErrorText(cause);
 				mutationError = createAuctionRecruitmentError;
 			}
+		} finally {
+			if (isCurrentRoute(route)) {
+				mutation = null;
+				void flushRealtimeSnapshotRefresh(route);
+			}
+		}
+	}
+
+	async function sendParticipantConfirmationDms() {
+		const route = currentEntryRoute();
+		const currentSnapshot = snapshot;
+		if (
+			!isCurrentRoute(route) ||
+			!currentSnapshot ||
+			!canSendParticipantConfirmationDms ||
+			mutationLocked
+		) {
+			return;
+		}
+
+		const operation = {
+			recruitmentId: currentSnapshot.recruitment.id,
+			revision: currentSnapshot.recruitment.revision
+		};
+		const idempotencyKey = idempotencyKeys.keyFor(
+			'entry-draft-participant-confirmation-dms',
+			operation
+		);
+		mutation = 'sendParticipantConfirmationDms';
+		mutationError = '';
+		mutationNotice = '';
+		try {
+			const result = await dispatchRecruitmentParticipantConfirmationDms(
+				route.guildId,
+				currentSnapshot.recruitment.id,
+				idempotencyKey
+			);
+			if (!isCurrentRoute(route)) return;
+			idempotencyKeys.complete('entry-draft-participant-confirmation-dms');
+			if (result.queuedRecipientCount > 0) {
+				mutationNotice = `참가자 ${result.queuedRecipientCount}명에게 확정 DM 발송을 요청했습니다.`;
+			} else if (result.alreadyQueuedRecipientCount > 0) {
+				mutationNotice = `참가자 ${result.alreadyQueuedRecipientCount}명에게는 이미 확정 DM 발송이 요청되어 있습니다.`;
+			} else {
+				mutationNotice = 'DM을 받을 Discord 참가자가 없습니다.';
+			}
+		} catch (cause) {
+			if (!isCurrentRoute(route)) return;
+			mutationError = recruitmentManagementErrorText(cause);
 		} finally {
 			if (isCurrentRoute(route)) {
 				mutation = null;
@@ -654,6 +727,20 @@
 						</button>
 					{/each}
 				</div>
+				{#if canSendParticipantConfirmationDms}
+					<button
+						type="button"
+						disabled={mutationLocked}
+						onclick={sendParticipantConfirmationDms}
+						class="inline-flex h-10 items-center gap-1.5 border border-violet-300/35 bg-violet-400/10 px-3 text-xs font-semibold text-violet-50 enabled:hover:bg-violet-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+					>
+						{#if mutation === 'sendParticipantConfirmationDms'}
+							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> DM 요청 중
+						{:else}
+							<Mail size={14} aria-hidden="true" /> 참가 확정 DM 발송
+						{/if}
+					</button>
+				{/if}
 				{#if canShowCreateSeries}
 					<button
 						type="button"
@@ -837,20 +924,42 @@
 				<Dialog.Description class="text-xs leading-5 text-slate-400">
 					모집 #{snapshot?.recruitment.displayNumber}의 현재 참가자를 경매 후보로 가져옵니다.
 				</Dialog.Description>
-				<label class="grid gap-2">
+				<div class="grid gap-2">
 					<span class="text-[11px] font-semibold text-slate-500">예상 시작 시간</span>
-					<input
-						type="datetime-local"
-						required
-						bind:value={createAuctionRecruitmentExpectedStartAt}
-						disabled={isMutating}
-						oninput={() => {
-							createAuctionRecruitmentError = '';
-							idempotencyKeys.invalidate('entry-draft-create-auction-recruitment');
-						}}
-						class="h-10 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-emerald-300/55 disabled:opacity-35"
-					/>
-				</label>
+					<div class="grid grid-cols-2 gap-2">
+						<label class="grid gap-1">
+							<span class="text-[11px] text-slate-500">날짜</span>
+							<input
+								type="date"
+								required
+								bind:value={createAuctionRecruitmentExpectedStartDate}
+								disabled={isMutating}
+								oninput={() => {
+									createAuctionRecruitmentError = '';
+									idempotencyKeys.invalidate('entry-draft-create-auction-recruitment');
+								}}
+								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-emerald-300/55 disabled:opacity-35"
+							/>
+						</label>
+						<label class="grid gap-1">
+							<span class="text-[11px] text-slate-500">시간 (24시간)</span>
+							<input
+								type="text"
+								required
+								maxlength="5"
+								placeholder="23:30"
+								pattern="[0-2][0-9]:[0-5][0-9]"
+								bind:value={createAuctionRecruitmentExpectedStartTime}
+								disabled={isMutating}
+								oninput={() => {
+									createAuctionRecruitmentError = '';
+									idempotencyKeys.invalidate('entry-draft-create-auction-recruitment');
+								}}
+								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-emerald-300/55 disabled:opacity-35"
+							/>
+						</label>
+					</div>
+				</div>
 				{#if createAuctionRecruitmentError}
 					<p
 						class="border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs leading-5 text-rose-300"
@@ -869,7 +978,9 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={isMutating || !createAuctionRecruitmentExpectedStartAt.trim()}
+					disabled={isMutating ||
+						!createAuctionRecruitmentExpectedStartDate.trim() ||
+						!createAuctionRecruitmentExpectedStartTime.trim()}
 					onclick={createAuctionRecruitment}
 					class="inline-flex h-9 items-center gap-1.5 border border-emerald-300/35 bg-emerald-400/10 px-3 text-xs font-semibold text-emerald-100 enabled:hover:bg-emerald-400/16 disabled:cursor-not-allowed disabled:opacity-35"
 				>

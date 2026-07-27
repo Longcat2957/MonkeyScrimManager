@@ -47,7 +47,12 @@ function renderPage(
 								? `/g/${guildId}/auction/recruitments/${recruitmentId}/draft`
 								: null
 					},
-					permissions: { canManageMembers, canClose, canCancel }
+					permissions: {
+						canManageMembers,
+						canClose,
+						canSendParticipantConfirmationDms: false,
+						canCancel
+					}
 				}
 			}
 		} as never

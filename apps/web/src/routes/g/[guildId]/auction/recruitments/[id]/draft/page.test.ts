@@ -33,7 +33,12 @@ describe('auction recruitment closed-roster page', () => {
 							{ id: '1525847677542207548', displayName: 'Longcat', declaredLane: 'MID' }
 						],
 						links: { draft: `/g/${guildId}/auction/recruitments/${recruitmentId}/draft` },
-						permissions: { canManageMembers: false, canClose: false, canCancel: false }
+						permissions: {
+							canManageMembers: false,
+							canClose: false,
+							canSendParticipantConfirmationDms: true,
+							canCancel: false
+						}
 					},
 					setup: {
 						draft: {
@@ -60,6 +65,7 @@ describe('auction recruitment closed-roster page', () => {
 		expect(body).toContain('Longcat');
 		expect(body).toContain('신청 라인 · 미드');
 		expect(body).toContain('입찰 시작');
+		expect(body).toContain('참가 확정 DM 발송');
 		expect(body).not.toContain('실시간 편집');
 	});
 });

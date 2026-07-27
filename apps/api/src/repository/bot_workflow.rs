@@ -20,13 +20,16 @@ use super::{
         self, AUCTION_MATCH_LINEUP_CONFIRMATION_CREATE_TYPE,
         AUCTION_MATCH_LINEUP_CONFIRMATION_SCHEMA_VERSION, AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE,
         AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE, AUCTION_RECRUITMENT_MESSAGE_SCHEMA_VERSION,
-        AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE, AUCTION_TOURNAMENT_RESULT_CREATE_TYPE,
-        AUCTION_TOURNAMENT_RESULT_DELETE_SCHEMA_VERSION, AUCTION_TOURNAMENT_RESULT_DELETE_TYPE,
-        AUCTION_TOURNAMENT_RESULT_SCHEMA_VERSION, ENTRY_CONFIRMATION_CREATE_TYPE,
-        ENTRY_CONFIRMATION_SCHEMA_VERSION, EnqueueNotification, NotificationOutboxError,
-        RECRUITMENT_MESSAGE_CREATE_TYPE, RECRUITMENT_MESSAGE_DELETE_TYPE,
-        RECRUITMENT_MESSAGE_SCHEMA_VERSION, RECRUITMENT_MESSAGE_UPDATE_TYPE,
-        SERIES_RESULT_CREATE_TYPE, SERIES_RESULT_SCHEMA_VERSION,
+        AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE,
+        AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE_TYPE,
+        AUCTION_TOURNAMENT_RESULT_CREATE_TYPE, AUCTION_TOURNAMENT_RESULT_DELETE_SCHEMA_VERSION,
+        AUCTION_TOURNAMENT_RESULT_DELETE_TYPE, AUCTION_TOURNAMENT_RESULT_SCHEMA_VERSION,
+        ENTRY_CONFIRMATION_CREATE_TYPE, ENTRY_CONFIRMATION_SCHEMA_VERSION, EnqueueNotification,
+        EnqueueNotificationOutcome, NotificationOutboxError, RECRUITMENT_MESSAGE_CREATE_TYPE,
+        RECRUITMENT_MESSAGE_DELETE_TYPE, RECRUITMENT_MESSAGE_SCHEMA_VERSION,
+        RECRUITMENT_MESSAGE_UPDATE_TYPE, RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE_TYPE,
+        RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_SCHEMA_VERSION, SERIES_RESULT_CREATE_TYPE,
+        SERIES_RESULT_SCHEMA_VERSION,
     },
     riot::{
         self, CanonicalRiotAccount, RiotAccountLinkState, RiotAccountRecord, RiotRepositoryError,
@@ -75,6 +78,8 @@ const AUCTION_RECRUITMENT_CREATE_ROUTE: &str = "/api/guilds/{guildId}/auction-re
 const AUCTION_RECRUITMENT_CLOSE_ROUTE: &str =
     "/api/guilds/{guildId}/auction-recruitments/{id}/close";
 const AUCTION_RECRUITMENT_CANCEL_ROUTE: &str = "/api/guilds/{guildId}/auction-recruitments/{id}";
+const AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-recruitments/{id}/participant-confirmation-dms";
 const AUCTION_RECRUITMENT_FORCE_CANCEL_METHOD: &str = "POST";
 const AUCTION_RECRUITMENT_FORCE_CANCEL_ROUTE: &str =
     "/api/guilds/{guildId}/auction-recruitments/{id}/force-cancel";
@@ -99,6 +104,8 @@ const AUCTION_MATCH_GAME_SUBMIT_ROUTE: &str =
     "/api/guilds/{guildId}/auction-matches/{matchId}/games";
 const AUCTION_MATCH_GAME_REVERT_ROUTE: &str =
     "/api/guilds/{guildId}/auction-matches/{matchId}/games/last";
+const RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE: &str =
+    "/api/guilds/{guildId}/recruitments/{id}/participant-confirmation-dms";
 const AUCTION_INITIAL_TEAM_POINTS: i32 = 1_000;
 pub const DEFAULT_RECRUITMENT_BEST_OF: i16 = 3;
 const MAX_CHAMPION_ID_BYTES: usize = 64;
@@ -430,6 +437,7 @@ pub struct AuctionRecruitmentLinksSnapshot {
 pub struct AuctionRecruitmentPermissions {
     pub can_manage_members: bool,
     pub can_close: bool,
+    pub can_send_participant_confirmation_dms: bool,
     pub can_cancel: bool,
 }
 
@@ -1133,8 +1141,16 @@ pub struct EntryDraftCapabilities {
     pub can_reset: bool,
     pub can_create_series: bool,
     pub can_create_auction_recruitment: bool,
+    pub can_send_participant_confirmation_dms: bool,
     pub can_reopen: bool,
     pub can_cancel: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantConfirmationDmDispatchResult {
+    pub queued_recipient_count: i64,
+    pub already_queued_recipient_count: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2839,6 +2855,52 @@ pub async fn close_web_auction_recruitment(
     .await
 }
 
+pub async fn dispatch_web_auction_recruitment_participant_confirmation_dms(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: AuctionRecruitmentId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<ParticipantConfirmationDmDispatchResult, BotWorkflowError> {
+    let command = WebAuctionRecruitmentParticipantConfirmationDmDispatchCommand { recruitment_id };
+    let request_hash = request_hash(guild_id, &command)?;
+    let guild_id = guild_id.clone();
+    let actor_id = actor_id.clone();
+    let idempotency_key = idempotency_key.to_owned();
+    let request_id = request_id.0.clone();
+    let prepared = WebParticipantConfirmationDmDispatchPrepared::new();
+
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let actor_id = actor_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let request_id = request_id.clone();
+            let request_hash = request_hash.clone();
+
+            Box::pin(async move {
+                execute_web_auction_recruitment_participant_confirmation_dm_dispatch_attempt(
+                    transaction,
+                    &guild_id,
+                    recruitment_id,
+                    &actor_id,
+                    &idempotency_key,
+                    &request_id,
+                    &request_hash,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
+}
+
 pub async fn cancel_web_auction_recruitment(
     pool: &PgPool,
     guild_id: &GuildId,
@@ -2969,6 +3031,52 @@ pub async fn close_web_recruitment(
         WebRecruitmentMutation::Close { recruitment_id },
     )
     .await
+}
+
+pub async fn dispatch_web_recruitment_participant_confirmation_dms(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: RecruitmentId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<ParticipantConfirmationDmDispatchResult, BotWorkflowError> {
+    let command = WebRecruitmentParticipantConfirmationDmDispatchCommand { recruitment_id };
+    let request_hash = request_hash(guild_id, &command)?;
+    let guild_id = guild_id.clone();
+    let actor_id = actor_id.clone();
+    let idempotency_key = idempotency_key.to_owned();
+    let request_id = request_id.0.clone();
+    let prepared = WebParticipantConfirmationDmDispatchPrepared::new();
+
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let actor_id = actor_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let request_id = request_id.clone();
+            let request_hash = request_hash.clone();
+
+            Box::pin(async move {
+                execute_web_recruitment_participant_confirmation_dm_dispatch_attempt(
+                    transaction,
+                    &guild_id,
+                    recruitment_id,
+                    &actor_id,
+                    &idempotency_key,
+                    &request_id,
+                    &request_hash,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
 }
 
 pub async fn cancel_web_recruitment(
@@ -4573,6 +4681,72 @@ async fn execute_web_recruitment_mutation_attempt(
     complete_idempotency(transaction, &scope, record_id, 200, &snapshot, prepared.now).await?;
 
     Ok(snapshot)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_web_recruitment_participant_confirmation_dm_dispatch_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    recruitment_id: RecruitmentId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &str,
+    request_hash: &[u8],
+    prepared: WebParticipantConfirmationDmDispatchPrepared,
+) -> Result<ParticipantConfirmationDmDispatchResult, AttemptError> {
+    let operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let record_id = match acquire_idempotency::<ParticipantConfirmationDmDispatchResult>(
+        transaction,
+        IdempotencyAcquire {
+            scope: &scope,
+            record_id: prepared.idempotency_record_id,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: actor_id.as_str(),
+            method: "POST",
+            route_template: RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE,
+            key: idempotency_key,
+            request_hash,
+            now: prepared.now,
+        },
+    )
+    .await?
+    {
+        IdempotencyDecision::Acquired(record_id) => record_id,
+        IdempotencyDecision::Replay(result) => return Ok(result),
+    };
+
+    require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id).await?;
+    let locked = lock_recruitment(transaction, guild_id, recruitment_id).await?;
+    ensure_participant_confirmation_dms_dispatchable(locked.status)?;
+    let snapshot = recruitment_snapshot(transaction, guild_id, recruitment_id).await?;
+    let result = enqueue_recruitment_participant_confirmation_direct_messages(
+        transaction,
+        guild_id,
+        &snapshot,
+        prepared.now,
+    )
+    .await?;
+    let target_id = recruitment_id.to_string();
+    insert_audit(
+        transaction,
+        guild_id,
+        AuditInsert {
+            id: prepared.audit_id,
+            actor_id: actor_id.as_str(),
+            action: "RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_REQUESTED",
+            target_type: "RECRUITMENT",
+            target_id: &target_id,
+            request_id,
+            before_summary: None,
+            after_summary: Some(serde_json::to_value(&result)?),
+            now: prepared.now,
+        },
+    )
+    .await?;
+    complete_idempotency(transaction, &scope, record_id, 200, &result, prepared.now).await?;
+
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6863,6 +7037,73 @@ async fn execute_web_auction_recruitment_lifecycle_attempt(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn execute_web_auction_recruitment_participant_confirmation_dm_dispatch_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    recruitment_id: AuctionRecruitmentId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &str,
+    request_hash: &[u8],
+    prepared: WebParticipantConfirmationDmDispatchPrepared,
+) -> Result<ParticipantConfirmationDmDispatchResult, AttemptError> {
+    let operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let record_id = match acquire_idempotency::<ParticipantConfirmationDmDispatchResult>(
+        transaction,
+        IdempotencyAcquire {
+            scope: &scope,
+            record_id: prepared.idempotency_record_id,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: actor_id.as_str(),
+            method: "POST",
+            route_template: AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE,
+            key: idempotency_key,
+            request_hash,
+            now: prepared.now,
+        },
+    )
+    .await?
+    {
+        IdempotencyDecision::Acquired(record_id) => record_id,
+        IdempotencyDecision::Replay(result) => return Ok(result),
+    };
+
+    require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id).await?;
+    let locked = lock_auction_recruitment(transaction, guild_id, recruitment_id).await?;
+    ensure_participant_confirmation_dms_dispatchable(locked.status)?;
+    let snapshot =
+        auction_recruitment_snapshot(transaction, guild_id, recruitment_id, actor_id).await?;
+    let result = enqueue_auction_recruitment_participant_confirmation_direct_messages(
+        transaction,
+        guild_id,
+        &snapshot,
+        prepared.now,
+    )
+    .await?;
+    let target_id = recruitment_id.to_string();
+    insert_audit(
+        transaction,
+        guild_id,
+        AuditInsert {
+            id: prepared.audit_id,
+            actor_id: actor_id.as_str(),
+            action: "AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_REQUESTED",
+            target_type: "AUCTION_RECRUITMENT",
+            target_id: &target_id,
+            request_id,
+            before_summary: None,
+            after_summary: Some(serde_json::to_value(&result)?),
+            now: prepared.now,
+        },
+    )
+    .await?;
+    complete_idempotency(transaction, &scope, record_id, 200, &result, prepared.now).await?;
+
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn execute_web_auction_setup_draft_update_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -8953,6 +9194,8 @@ async fn auction_recruitment_snapshot(
         permissions: AuctionRecruitmentPermissions {
             can_manage_members: status == RecruitmentStatus::Open && is_operator,
             can_close: status == RecruitmentStatus::Open && is_operator,
+            can_send_participant_confirmation_dms: status == RecruitmentStatus::Closed
+                && is_operator,
             can_cancel: status == RecruitmentStatus::Open
                 && (is_operator || created_by == *viewer_id),
         },
@@ -13556,6 +13799,8 @@ async fn entry_draft_snapshot(
             can_reset: can_edit,
             can_create_series,
             can_create_auction_recruitment,
+            can_send_participant_confirmation_dms: recruitment.status == RecruitmentStatus::Closed
+                && is_operator,
             can_reopen: recruitment.status == RecruitmentStatus::Closed && is_operator,
             can_cancel,
         },
@@ -15167,6 +15412,119 @@ async fn auction_tournament_result_notification_payload(
         matches,
         completed_at,
     })
+}
+
+fn direct_message_recipient(
+    user_id: &UserId,
+) -> Result<Option<(DiscordUserId, DiscordChannelId)>, AttemptError> {
+    let Ok(discord_user_id) = DiscordUserId::try_from(user_id.clone()) else {
+        // Development dummy users have no Discord identity and must never receive a DM.
+        return Ok(None);
+    };
+    let routing_id = DiscordChannelId::parse(discord_user_id.as_str())
+        .map_err(|_| AttemptError::InvariantViolation)?;
+    Ok(Some((discord_user_id, routing_id)))
+}
+
+async fn enqueue_recruitment_participant_confirmation_direct_messages(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    snapshot: &RecruitmentSnapshot,
+    now: OffsetDateTime,
+) -> Result<ParticipantConfirmationDmDispatchResult, AttemptError> {
+    let mut result = ParticipantConfirmationDmDispatchResult::default();
+    // Recruitment snapshots contain only the canonical JOINED roster.
+    for participant in &snapshot.participants {
+        let Some((recipient_user_id, routing_id)) = direct_message_recipient(&participant.id)?
+        else {
+            continue;
+        };
+        let deduplication_key = format!(
+            "recruitment:{}:participant-confirmation-dm:{}:{}",
+            snapshot.recruitment.id, snapshot.recruitment.revision, recipient_user_id
+        );
+        let payload = serde_json::to_value(
+            notification_outbox::RecruitmentParticipantConfirmationDmPayload {
+                schema_version: RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_SCHEMA_VERSION,
+                guild_id: guild_id.clone(),
+                recipient_user_id,
+                recruitment_id: snapshot.recruitment.id.as_uuid(),
+                recruitment_title: snapshot.recruitment.title.clone(),
+                recruitment_href: snapshot.links.entry.clone(),
+            },
+        )?;
+        match notification_outbox::enqueue(
+            transaction,
+            &EnqueueNotification {
+                id: NotificationId::new(),
+                guild_id,
+                deduplication_key: &deduplication_key,
+                channel_id: &routing_id,
+                notification_type: RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE_TYPE,
+                payload: &payload,
+                created_at: now,
+            },
+        )
+        .await?
+        {
+            EnqueueNotificationOutcome::Enqueued(_) => result.queued_recipient_count += 1,
+            EnqueueNotificationOutcome::Existing(_) => result.already_queued_recipient_count += 1,
+        }
+    }
+    Ok(result)
+}
+
+async fn enqueue_auction_recruitment_participant_confirmation_direct_messages(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    snapshot: &AuctionRecruitmentSnapshot,
+    now: OffsetDateTime,
+) -> Result<ParticipantConfirmationDmDispatchResult, AttemptError> {
+    let mut result = ParticipantConfirmationDmDispatchResult::default();
+    let recruitment_href = snapshot
+        .links
+        .draft
+        .as_deref()
+        .unwrap_or(&snapshot.recruitment.href);
+    // Auction recruitment snapshots contain only the canonical JOINED roster.
+    for participant in &snapshot.participants {
+        let Some((recipient_user_id, routing_id)) = direct_message_recipient(&participant.id)?
+        else {
+            continue;
+        };
+        let deduplication_key = format!(
+            "auction-recruitment:{}:participant-confirmation-dm:{}:{}",
+            snapshot.recruitment.id, snapshot.recruitment.revision, recipient_user_id
+        );
+        let payload = serde_json::to_value(
+            notification_outbox::RecruitmentParticipantConfirmationDmPayload {
+                schema_version: RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_SCHEMA_VERSION,
+                guild_id: guild_id.clone(),
+                recipient_user_id,
+                recruitment_id: snapshot.recruitment.id.as_uuid(),
+                recruitment_title: snapshot.recruitment.title.clone(),
+                recruitment_href: recruitment_href.to_owned(),
+            },
+        )?;
+        match notification_outbox::enqueue(
+            transaction,
+            &EnqueueNotification {
+                id: NotificationId::new(),
+                guild_id,
+                deduplication_key: &deduplication_key,
+                channel_id: &routing_id,
+                notification_type: AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE_TYPE,
+                payload: &payload,
+                created_at: now,
+            },
+        )
+        .await?
+        {
+            EnqueueNotificationOutcome::Enqueued(_) => result.queued_recipient_count += 1,
+            EnqueueNotificationOutcome::Existing(_) => result.already_queued_recipient_count += 1,
+        }
+    }
+    Ok(result)
 }
 
 async fn enqueue_web_recruitment_message_notification(
@@ -19285,6 +19643,16 @@ fn ensure_open(status: RecruitmentStatus) -> Result<(), AttemptError> {
     }
 }
 
+fn ensure_participant_confirmation_dms_dispatchable(
+    status: RecruitmentStatus,
+) -> Result<(), AttemptError> {
+    if status == RecruitmentStatus::Closed {
+        Ok(())
+    } else {
+        Err(AttemptError::ParticipantConfirmationDmUnavailable(status))
+    }
+}
+
 fn ensure_auction_setup_editable(status: RecruitmentStatus) -> Result<(), AttemptError> {
     if status == RecruitmentStatus::Closed {
         Ok(())
@@ -19574,6 +19942,23 @@ impl WebAuctionRecruitmentLifecyclePrepared {
             audit_id: Uuid::now_v7(),
             outbox_event_id: OutboxEventId::new(),
             notification_id: NotificationId::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WebParticipantConfirmationDmDispatchPrepared {
+    now: OffsetDateTime,
+    idempotency_record_id: IdempotencyRecordId,
+    audit_id: Uuid,
+}
+
+impl WebParticipantConfirmationDmDispatchPrepared {
+    fn new() -> Self {
+        Self {
+            now: OffsetDateTime::now_utc(),
+            idempotency_record_id: IdempotencyRecordId::new(),
+            audit_id: Uuid::now_v7(),
         }
     }
 }
@@ -20131,6 +20516,11 @@ enum WebAuctionRecruitmentLifecycle {
     },
 }
 
+#[derive(Clone, Serialize)]
+struct WebAuctionRecruitmentParticipantConfirmationDmDispatchCommand {
+    recruitment_id: AuctionRecruitmentId,
+}
+
 impl WebAuctionRecruitmentLifecycle {
     fn metadata(&self) -> WebAuctionRecruitmentLifecycleMetadata {
         match self {
@@ -20450,6 +20840,11 @@ enum WebRecruitmentMutation {
     Cancel {
         recruitment_id: RecruitmentId,
     },
+}
+
+#[derive(Clone, Serialize)]
+struct WebRecruitmentParticipantConfirmationDmDispatchCommand {
+    recruitment_id: RecruitmentId,
 }
 
 impl WebRecruitmentMutation {
@@ -21469,6 +21864,10 @@ enum AttemptError {
     AuctionTournamentNotFound,
     #[error("recruitment must be OPEN, but is {0}")]
     RecruitmentNotOpen(RecruitmentStatus),
+    #[error(
+        "participant confirmation DMs can only be requested while recruitment is CLOSED, but is {0}"
+    )]
+    ParticipantConfirmationDmUnavailable(RecruitmentStatus),
     #[error("recruitment message cannot be bound while status is {0}")]
     RecruitmentNotBindable(RecruitmentStatus),
     #[error("recruitment is full")]
@@ -21740,6 +22139,9 @@ impl AttemptError {
             Self::AuctionRecruitmentNotFound => BotWorkflowError::RecruitmentNotFound,
             Self::AuctionTournamentNotFound => BotWorkflowError::AuctionTournamentNotFound,
             Self::RecruitmentNotOpen(status) => BotWorkflowError::RecruitmentNotOpen(status),
+            Self::ParticipantConfirmationDmUnavailable(status) => {
+                BotWorkflowError::ParticipantConfirmationDmUnavailable(status)
+            }
             Self::RecruitmentNotBindable(status) => {
                 BotWorkflowError::RecruitmentNotBindable(status)
             }
@@ -22032,6 +22434,10 @@ pub enum BotWorkflowError {
     AuctionTournamentNotFound,
     #[error("recruitment must be OPEN, but is {0}")]
     RecruitmentNotOpen(RecruitmentStatus),
+    #[error(
+        "participant confirmation DMs can only be requested while recruitment is CLOSED, but is {0}"
+    )]
+    ParticipantConfirmationDmUnavailable(RecruitmentStatus),
     #[error("recruitment message cannot be bound while status is {0}")]
     RecruitmentNotBindable(RecruitmentStatus),
     #[error("recruitment has reached its capacity")]
@@ -22269,6 +22675,23 @@ mod tests {
             avatar_hash: None,
             role_ids,
         }
+    }
+
+    #[test]
+    fn direct_message_recipient_skips_development_dummy_users() {
+        let discord_user = UserId::parse("100000000000000001").expect("valid Discord user ID");
+        let (recipient_user_id, routing_id) = direct_message_recipient(&discord_user)
+            .expect("Discord user routing should be valid")
+            .expect("Discord user should receive a direct message");
+        assert_eq!(recipient_user_id.as_str(), "100000000000000001");
+        assert_eq!(routing_id.as_str(), "100000000000000001");
+
+        let dummy_user =
+            UserId::parse("dmy_01900000-0000-7000-8000-000000000001").expect("valid dummy");
+        assert_eq!(
+            direct_message_recipient(&dummy_user).expect("dummy handling should not fail"),
+            None
+        );
     }
 
     #[test]

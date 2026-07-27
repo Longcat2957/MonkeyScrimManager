@@ -337,6 +337,7 @@ Backend 데이터:
 - operator member add: `POST /api/guilds/:guildId/recruitments/:id/members` with `{ memberId }`
 - operator participant remove: `DELETE /api/guilds/:guildId/recruitments/:id/members/:memberId` with `{}`
 - operator close for entry: `POST /api/guilds/:guildId/recruitments/:id/close` with `{}`
+- closed-roster operator DM request: `POST /api/guilds/:guildId/recruitments/:id/participant-confirmation-dms` with `{}`
 - creator/operator cancel: `DELETE /api/guilds/:guildId/recruitments/:id` with no body
 
 WebSocket: 사용하지 않는다. Discord 변경 뒤 route 재진입 또는 새로고침은 최신 snapshot을 다시 조회한다.
@@ -371,6 +372,7 @@ Backend 데이터:
 - `POST /api/guilds/:guildId/recruitments/:id/entry-draft/reset`
 - `POST /api/guilds/:guildId/recruitments/:id/reopen`
 - `POST /api/guilds/:guildId/recruitments/:id/auction-recruitment`
+- `POST /api/guilds/:guildId/recruitments/:id/participant-confirmation-dms`
 - creator/operator cancel: `DELETE /api/guilds/:guildId/recruitments/:id` with no body
 
 더미 참가자 배치는 persistent DB/API 개발 도구로만 처리한다. 일반 엔트리 모집과 엔트리 편성 route에는
@@ -384,6 +386,8 @@ read-only로 둔다. `canCreateAuctionRecruitment`가 true면 lane assignment �
 시각 dialog를 열 수 있으며, local datetime input은 RFC 3339 timestamp로 전송한다. 성공하면 응답의 경매
 모집 draft 링크로 이동한다. `canCancel`은 creator 또는 active operator가 `OPEN|CLOSED` 모집을 취소할 수
 있음을 뜻하며, 성공하면 series 작업 목록으로 이동한다. 모집 되돌리기 성공 시 모집 detail route로 이동한다.
+`canSendParticipantConfirmationDms`가 true인 current active operator에게만 별도 `참가 확정 DM 발송` action을
+표시한다. 마감 자체는 DM을 보내지 않으며, 이 action의 성공 응답은 새로 queue된 수와 이미 queue된 수를 보여 준다.
 
 route는 same-origin `/ws`에서 모집 topic과 entry-draft topic을 함께 구독하고, 두 topic이 모두 포함된
 `subscribed` ack 뒤에만 `RealtimeEditStateBar`를 connected로 표시한다. 전자는 roster/status/capability
@@ -567,6 +571,7 @@ Backend 데이터:
 - `POST /api/guilds/:guildId/auction-recruitments/:id/members`
 - `DELETE /api/guilds/:guildId/auction-recruitments/:id/members/:userId`
 - `POST /api/guilds/:guildId/auction-recruitments/:id/close`
+- `POST /api/guilds/:guildId/auction-recruitments/:id/participant-confirmation-dms`
 - `DELETE /api/guilds/:guildId/auction-recruitments/:id`
 
 WebSocket:

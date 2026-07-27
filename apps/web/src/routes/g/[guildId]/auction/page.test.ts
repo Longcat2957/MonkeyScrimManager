@@ -12,7 +12,13 @@ describe('auction page', () => {
 	it('opens the canonical recruitment link returned by the create response', () => {
 		expect(source).toContain('let createDialogOpen = $derived(Boolean(data.openCreateDialog));');
 		expect(source).toContain('let createHardFearless = $state(true);');
-		expect(source).toContain('let createExpectedStartAt = $state');
+		expect(source).toContain('let createExpectedStartDate = $state');
+		expect(source).toContain('let createExpectedStartTime = $state');
+		expect(source).toContain('type="date"');
+		expect(source).toContain('시간 (24시간)');
+		expect(source).toContain('placeholder="23:30"');
+		expect(source).toContain('pattern="[0-2][0-9]:[0-5][0-9]"');
+		expect(source).toContain('T${localTime}:00');
 		expect(source).toContain('expectedStartAt');
 		expect(source).toContain('await goto(created.recruitment.href)');
 		expect(source).not.toContain('id: created.recruitment.id');

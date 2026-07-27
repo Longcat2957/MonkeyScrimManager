@@ -3,6 +3,7 @@ import {
 	addRecruitmentMember,
 	cancelRecruitment,
 	closeRecruitmentForEntry,
+	dispatchRecruitmentParticipantConfirmationDms,
 	removeRecruitmentMember,
 	recruitmentManagementErrorText
 } from './recruitmentManagement';
@@ -122,6 +123,29 @@ describe('recruitment management API client', () => {
 
 		const [path, init] = fetcher.mock.calls[0]!;
 		expect(path).toBe(`/api/guilds/${guildId}/recruitments/${recruitmentId}/close`);
+		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+		expect(JSON.parse(String(init?.body))).toEqual({});
+		const headers = new Headers(init?.headers);
+		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
+		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
+	});
+
+	it('requests participant confirmation DMs through the browser operator endpoint', async () => {
+		const result = { queuedRecipientCount: 10, alreadyQueuedRecipientCount: 0 };
+		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return Response.json({ data: result, meta: { requestId } });
+		});
+		installBrowser(fetcher);
+
+		await expect(
+			dispatchRecruitmentParticipantConfirmationDms(guildId, recruitmentId, idempotencyKey)
+		).resolves.toEqual(result);
+
+		const [path, init] = fetcher.mock.calls[0]!;
+		expect(path).toBe(
+			`/api/guilds/${guildId}/recruitments/${recruitmentId}/participant-confirmation-dms`
+		);
 		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
 		expect(JSON.parse(String(init?.body))).toEqual({});
 		const headers = new Headers(init?.headers);

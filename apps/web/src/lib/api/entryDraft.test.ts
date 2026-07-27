@@ -60,6 +60,7 @@ const snapshot: EntryDraftSnapshot = {
 		canReset: true,
 		canCreateSeries: false,
 		canCreateAuctionRecruitment: false,
+		canSendParticipantConfirmationDms: true,
 		canReopen: true,
 		canCancel: true
 	}
@@ -92,7 +93,12 @@ const auctionSnapshot: AuctionRecruitmentSnapshot = {
 		{ id: '1525847677542207549', displayName: 'Top Cat', declaredLane: 'TOP' }
 	],
 	links: { draft: `/g/${guildId}/auction/recruitments/${auctionRecruitmentId}/draft` },
-	permissions: { canManageMembers: false, canClose: false, canCancel: true }
+	permissions: {
+		canManageMembers: false,
+		canClose: false,
+		canSendParticipantConfirmationDms: true,
+		canCancel: true
+	}
 };
 
 function envelope(data: EntryDraftSnapshot = snapshot): Response {

@@ -168,6 +168,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             post(bot_routes::close_recruitment),
         )
         .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}/participant-confirmation-dms",
+            post(bot_routes::dispatch_recruitment_participant_confirmation_dms),
+        )
+        .route(
             "/api/guilds/{guild_id}/recruitments/{recruitment_id}/entry-draft",
             get(workflow_routes::entry_draft).patch(bot_routes::update_entry_draft),
         )
@@ -242,6 +246,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/close",
             post(bot_routes::close_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/participant-confirmation-dms",
+            post(bot_routes::dispatch_auction_recruitment_participant_confirmation_dms),
         )
         .route(
             "/api/guilds/{guild_id}/auction-tournaments",

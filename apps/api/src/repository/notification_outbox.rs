@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AuctionMatchId, AuctionRecruitmentId, DiscordChannelId, DiscordMessageId, GuildId,
-        NotificationId, RecruitmentStatus,
+        AuctionMatchId, AuctionRecruitmentId, DiscordChannelId, DiscordMessageId, DiscordUserId,
+        GuildId, NotificationId, RecruitmentStatus,
     },
     infrastructure::postgres::DatabaseTransaction,
 };
@@ -41,6 +41,11 @@ pub const AUCTION_TOURNAMENT_RESULT_CREATE_TYPE: &str = "AUCTION_TOURNAMENT_RESU
 pub const AUCTION_TOURNAMENT_RESULT_SCHEMA_VERSION: u16 = 1;
 pub const AUCTION_TOURNAMENT_RESULT_DELETE_TYPE: &str = "AUCTION_TOURNAMENT_RESULT_DELETE";
 pub const AUCTION_TOURNAMENT_RESULT_DELETE_SCHEMA_VERSION: u16 = 1;
+pub const RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE_TYPE: &str =
+    "RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE";
+pub const AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE_TYPE: &str =
+    "AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE";
+pub const RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_SCHEMA_VERSION: u16 = 1;
 
 const MAX_LEASE_OWNER_BYTES: usize = 128;
 const MAX_DEDUPLICATION_KEY_BYTES: usize = 255;
@@ -54,6 +59,8 @@ pub struct EnqueueNotification<'a> {
     pub id: NotificationId,
     pub guild_id: &'a GuildId,
     pub deduplication_key: &'a str,
+    // Guild-message notifications use a channel ID. Direct-message notifications use the
+    // recipient's Discord user ID as the delivery routing snowflake.
     pub channel_id: &'a DiscordChannelId,
     pub notification_type: &'a str,
     pub payload: &'a Value,
@@ -86,6 +93,17 @@ pub struct AuctionRecruitmentMessageNotificationPayload {
     pub schema_version: u16,
     pub auction_recruitment_id: AuctionRecruitmentId,
     pub snapshot: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecruitmentParticipantConfirmationDmPayload {
+    pub schema_version: u16,
+    pub guild_id: GuildId,
+    pub recipient_user_id: DiscordUserId,
+    pub recruitment_id: Uuid,
+    pub recruitment_title: String,
+    pub recruitment_href: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -798,6 +816,7 @@ pub async fn auction_recruitment_message_payload(
                  'permissions', jsonb_build_object(
                      'canManageMembers', false,
                      'canClose', false,
+                     'canSendParticipantConfirmationDms', false,
                      'canCancel', false
                  )
              )

@@ -13,6 +13,7 @@ import {
 	auctionRecruitmentMessageNotificationPayloadSchema,
 	entryConfirmationNotificationPayloadSchema,
 	recruitmentMessageNotificationPayloadSchema,
+	recruitmentParticipantConfirmationDmPayloadSchema,
 	seriesResultNotificationPayloadSchema,
 	type BotNotification,
 	type NackNotificationRequest
@@ -21,7 +22,7 @@ import { renderAuctionRecruitmentMessage } from './auction-recruitment-message.j
 import { renderAuctionMatchLineupConfirmationMessage } from './auction-match-lineup-confirmation-message.js';
 import { renderAuctionTournamentResultMessage } from './auction-tournament-result-message.js';
 import { renderEntryConfirmationMessage } from './entry-confirmation-message.js';
-import { botEditReply } from './message-v2.js';
+import { botEditReply, botNotice } from './message-v2.js';
 import { renderRecruitmentMessage } from './recruitment-message.js';
 import {
 	renderSeriesResultMessage,
@@ -178,6 +179,41 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 				}
 				return;
 			}
+			case 'RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE':
+			case 'AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE': {
+				const payload = recruitmentParticipantConfirmationDmPayloadSchema.safeParse(
+					notification.payload
+				);
+				if (!payload.success) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message:
+							'Recruitment participant confirmation DM payload does not match schema version 1'
+					});
+					return;
+				}
+				if (
+					payload.data.guildId !== notification.guildId ||
+					payload.data.recipientUserId !== notification.channelId
+				) {
+					await this.#nack(notification, {
+						kind: 'HTTP',
+						status: 422,
+						message:
+							'Recruitment participant confirmation DM routing does not match its claimed notification'
+					});
+					return;
+				}
+				await this.#createRecruitmentParticipantConfirmationDirectMessage(
+					notification,
+					payload.data,
+					notification.type === 'AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+						? '경매 내전'
+						: '일반 내전'
+				);
+				return;
+			}
 			case 'AUCTION_RECRUITMENT_MESSAGE_CREATE':
 			case 'AUCTION_RECRUITMENT_MESSAGE_UPDATE':
 			case 'AUCTION_RECRUITMENT_MESSAGE_DELETE': {
@@ -309,6 +345,43 @@ class BotNotificationRelayManager implements BotNotificationRelay {
 					status: 422,
 					message: `Unsupported bot notification type: ${notification.type}`
 				});
+		}
+	}
+
+	async #createRecruitmentParticipantConfirmationDirectMessage(
+		notification: BotNotification,
+		payload: ReturnType<typeof recruitmentParticipantConfirmationDmPayloadSchema.parse>,
+		recruitmentKind: '일반 내전' | '경매 내전'
+	): Promise<void> {
+		let messageId: string;
+		try {
+			const recipient = await this.#client.users.fetch(payload.recipientUserId);
+			const message = await recipient.send({
+				...recruitmentParticipantConfirmationDmOptions(payload, recruitmentKind, this.#webOrigin),
+				nonce: notification.discordNonce,
+				enforceNonce: true
+			});
+			messageId = message.id;
+		} catch (error) {
+			await this.#nack(notification, failureFor(error));
+			return;
+		}
+
+		try {
+			await this.#acknowledge(notification, messageId);
+			this.#logger.info(
+				{
+					notificationId: notification.id,
+					guildId: notification.guildId,
+					recipientUserId: payload.recipientUserId,
+					messageId,
+					recruitmentId: payload.recruitmentId
+				},
+				'Recruitment participant confirmation direct message created'
+			);
+		} catch (error) {
+			// The stable Discord nonce makes a delivery retry safe when the API acknowledgement is lost.
+			await this.#nack(notification, failureFor(error));
 		}
 	}
 
@@ -757,6 +830,22 @@ function messageEditOptions(
 ): ReturnType<typeof botEditReply> {
 	const rendered = renderRecruitmentMessage(snapshot, webOrigin);
 	return botEditReply(...rendered.components);
+}
+
+function recruitmentParticipantConfirmationDmOptions(
+	payload: ReturnType<typeof recruitmentParticipantConfirmationDmPayloadSchema.parse>,
+	recruitmentKind: '일반 내전' | '경매 내전',
+	webOrigin: URL
+): ReturnType<typeof botEditReply> {
+	const recruitmentUrl = new URL(payload.recruitmentHref, webOrigin).toString();
+	return botEditReply(
+		botNotice({
+			tone: 'success',
+			title: '참가가 확정되었습니다',
+			body: `${recruitmentKind} 모집이 마감되었습니다.`,
+			details: [payload.recruitmentTitle, `[모집 상세 보기](${recruitmentUrl})`]
+		})
+	);
 }
 
 function isUnknownDiscordMessage(error: unknown): boolean {

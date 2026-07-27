@@ -1,7 +1,11 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { LoaderCircle } from 'lucide-svelte';
+	import { LoaderCircle, Mail } from 'lucide-svelte';
+	import {
+		auctionRecruitmentErrorText,
+		dispatchAuctionRecruitmentParticipantConfirmationDms
+	} from '$lib/api/auctionRecruitment';
 	import {
 		auctionTournamentErrorText,
 		createAuctionTournament,
@@ -24,6 +28,8 @@
 	let setupOverrideSourceKey = $state<string | null>(null);
 	let saving = $state(false);
 	let creating = $state(false);
+	let dispatchingParticipantConfirmationDms = $state(false);
+	let participantConfirmationDmIdempotencyKey = $state<string | null>(null);
 	let mutationError = $state('');
 	let mutationNotice = $state('');
 	let idempotencyKeys = createOperationIdempotencyKeys();
@@ -39,7 +45,10 @@
 	const recruitment = $derived(data.snapshot.recruitment);
 	const formatLabel = $derived(recruitment.format === 'TEN_PERSON' ? '10인 경매' : '20인 경매');
 	const rulesLabel = $derived(formatAuctionRules(recruitment.format, recruitment.rules));
-	const isMutating = $derived(saving || creating);
+	const canSendParticipantConfirmationDms = $derived(
+		data.snapshot.permissions.canSendParticipantConfirmationDms
+	);
+	const isMutating = $derived(saving || creating || dispatchingParticipantConfirmationDms);
 
 	function applySetupSnapshot(nextSnapshot: AuctionSetupDraftSnapshot) {
 		setupOverrideSourceKey = incomingSetupKey;
@@ -120,6 +129,35 @@
 			creating = false;
 		}
 	}
+
+	async function sendParticipantConfirmationDms() {
+		if (isMutating || !canSendParticipantConfirmationDms) return;
+
+		const idempotencyKey = (participantConfirmationDmIdempotencyKey ??=
+			globalThis.crypto.randomUUID());
+		dispatchingParticipantConfirmationDms = true;
+		mutationError = '';
+		mutationNotice = '';
+		try {
+			const result = await dispatchAuctionRecruitmentParticipantConfirmationDms(
+				data.guildId,
+				recruitment.id,
+				idempotencyKey
+			);
+			participantConfirmationDmIdempotencyKey = null;
+			if (result.queuedRecipientCount > 0) {
+				mutationNotice = `참가자 ${result.queuedRecipientCount}명에게 확정 DM 발송을 요청했습니다.`;
+			} else if (result.alreadyQueuedRecipientCount > 0) {
+				mutationNotice = `참가자 ${result.alreadyQueuedRecipientCount}명에게는 이미 확정 DM 발송이 요청되어 있습니다.`;
+			} else {
+				mutationNotice = 'DM을 받을 Discord 참가자가 없습니다.';
+			}
+		} catch (cause) {
+			mutationError = auctionRecruitmentErrorText(cause);
+		} finally {
+			dispatchingParticipantConfirmationDms = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -133,6 +171,20 @@
 		description={`${recruitment.title} · 모집 #${recruitment.displayNumber} · ${formatLabel} · ${rulesLabel}`}
 	>
 		{#snippet actions()}
+			{#if canSendParticipantConfirmationDms}
+				<button
+					type="button"
+					disabled={isMutating}
+					onclick={sendParticipantConfirmationDms}
+					class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-violet-300/35 bg-violet-400/10 px-3 text-xs font-semibold text-violet-50 enabled:hover:bg-violet-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+				>
+					{#if dispatchingParticipantConfirmationDms}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> DM 요청 중
+					{:else}
+						<Mail size={14} aria-hidden="true" /> 참가 확정 DM 발송
+					{/if}
+				</button>
+			{/if}
 			<a
 				href={resolve('/g/[guildId]/auction/recruitments/[id]', {
 					guildId: data.guildId,

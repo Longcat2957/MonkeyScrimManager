@@ -31,7 +31,12 @@ describe('auction recruitment page server load', () => {
 					},
 					participants: [{ id: '200000000000000004', displayName: 'Longcat', declaredLane: 'MID' }],
 					links: { draft: null },
-					permissions: { canManageMembers: false, canClose: false, canCancel: true }
+					permissions: {
+						canManageMembers: false,
+						canClose: false,
+						canSendParticipantConfirmationDms: false,
+						canCancel: true
+					}
 				},
 				meta: { requestId }
 			});

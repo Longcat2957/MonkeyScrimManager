@@ -520,6 +520,177 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     .await?;
     assert_eq!(side_effects, (1, 1, 1, 1));
 
+    let open_auction_recruitment_id = seed_open_auction_recruitment(&pool, 2).await?;
+    let close_auction_path =
+        format!("/api/guilds/{GUILD_ID}/auction-recruitments/{open_auction_recruitment_id}/close");
+    let close_auction = browser_mutation(
+        &app,
+        Method::POST,
+        &close_auction_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-close-confirmed-participant-dms",
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(close_auction.status(), StatusCode::OK);
+    let close_auction = body_json(close_auction).await?;
+    assert_eq!(close_auction["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(
+        close_auction["data"]["participants"]
+            .as_array()
+            .map(Vec::len),
+        Some(FULL_ROSTER_MEMBER_IDS.len())
+    );
+    let auction_close_revision = close_auction["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("closed auction recruitment response did not contain a revision")?;
+    let confirmation_path = format!(
+        "/api/guilds/{GUILD_ID}/auction-recruitments/{open_auction_recruitment_id}/participant-confirmation-dms"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM bot_notification_outbox
+             WHERE guild_id = $1
+               AND notification_type = 'AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+               AND payload ->> 'recruitmentId' = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(&open_auction_recruitment_id)
+        .fetch_one(&pool)
+        .await?,
+        0
+    );
+
+    let non_operator_dispatch = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        CANDIDATE_SESSION,
+        CANDIDATE_CSRF,
+        "auction-recruitment-confirmation-dm-non-operator",
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(non_operator_dispatch.status(), StatusCode::FORBIDDEN);
+    let non_operator_dispatch = body_json(non_operator_dispatch).await?;
+    assert_eq!(non_operator_dispatch["error"]["code"], "operator_required");
+    assert_eq!(
+        non_operator_dispatch["error"]["message"],
+        "참가 확정 DM 발송에는 현재 길드 운영자 권한이 필요합니다."
+    );
+
+    let dispatch_key = "auction-recruitment-confirmation-dm-1";
+    let dispatched = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        dispatch_key,
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(dispatched.status(), StatusCode::OK);
+    let dispatched = body_json(dispatched).await?;
+    assert_eq!(
+        dispatched["data"]["queuedRecipientCount"],
+        i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
+    );
+    assert_eq!(dispatched["data"]["alreadyQueuedRecipientCount"], 0);
+
+    let auction_confirmation_notifications = sqlx::query_as::<_, (String, String, Value)>(
+        "SELECT channel_id, deduplication_key, payload
+         FROM bot_notification_outbox
+         WHERE guild_id = $1
+           AND notification_type = 'AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+           AND payload ->> 'recruitmentId' = $2
+         ORDER BY channel_id",
+    )
+    .bind(GUILD_ID)
+    .bind(&open_auction_recruitment_id)
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        auction_confirmation_notifications.len(),
+        FULL_ROSTER_MEMBER_IDS.len()
+    );
+    for (recipient_id, deduplication_key, payload) in &auction_confirmation_notifications {
+        assert!(FULL_ROSTER_MEMBER_IDS.contains(&recipient_id.as_str()));
+        assert_eq!(payload["schemaVersion"], 1);
+        assert_eq!(payload["guildId"], GUILD_ID);
+        assert_eq!(payload["recipientUserId"], *recipient_id);
+        assert_eq!(payload["recruitmentId"], open_auction_recruitment_id);
+        assert_eq!(
+            payload["recruitmentHref"],
+            format!("/g/{GUILD_ID}/auction/recruitments/{open_auction_recruitment_id}/draft")
+        );
+        assert_eq!(
+            deduplication_key,
+            &format!(
+                "auction-recruitment:{open_auction_recruitment_id}:participant-confirmation-dm:{auction_close_revision}:{recipient_id}"
+            )
+        );
+    }
+
+    let dispatch_replay = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        dispatch_key,
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(dispatch_replay.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(dispatch_replay).await?["data"],
+        dispatched["data"]
+    );
+    let duplicate_dispatch = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-confirmation-dm-2",
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(duplicate_dispatch.status(), StatusCode::OK);
+    let duplicate_dispatch = body_json(duplicate_dispatch).await?;
+    assert_eq!(duplicate_dispatch["data"]["queuedRecipientCount"], 0);
+    assert_eq!(
+        duplicate_dispatch["data"]["alreadyQueuedRecipientCount"],
+        i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM bot_notification_outbox
+             WHERE guild_id = $1
+               AND notification_type = 'AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+               AND payload ->> 'recruitmentId' = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(&open_auction_recruitment_id)
+        .fetch_one(&pool)
+        .await?,
+        i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
+    );
+
     Ok(())
 }
 
@@ -3104,6 +3275,114 @@ async fn run_flow() -> TestResult {
         pending_notification_types(&pool, &full_recruitment_id).await?,
         vec!["RECRUITMENT_MESSAGE_UPDATE"]
     );
+    let confirmation_path = format!("{path}/{full_recruitment_id}/participant-confirmation-dms");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM bot_notification_outbox
+             WHERE guild_id = $1
+               AND notification_type = 'RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+               AND payload ->> 'recruitmentId' = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(&full_recruitment_id)
+        .fetch_one(&pool)
+        .await?,
+        0
+    );
+
+    let non_operator_dispatch = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        CANDIDATE_SESSION,
+        CANDIDATE_CSRF,
+        "web-recruitment-confirmation-dm-non-operator",
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(non_operator_dispatch.status(), StatusCode::FORBIDDEN);
+    let non_operator_dispatch = body_json(non_operator_dispatch).await?;
+    assert_eq!(non_operator_dispatch["error"]["code"], "operator_required");
+    assert_eq!(
+        non_operator_dispatch["error"]["message"],
+        "참가 확정 DM 발송에는 현재 길드 운영자 권한이 필요합니다."
+    );
+
+    let dispatch_key = "web-recruitment-confirmation-dm-1";
+    let dispatched = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        dispatch_key,
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(dispatched.status(), StatusCode::OK);
+    let dispatched = body_json(dispatched).await?;
+    assert_eq!(
+        dispatched["data"]["queuedRecipientCount"],
+        i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
+    );
+    assert_eq!(dispatched["data"]["alreadyQueuedRecipientCount"], 0);
+
+    let dispatch_replay = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        dispatch_key,
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(dispatch_replay.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(dispatch_replay).await?["data"],
+        dispatched["data"]
+    );
+
+    let duplicate_dispatch = browser_mutation(
+        &app,
+        Method::POST,
+        &confirmation_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-recruitment-confirmation-dm-2",
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(duplicate_dispatch.status(), StatusCode::OK);
+    let duplicate_dispatch = body_json(duplicate_dispatch).await?;
+    assert_eq!(duplicate_dispatch["data"]["queuedRecipientCount"], 0);
+    assert_eq!(
+        duplicate_dispatch["data"]["alreadyQueuedRecipientCount"],
+        i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM bot_notification_outbox
+             WHERE guild_id = $1
+               AND notification_type = 'RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+               AND payload ->> 'recruitmentId' = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(&full_recruitment_id)
+        .fetch_one(&pool)
+        .await?,
+        i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
+    );
     assert_eq!(
         web_close_mutation_counts(&pool, &full_recruitment_id).await?,
         (1, 1)
@@ -3141,6 +3420,10 @@ async fn run_flow() -> TestResult {
         Some(FULL_ROSTER_MEMBER_IDS.len())
     );
     assert_eq!(entry_snapshot["data"]["capabilities"]["canEdit"], true);
+    assert_eq!(
+        entry_snapshot["data"]["capabilities"]["canSendParticipantConfirmationDms"],
+        true
+    );
     assert_eq!(entry_snapshot["data"]["capabilities"]["canReopen"], true);
     assert_eq!(entry_snapshot["data"]["capabilities"]["canCancel"], true);
     let tiered_participant = entry_snapshot["data"]["draft"]["participants"]
@@ -3172,6 +3455,10 @@ async fn run_flow() -> TestResult {
     assert_eq!(non_operator_entry.status(), StatusCode::OK);
     let non_operator_entry = body_json(non_operator_entry).await?;
     assert_eq!(non_operator_entry["data"]["capabilities"]["canEdit"], false);
+    assert_eq!(
+        non_operator_entry["data"]["capabilities"]["canSendParticipantConfirmationDms"],
+        false
+    );
 
     let non_operator_move = browser_mutation(
         &app,
@@ -3654,6 +3941,11 @@ async fn pending_notification_types(
          FROM bot_notification_outbox
          WHERE guild_id = $1
            AND payload ->> 'recruitmentId' = $2
+           AND notification_type IN (
+               'RECRUITMENT_MESSAGE_CREATE',
+               'RECRUITMENT_MESSAGE_UPDATE',
+               'RECRUITMENT_MESSAGE_DELETE'
+           )
            AND delivered_at IS NULL
            AND failed_at IS NULL
          ORDER BY notification_type",
@@ -3916,6 +4208,61 @@ async fn seed_active_series_for_recruitment(pool: &PgPool, recruitment_id: &str)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+async fn seed_open_auction_recruitment(pool: &PgPool, display_number: i64) -> TestResult<String> {
+    const LANES: [&str; 5] = ["TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"];
+
+    let now = OffsetDateTime::now_utc();
+    let recruitment_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO auction_recruitments (
+             guild_id, id, season_id, display_number, title, format, target_count,
+             semifinal_best_of, final_best_of, hard_fearless, status, revision,
+             channel_id, message_id, created_by, created_at, updated_by, updated_at,
+             closed_at, converted_at, cancelled_at
+         ) VALUES (
+             $1, $2, $3, $4, '마감 DM 경매 모집', 'TEN_PERSON', 10,
+             NULL, 3, true, 'OPEN', 0,
+             NULL, NULL, $5, $6, $5, $6,
+             NULL, NULL, NULL
+         )",
+    )
+    .bind(GUILD_ID)
+    .bind(recruitment_id)
+    .bind(Uuid::parse_str(SEASON_ID)?)
+    .bind(display_number)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO auction_setup_drafts (
+             guild_id, recruitment_id, revision, updated_by, updated_at
+         ) VALUES ($1, $2, 0, $3, $4)",
+    )
+    .bind(GUILD_ID)
+    .bind(recruitment_id)
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO auction_recruitment_participants (
+                 guild_id, recruitment_id, user_id, status, declared_lane, mmr_at_join,
+                 snapshot_origin, joined_at, withdrawn_at
+             ) VALUES ($1, $2, $3, 'JOINED', $4, 1500, 'CAPTURED', $5, NULL)",
+        )
+        .bind(GUILD_ID)
+        .bind(recruitment_id)
+        .bind(user_id)
+        .bind(LANES[index % LANES.len()])
+        .bind(now)
+        .execute(pool)
+        .await?;
+    }
+    Ok(recruitment_id.to_string())
 }
 
 async fn seed_bidding_auction_tournament(pool: &PgPool) -> TestResult<Uuid> {

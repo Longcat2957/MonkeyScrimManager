@@ -590,6 +590,46 @@ async fn run_bot_workflow() -> TestResult {
         format!("/g/{GUILD_A}/recruitments/{recruitment_id}/entry")
     );
 
+    let confirmation_notifications = sqlx::query_as::<_, (String, String, Value)>(
+        "SELECT channel_id, deduplication_key, payload
+         FROM bot_notification_outbox
+         WHERE guild_id = $1
+           AND notification_type = 'RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+           AND payload ->> 'recruitmentId' = $2
+         ORDER BY channel_id",
+    )
+    .bind(GUILD_A)
+    .bind(&recruitment_id)
+    .fetch_all(&pool)
+    .await?;
+    assert!(confirmation_notifications.is_empty());
+
+    let close_replay = bot_request(
+        &app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_A}/recruitments/{recruitment_id}/close"),
+        BOT_TOKEN,
+        "close-recruitment",
+        &json!({ "actor": actor(OPERATOR_ID, "Guild A Operator", &[OPERATOR_ROLE_A]) }),
+    )
+    .await?;
+    assert_eq!(close_replay.status(), StatusCode::OK);
+    assert_eq!(body_json(close_replay).await?["data"], closed["data"]);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM bot_notification_outbox
+             WHERE guild_id = $1
+               AND notification_type = 'RECRUITMENT_PARTICIPANT_CONFIRMATION_DM_CREATE'
+               AND payload ->> 'recruitmentId' = $2",
+        )
+        .bind(GUILD_A)
+        .bind(&recruitment_id)
+        .fetch_one(&pool)
+        .await?,
+        0
+    );
+
     assert_auction_recruitment_force_cancel(&app, &pool).await?;
 
     let setup_b = json!({
