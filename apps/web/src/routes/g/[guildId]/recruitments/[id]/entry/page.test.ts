@@ -46,6 +46,10 @@ describe('entry draft page route binding', () => {
 		expect(source).toContain('openCreateAuctionRecruitmentDialog');
 		expect(source).toContain('createAuctionRecruitmentExpectedStartDate');
 		expect(source).toContain('createAuctionRecruitmentExpectedStartTime');
+		expect(source).toContain('createAuctionRecruitmentDefaultExpectedStartAt');
+		expect(source).toContain('Date.now() + 30 * 60 * 1000');
+		expect(source).toContain('예상 시작 시간 (선택)');
+		expect(source).toContain('비우면 생성 시점 30분 후로 정합니다.');
 		expect(source).toContain('type="date"');
 		expect(source).toContain('시간 (24시간)');
 		expect(source).toContain('placeholder="23:30"');

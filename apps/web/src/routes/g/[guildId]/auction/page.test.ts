@@ -14,11 +14,14 @@ describe('auction page', () => {
 		expect(source).toContain('let createHardFearless = $state(true);');
 		expect(source).toContain('let createExpectedStartDate = $state');
 		expect(source).toContain('let createExpectedStartTime = $state');
+		expect(source).toContain('let createDefaultExpectedStartAt = $state<string | null>(null);');
 		expect(source).toContain('type="date"');
 		expect(source).toContain('시간 (24시간)');
 		expect(source).toContain('placeholder="23:30"');
 		expect(source).toContain('pattern="[0-2][0-9]:[0-5][0-9]"');
 		expect(source).toContain('T${localTime}:00');
+		expect(source).toContain('Date.now() + 30 * 60 * 1000');
+		expect(source).toContain('비우면 생성 시점 30분 후로 정합니다.');
 		expect(source).toContain('expectedStartAt');
 		expect(source).toContain('await goto(created.recruitment.href)');
 		expect(source).not.toContain('id: created.recruitment.id');

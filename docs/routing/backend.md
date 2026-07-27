@@ -535,7 +535,7 @@ Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`를 사
 호환 목적의 누락값만 server가 `BO3`, `true`로 해석한다. 둘 다 ACTIVE guild member면 생성할 수 있다.
 `bestOf`가 이 범위를 벗어나면 server는 `422 invalid_recruitment_best_of`와
 `details { field: "bestOf", allowedValues: [1,3,5], receivedValue }`를 반환한다.
-`expectedStartAt`은 시간대가 포함된 RFC 3339 timestamp가 필수이며, 누락·형식 오류는
+`expectedStartAt`은 API boundary에서는 시간대가 포함된 RFC 3339 timestamp가 필수이며, Bot/Web 입력이 비어 있으면 client가 생성 시점 30분 후 값을 만들어 전달한다. 누락·형식 오류는
 `422 invalid_expected_start_at`과 `details.field="expectedStartAt"`을 반환한다. 생성 제목에는 KST
 24시간 표기(`YYYY-MM-DD HH:mm (KST)`)로 고정한다.
 Bot은 생성 전에 actor user/member/role snapshot을 동기화하고, backend는 ACTIVE season과 guild counter를
@@ -705,7 +705,7 @@ draft revision을 각각 사용한다. `CANCELLED` 모집 또는 series 생성�
 ```
 
 `expectedRevision`은 entry draft revision이 아니라 source recruitment의 현재 `revision`이다.
-`expectedStartAt`은 시간대가 포함된 RFC 3339 timestamp가 필수이며, 없거나 형식이 맞지 않으면
+`expectedStartAt`은 API boundary에서는 시간대가 포함된 RFC 3339 timestamp가 필수이며, Bot/Web 입력이 비어 있으면 client가 생성 시점 30분 후 값을 만들어 전달한다. 없거나 형식이 맞지 않으면
 `422 invalid_expected_start_at`과 `details.field="expectedStartAt"`을 반환한다. Backend는 source가
 `CLOSED`인지, 정확히 10명이 JOINED인지, source가 아직 전환되지 않았는지, active series가 없는지를
 transaction 안에서 다시 확인한다. lane assignment는 이 전환의 조건이 아니다.
@@ -1042,7 +1042,7 @@ projection으로 보여준다.
 
 ### POST /api/guilds/{guildId}/auction-recruitments
 
-Discord `/경매모집`과 Web `/g/{guildId}/auction`의 경매 모집 dialog가 같은 canonical create command를 쓴다.
+Discord `/경매내전_10인`·`/경매내전_20인`과 Web `/g/{guildId}/auction`의 경매 모집 dialog가 같은 canonical create command를 쓴다.
 
 Bot request는 service principal, Discord interaction `Idempotency-Key`, actor snapshot, `format`과 rules를 사용한다.
 Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`, `format`과 rules를 사용하며 actor를
@@ -1070,7 +1070,7 @@ Browser request는 Discord OAuth session, CSRF, browser `Idempotency-Key`, `form
 ```
 
 `format`은 `TEN_PERSON | TWENTY_PERSON`만 허용하고 target count는 각각 10/20으로 server가 파생한다.
-`expectedStartAt`은 시간대가 포함된 RFC 3339 timestamp가 필수이며, 누락·형식 오류는
+`expectedStartAt`은 API boundary에서는 시간대가 포함된 RFC 3339 timestamp가 필수이며, Bot/Web 입력이 비어 있으면 client가 생성 시점 30분 후 값을 만들어 전달한다. 누락·형식 오류는
 `422 invalid_expected_start_at`으로 안전하게 설명한다. 생성 제목의 예상 시작 표기는 KST 24시간
 `YYYY-MM-DD HH:mm`과 `(KST)`를 사용한다.
 `finalBestOf`와 non-null `semifinalBestOf`는 `1 | 3 | 5`다. 10인은 `semifinalBestOf=null`만 허용하고, 20인은

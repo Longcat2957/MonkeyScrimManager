@@ -238,17 +238,18 @@ Web 모집 취소 (생성자 또는 운영자)
 시작점:
 
 ```txt
-Discord /경매모집
+Discord /경매내전_10인 또는 /경매내전_20인
 Web /g/{guildId}/auction 경매 모집
 ```
 
 흐름:
 
 ```txt
-Discord /경매모집 또는 Web 경매 모집 (ACTIVE guild member)
+Discord /경매내전_10인 또는 /경매내전_20인, 또는 Web 경매 모집 (ACTIVE guild member)
   -> 10인(TEN_PERSON) 또는 20인(TWENTY_PERSON) 형식 선택
-  -> 공통 하드 피어리스와 결승 BO1/BO3/BO5 선택
-  -> 20인은 4강 BO1/BO3/BO5도 별도로 선택
+  -> 예상 시작은 선택 입력이며, 비우면 생성 시점 30분 후를 사용
+  -> 10인은 단일 시리즈 BO1/BO3/BO5와 하드 피어리스 선택
+  -> 20인은 4강/결승 BO1/BO3/BO5와 하드 피어리스 선택
   -> 같은 auction recruitment create command 호출
   -> 현재 season/counter를 잠그고 OPEN auction_recruitments, 빈 setup draft/team slot을 한 transaction으로 생성
   -> configured 모집 채널의 AUCTION_RECRUITMENT_MESSAGE_CREATE outbox로 동일 경매 모집 메시지를 발행
@@ -279,7 +280,7 @@ Web 현재 active operator의 참가자 관리
 
 브래킷 시작
   -> 모집 rules snapshot을 tournament로 복사하고 auction_matches 생성
-  -> 10인은 결승 규칙, 20인은 두 4강과 결승의 각 규칙을 적용
+  -> 10인은 단일 시리즈 규칙, 20인은 두 4강과 결승의 각 규칙을 적용
   -> /g/{guildId}/auction/tournaments/{id}/bracket
 
 경기 시작 전 라인업 확정
@@ -645,7 +646,7 @@ Bot 설치
 경매 tournament workflow:
 
 ```txt
-Discord /경매모집 또는 Web /g/{guildId}/auction 경매 모집
+Discord /경매내전_10인 또는 /경매내전_20인, 또는 Web /g/{guildId}/auction 경매 모집
   -> 참가/취소
   -> 팀장/포인트 설정
   -> 입찰

@@ -13,7 +13,11 @@ import {
 import { renderRecruitmentMessage } from '../discord/recruitment-message.js';
 import { guildInteractionError } from '../interactions/guild-context.js';
 import type { BotCommand } from './types.js';
-import { expectedStartAtFromKstInput, expectedStartInputExample } from './expected-start-at.js';
+import {
+	defaultExpectedStartAt,
+	expectedStartAtFromKstInput,
+	expectedStartInputExample
+} from './expected-start-at.js';
 
 const EXPECTED_START_OPTION = '예상시작';
 const BEST_OF_OPTION = '형식';
@@ -30,8 +34,7 @@ export const recruitCommand: BotCommand = {
 		.addStringOption((option) =>
 			option
 				.setName(EXPECTED_START_OPTION)
-				.setDescription(`예상 시작 시각 (KST, 예: ${expectedStartInputExample})`)
-				.setRequired(true)
+				.setDescription(`예상 시작 시각 (KST, 비우면 30분 후 · 예: ${expectedStartInputExample})`)
 		)
 		.addIntegerOption((option) =>
 			option
@@ -61,9 +64,11 @@ export const recruitCommand: BotCommand = {
 		const bestOf = selectedBestOf(interaction.options.getInteger(BEST_OF_OPTION));
 		const hardFearless =
 			interaction.options.getBoolean(HARD_FEARLESS_OPTION) ?? DEFAULT_HARD_FEARLESS;
-		const expectedStartAt = expectedStartAtFromKstInput(
-			interaction.options.getString(EXPECTED_START_OPTION, true)
-		);
+		const expectedStartInput = interaction.options.getString(EXPECTED_START_OPTION);
+		const expectedStartAt =
+			expectedStartInput === null
+				? defaultExpectedStartAt(interaction.createdAt)
+				: expectedStartAtFromKstInput(expectedStartInput);
 		if (!expectedStartAt) {
 			await interaction.reply(
 				botEphemeralReply(

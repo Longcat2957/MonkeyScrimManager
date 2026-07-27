@@ -30,7 +30,10 @@ describe('general series page', () => {
 		expect(source).toContain('let createHardFearless = $state(true);');
 		expect(source).toContain("let createExpectedStartDate = $state('');");
 		expect(source).toContain("let createExpectedStartTime = $state('');");
+		expect(source).toContain('let createDefaultExpectedStartAt = $state<string | null>(null);');
 		expect(source).toContain('expectedStartIsoFromInput(');
+		expect(source).toContain('Date.now() + 30 * 60 * 1000');
+		expect(source).toContain('비우면 생성 시점 30분 후로 정합니다.');
 		expect(source).toContain(
 			'{ bestOf: createBestOf, hardFearless: createHardFearless, expectedStartAt }'
 		);

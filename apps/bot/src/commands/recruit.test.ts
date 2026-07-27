@@ -21,6 +21,7 @@ const interactionId = '400000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const expectedStartInput = '2026-07-26 20:00';
 const expectedStartAt = '2026-07-26T20:00:00+09:00';
+const defaultExpectedStartAt = '2026-07-26T19:30:00+09:00';
 
 const snapshot: RecruitmentSnapshot = {
 	recruitment: {
@@ -56,7 +57,7 @@ function context(
 function interaction(
 	bestOf: number | null,
 	hardFearless: boolean | null,
-	startInput = expectedStartInput
+	startInput: string | null = expectedStartInput
 ) {
 	const editReply = vi.fn<(options: unknown) => Promise<{ channelId: string; id: string }>>(
 		async () => ({
@@ -69,6 +70,7 @@ function interaction(
 	return {
 		value: {
 			id: interactionId,
+			createdAt: new Date('2026-07-26T10:00:00.000Z'),
 			guildId,
 			guild: {},
 			member: { nick: 'MSM Longcat', roles: ['300000000000000001'] },
@@ -95,7 +97,7 @@ function interaction(
 }
 
 describe('/내전모집', () => {
-	it('requires a KST expected-start option before optional series rules', () => {
+	it('offers an optional KST expected-start option before optional series rules', () => {
 		const definition = recruitCommand.data.toJSON();
 
 		expect(definition).toMatchObject({
@@ -107,7 +109,7 @@ describe('/내전모집', () => {
 			expect.objectContaining({
 				name: '예상시작',
 				type: ApplicationCommandOptionType.String,
-				required: true
+				required: false
 			}),
 			expect.objectContaining({
 				name: '형식',
@@ -176,6 +178,20 @@ describe('/내전모집', () => {
 			);
 		}
 	);
+
+	it('uses the interaction time plus 30 minutes when expected start is omitted', async () => {
+		const createRecruitment = vi.fn(async () => snapshot);
+		const bindRecruitmentMessage = vi.fn(async () => snapshot);
+		const current = interaction(null, null, null);
+
+		await recruitCommand.execute(current.value, context(createRecruitment, bindRecruitmentMessage));
+
+		expect(createRecruitment).toHaveBeenCalledWith(
+			guildId,
+			expect.objectContaining({ expectedStartAt: defaultExpectedStartAt }),
+			{ idempotencyKey: interactionId }
+		);
+	});
 
 	it('rejects an invalid expected-start value before creating a recruitment', async () => {
 		const createRecruitment = vi.fn(async () => snapshot);

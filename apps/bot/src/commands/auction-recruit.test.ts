@@ -13,7 +13,7 @@ import type { AuctionRecruitmentSnapshot } from '../api/contracts.js';
 import type { BotConfig } from '../config.js';
 import type { GuildCatalogSync } from '../discord/catalog-sync.js';
 import type { InteractionContext } from '../interactions/context.js';
-import { auctionRecruitCommand } from './auction-recruit.js';
+import { auctionRecruitTenCommand, auctionRecruitTwentyCommand } from './auction-recruit.js';
 
 const guildId = '200000000000000001';
 const userId = '100000000000000001';
@@ -21,12 +21,13 @@ const interactionId = '400000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const expectedStartInput = '2026-07-26 20:00';
 const expectedStartAt = '2026-07-26T20:00:00+09:00';
+const defaultExpectedStartAt = '2026-07-26T19:30:00+09:00';
 
 const snapshot: AuctionRecruitmentSnapshot = {
 	recruitment: {
 		id: recruitmentId,
 		displayNumber: 214,
-		title: `20인 경매 내전 모집 #214 · 예상 시작 ${expectedStartAt} (KST)`,
+		title: '20인 경매 내전 모집 #214 · 예상 시작 2026-07-26 20:00 (KST)',
 		format: 'TWENTY_PERSON',
 		rules: { hardFearless: true, semifinalBestOf: 1, finalBestOf: 5 },
 		participantCount: 20,
@@ -55,12 +56,12 @@ function context(createAuctionRecruitment: ReturnType<typeof vi.fn>): Interactio
 }
 
 function interaction(
-	participantCount: number,
 	options: {
+		bestOf?: number;
 		semifinalBestOf?: number;
 		finalBestOf?: number;
 		hardFearless?: boolean;
-		expectedStartInput?: string;
+		expectedStartInput?: string | null;
 	} = {}
 ) {
 	const deferReply = vi.fn(async () => undefined);
@@ -69,6 +70,7 @@ function interaction(
 	return {
 		value: {
 			id: interactionId,
+			createdAt: new Date('2026-07-26T10:00:00.000Z'),
 			guildId,
 			guild: {},
 			member: { nick: 'MSM Longcat', roles: ['300000000000000001'] },
@@ -80,7 +82,7 @@ function interaction(
 			},
 			options: {
 				getInteger: (name: string) => {
-					if (name === '정원') return participantCount;
+					if (name === '형식') return options.bestOf ?? null;
 					if (name === '4강') return options.semifinalBestOf ?? null;
 					if (name === '결승') return options.finalBestOf ?? null;
 					return null;
@@ -88,7 +90,11 @@ function interaction(
 				getBoolean: (name: string) =>
 					name === '하드피어리스' ? (options.hardFearless ?? null) : null,
 				getString: (name: string) =>
-					name === '예상시작' ? (options.expectedStartInput ?? expectedStartInput) : null
+					name === '예상시작'
+						? options.expectedStartInput === undefined
+							? expectedStartInput
+							: options.expectedStartInput
+						: null
 			},
 			inCachedGuild: () => true,
 			deferReply,
@@ -101,57 +107,67 @@ function interaction(
 	};
 }
 
-describe('/경매모집', () => {
-	it('requires a 10-person or 20-person capacity in guild context', () => {
-		const definition = auctionRecruitCommand.data.toJSON();
+describe('/경매내전_10인, /경매내전_20인', () => {
+	it('registers dedicated 10-person and 20-person commands', () => {
+		const tenPersonDefinition = auctionRecruitTenCommand.data.toJSON();
+		const twentyPersonDefinition = auctionRecruitTwentyCommand.data.toJSON();
 
-		expect(definition).toMatchObject({
-			name: '경매모집',
+		expect(tenPersonDefinition).toMatchObject({
+			name: '경매내전_10인',
 			integration_types: [ApplicationIntegrationType.GuildInstall],
 			contexts: [InteractionContextType.Guild]
 		});
-		expect(definition.options).toEqual([
-			expect.objectContaining({
-				name: '정원',
-				type: ApplicationCommandOptionType.Integer,
-				required: true,
-				choices: [
-					{ name: '10인', value: 10 },
-					{ name: '20인', value: 20 }
-				]
-			}),
+		expect(tenPersonDefinition.options).toEqual([
 			expect.objectContaining({
 				name: '예상시작',
 				type: ApplicationCommandOptionType.String,
-				required: true
+				required: false
 			}),
 			expect.objectContaining({
-				name: '결승',
-				type: ApplicationCommandOptionType.Integer,
-				choices: [
-					{ name: 'BO1', value: 1 },
-					{ name: 'BO3', value: 3 },
-					{ name: 'BO5', value: 5 }
-				]
+				name: '형식',
+				type: ApplicationCommandOptionType.Integer
 			}),
 			expect.objectContaining({
-				name: '4강',
-				type: ApplicationCommandOptionType.Integer,
-				choices: [
-					{ name: 'BO1', value: 1 },
-					{ name: 'BO3', value: 3 },
-					{ name: 'BO5', value: 5 }
-				]
+				name: '하드피어리스',
+				type: ApplicationCommandOptionType.Boolean
+			})
+		]);
+		expect(tenPersonDefinition.options).not.toContainEqual(
+			expect.objectContaining({ name: '4강' })
+		);
+		expect(tenPersonDefinition.options).not.toContainEqual(
+			expect.objectContaining({ name: '결승' })
+		);
+
+		expect(twentyPersonDefinition).toMatchObject({
+			name: '경매내전_20인',
+			integration_types: [ApplicationIntegrationType.GuildInstall],
+			contexts: [InteractionContextType.Guild]
+		});
+		expect(twentyPersonDefinition.options).toEqual([
+			expect.objectContaining({
+				name: '예상시작',
+				type: ApplicationCommandOptionType.String,
+				required: false
 			}),
-			expect.objectContaining({ name: '하드피어리스', type: ApplicationCommandOptionType.Boolean })
+			expect.objectContaining({ name: '4강', type: ApplicationCommandOptionType.Integer }),
+			expect.objectContaining({ name: '결승', type: ApplicationCommandOptionType.Integer }),
+			expect.objectContaining({
+				name: '하드피어리스',
+				type: ApplicationCommandOptionType.Boolean
+			})
 		]);
 	});
 
-	it('creates the selected auction format and rules, then returns an ephemeral web link', async () => {
+	it('creates a 20-person auction with semifinal and final rules', async () => {
 		const createAuctionRecruitment = vi.fn(async () => snapshot);
-		const current = interaction(20, { semifinalBestOf: 1, finalBestOf: 5, hardFearless: true });
+		const current = interaction({
+			semifinalBestOf: 1,
+			finalBestOf: 5,
+			hardFearless: true
+		});
 
-		await auctionRecruitCommand.execute(current.value, context(createAuctionRecruitment));
+		await auctionRecruitTwentyCommand.execute(current.value, context(createAuctionRecruitment));
 
 		expect(current.deferReply).toHaveBeenCalledWith({
 			flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
@@ -187,46 +203,46 @@ describe('/경매모집', () => {
 		);
 	});
 
-	it('uses BO3 and hard fearless by default for a 10-person auction', async () => {
+	it('uses the generic series format for a 10-person auction', async () => {
 		const createAuctionRecruitment = vi.fn(async () => snapshot);
-		const current = interaction(10);
+		const current = interaction({ bestOf: 5 });
 
-		await auctionRecruitCommand.execute(current.value, context(createAuctionRecruitment));
+		await auctionRecruitTenCommand.execute(current.value, context(createAuctionRecruitment));
 
 		expect(createAuctionRecruitment).toHaveBeenCalledWith(
 			guildId,
 			expect.objectContaining({
 				format: 'TEN_PERSON',
 				semifinalBestOf: null,
-				finalBestOf: 3,
+				finalBestOf: 5,
 				hardFearless: true,
 				expectedStartAt
 			}),
 			{ idempotencyKey: interactionId }
 		);
+		expect(renderedReply(current.editReply)).toContain('형식');
+		expect(renderedReply(current.editReply)).not.toContain('결승');
+		expect(renderedReply(current.editReply)).not.toContain('4강');
 	});
 
-	it('rejects a semifinal format for a 10-person auction before creating it', async () => {
+	it('uses the interaction time plus 30 minutes when expected start is omitted', async () => {
 		const createAuctionRecruitment = vi.fn(async () => snapshot);
-		const current = interaction(10, { semifinalBestOf: 3 });
+		const current = interaction({ expectedStartInput: null });
 
-		await auctionRecruitCommand.execute(current.value, context(createAuctionRecruitment));
+		await auctionRecruitTwentyCommand.execute(current.value, context(createAuctionRecruitment));
 
-		expect(createAuctionRecruitment).not.toHaveBeenCalled();
-		expect(current.deferReply).not.toHaveBeenCalled();
-		expect(serializedReply(current.reply).flags).toBe(
-			MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
-		);
-		expect(renderedReply(current.reply)).toContain(
-			'10인 경매 내전은 4강이 없으므로 `4강` 형식을 설정할 수 없습니다.'
+		expect(createAuctionRecruitment).toHaveBeenCalledWith(
+			guildId,
+			expect.objectContaining({ expectedStartAt: defaultExpectedStartAt }),
+			{ idempotencyKey: interactionId }
 		);
 	});
 
 	it('rejects an invalid KST expected-start value before creating an auction', async () => {
 		const createAuctionRecruitment = vi.fn(async () => snapshot);
-		const current = interaction(20, { expectedStartInput: '2026-02-30 20:00' });
+		const current = interaction({ expectedStartInput: '2026-02-30 20:00' });
 
-		await auctionRecruitCommand.execute(current.value, context(createAuctionRecruitment));
+		await auctionRecruitTwentyCommand.execute(current.value, context(createAuctionRecruitment));
 
 		expect(createAuctionRecruitment).not.toHaveBeenCalled();
 		expect(current.deferReply).not.toHaveBeenCalled();

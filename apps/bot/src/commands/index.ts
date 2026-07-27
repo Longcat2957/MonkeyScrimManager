@@ -1,4 +1,4 @@
-import { auctionRecruitCommand } from './auction-recruit.js';
+import { auctionRecruitTenCommand, auctionRecruitTwentyCommand } from './auction-recruit.js';
 import {
 	auctionRecruitmentAddMemberCommand,
 	auctionRecruitmentRemoveMemberCommand
@@ -14,7 +14,8 @@ export const commands = [
 	setupCommand,
 	registerCommand,
 	recruitCommand,
-	auctionRecruitCommand,
+	auctionRecruitTenCommand,
+	auctionRecruitTwentyCommand,
 	auctionRecruitmentAddMemberCommand,
 	auctionRecruitmentRemoveMemberCommand,
 	auctionTournamentListCommand,

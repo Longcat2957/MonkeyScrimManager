@@ -70,8 +70,8 @@ Discord Bot / Web browser
   -> 토너먼트 결과와 guild MMR 반영
 ```
 
-- Web `/g/{guildId}/auction`과 Discord `/경매모집`은 같은 경매 모집 aggregate를 생성한다.
-- 10인은 결승 BO1/BO3/BO5, 20인은 준결승 BO1/BO3/BO5와 결승 BO1/BO3/BO5를 각각 모집 시점에 확정한다.
+- Web `/g/{guildId}/auction`과 Discord `/경매내전_10인`·`/경매내전_20인`은 같은 경매 모집 aggregate를 생성한다.
+- 10인은 단일 시리즈 BO1/BO3/BO5, 20인은 준결승 BO1/BO3/BO5와 결승 BO1/BO3/BO5를 각각 모집 시점에 확정한다.
   하드 피어리스도 같은 immutable rule snapshot에 저장한다.
 - 모집 roster는 Discord 참가와 active operator의 Web 수동 추가/제거가 공유한다. dummy user도 같은 member ID와
   picker 경로를 사용하며 별도 운영 UI를 만들지 않는다.
@@ -147,17 +147,18 @@ WebSocket은 authoritative state patch가 아니라 invalidate 신호만 전달�
 
 `apps/bot/src/commands/index.ts`에 현재 등록된 명령만 사용자에게 제공한다.
 
-| 명령            | 역할                                                 |
-| --------------- | ---------------------------------------------------- |
-| `/초기설정`     | 운영 role, 필수 모집 채널, 선택 feedback 채널을 설정 |
-| `/등록`         | 현재 guild membership과 Riot ID 연결                 |
-| `/내전모집`     | 일반 내전 모집 생성                                  |
-| `/경매모집`     | 10/20인 경매 모집과 rule snapshot 생성               |
-| `/경매인원추가` | 운영자의 경매 모집 대상 참가자 추가                  |
-| `/경매인원삭제` | 운영자의 경매 모집 참가자 제거                       |
-| `/경매목록`     | active/completed tournament 조회                     |
-| `/경매강제취소` | 경매 모집/연결 tournament의 안전 취소                |
-| `/경매조기종료` | 진행 중 tournament 조기 종료                         |
+| 명령             | 역할                                                 |
+| ---------------- | ---------------------------------------------------- |
+| `/초기설정`      | 운영 role, 필수 모집 채널, 선택 feedback 채널을 설정 |
+| `/등록`          | 현재 guild membership과 Riot ID 연결                 |
+| `/내전모집`      | 일반 내전 모집 생성                                  |
+| `/경매내전_10인` | 10인 경매 모집과 rule snapshot 생성                  |
+| `/경매내전_20인` | 20인 경매 모집과 rule snapshot 생성                  |
+| `/경매인원추가`  | 운영자의 경매 모집 대상 참가자 추가                  |
+| `/경매인원삭제`  | 운영자의 경매 모집 참가자 제거                       |
+| `/경매목록`      | active/completed tournament 조회                     |
+| `/경매강제취소`  | 경매 모집/연결 tournament의 안전 취소                |
+| `/경매조기종료`  | 진행 중 tournament 조기 종료                         |
 
 `/내전인원추가`, `/내전목록`, `/새시즌`, `/도움말`, `/전적`, `/랭킹` 등을 포함한 나머지 문서상 명령은 현재
 command registry에 없으므로 제공 기능으로 안내하지 않는다.

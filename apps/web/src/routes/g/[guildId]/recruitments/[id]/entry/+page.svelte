@@ -77,6 +77,7 @@
 	let createAuctionRecruitmentDialogOpen = $state(false);
 	let createAuctionRecruitmentExpectedStartDate = $state('');
 	let createAuctionRecruitmentExpectedStartTime = $state('');
+	let createAuctionRecruitmentDefaultExpectedStartAt = $state<string | null>(null);
 	let createAuctionRecruitmentError = $state('');
 	let activeRouteKey = $state<string | null>(null);
 	let realtimeConnectionState = $state<RealtimeConnectionState>('reconnecting');
@@ -253,6 +254,7 @@
 		createAuctionRecruitmentDialogOpen = false;
 		createAuctionRecruitmentExpectedStartDate = '';
 		createAuctionRecruitmentExpectedStartTime = '';
+		createAuctionRecruitmentDefaultExpectedStartAt = null;
 		createAuctionRecruitmentError = '';
 		idempotencyKeys.invalidate('entry-draft-move');
 		idempotencyKeys.invalidate('entry-draft-reset');
@@ -487,6 +489,11 @@
 	function expectedStartIsoFromInput(date: string, time: string): string | null {
 		const localDate = date.trim();
 		const localTime = time.trim();
+		if (!localDate && !localTime) {
+			return (createAuctionRecruitmentDefaultExpectedStartAt ??= new Date(
+				Date.now() + 30 * 60 * 1000
+			).toISOString());
+		}
 		if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate) || !/^\d{2}:\d{2}$/.test(localTime)) {
 			return null;
 		}
@@ -502,6 +509,7 @@
 		createAuctionRecruitmentError = '';
 		createAuctionRecruitmentExpectedStartDate = '';
 		createAuctionRecruitmentExpectedStartTime = '';
+		createAuctionRecruitmentDefaultExpectedStartAt = null;
 		createAuctionRecruitmentDialogOpen = true;
 	}
 
@@ -521,7 +529,7 @@
 			createAuctionRecruitmentExpectedStartTime
 		);
 		if (!expectedStartAt) {
-			createAuctionRecruitmentError = '예상 시작 시간을 입력해 주세요.';
+			createAuctionRecruitmentError = '예상 시작 날짜와 시간은 함께 입력해 주세요.';
 			return;
 		}
 
@@ -925,17 +933,20 @@
 					모집 #{snapshot?.recruitment.displayNumber}의 현재 참가자를 경매 후보로 가져옵니다.
 				</Dialog.Description>
 				<div class="grid gap-2">
-					<span class="text-[11px] font-semibold text-slate-500">예상 시작 시간</span>
+					<div class="grid gap-0.5">
+						<span class="text-[11px] font-semibold text-slate-500">예상 시작 시간 (선택)</span>
+						<span class="text-[11px] text-slate-600">비우면 생성 시점 30분 후로 정합니다.</span>
+					</div>
 					<div class="grid grid-cols-2 gap-2">
 						<label class="grid gap-1">
 							<span class="text-[11px] text-slate-500">날짜</span>
 							<input
 								type="date"
-								required
 								bind:value={createAuctionRecruitmentExpectedStartDate}
 								disabled={isMutating}
 								oninput={() => {
 									createAuctionRecruitmentError = '';
+									createAuctionRecruitmentDefaultExpectedStartAt = null;
 									idempotencyKeys.invalidate('entry-draft-create-auction-recruitment');
 								}}
 								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-emerald-300/55 disabled:opacity-35"
@@ -945,7 +956,6 @@
 							<span class="text-[11px] text-slate-500">시간 (24시간)</span>
 							<input
 								type="text"
-								required
 								maxlength="5"
 								placeholder="23:30"
 								pattern="[0-2][0-9]:[0-5][0-9]"
@@ -953,6 +963,7 @@
 								disabled={isMutating}
 								oninput={() => {
 									createAuctionRecruitmentError = '';
+									createAuctionRecruitmentDefaultExpectedStartAt = null;
 									idempotencyKeys.invalidate('entry-draft-create-auction-recruitment');
 								}}
 								class="h-10 w-full border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-sm font-semibold text-slate-100 outline-none focus:border-emerald-300/55 disabled:opacity-35"
@@ -978,9 +989,7 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={isMutating ||
-						!createAuctionRecruitmentExpectedStartDate.trim() ||
-						!createAuctionRecruitmentExpectedStartTime.trim()}
+					disabled={isMutating}
 					onclick={createAuctionRecruitment}
 					class="inline-flex h-9 items-center gap-1.5 border border-emerald-300/35 bg-emerald-400/10 px-3 text-xs font-semibold text-emerald-100 enabled:hover:bg-emerald-400/16 disabled:cursor-not-allowed disabled:opacity-35"
 				>

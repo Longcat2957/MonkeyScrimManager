@@ -528,9 +528,9 @@ WebSocket: 읽기 전용 결과 화면에서는 사용하지 않는다.
 - actionable 모집, 진행 중 tournament, 완료/보관 tournament는 각각 독립 `nextCursor`를 가진다. 각
   section의 `더 불러오기`는 해당 cursor만 이어 읽고 ID 기준으로 중복을 제거한다. 진행 중 section은 모집과
   tournament cursor가 모두 남아 있으면 둘을 함께 읽은 뒤 같은 작업 목록으로 병합한다.
-- ACTIVE guild member가 10인 또는 20인 형식, 예상 시작 날짜와 24시간 `HH:mm`, 결승 BO1/BO3/BO5, 하드 피어리스를 고르는 작은 경매 모집
-  dialog를 제공한다. 예상 시작 시각은 RFC 3339 timestamp로 전송하며, 생성된
-  모집 제목은 backend가 KST 표기로 확정한다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
+- ACTIVE guild member가 10인 또는 20인 형식, 선택 예상 시작 날짜와 24시간 `HH:mm`, 시리즈 형식, 하드 피어리스를 고르는 작은 경매 모집
+  dialog를 제공한다. 예상 시작 날짜와 시간을 모두 비우면 브라우저 생성 시점 30분 후를 RFC 3339 timestamp로 전송하며, 생성된
+  모집 제목은 backend가 KST 표기로 확정한다. 한쪽만 입력하면 validation error를 보인다. 20인은 두 준결승에 공통 적용할 4강 BO1/BO3/BO5와 결승 BO1/BO3/BO5를 별도로 고른다. 생성 성공 전에는
   목록을 낙관적으로 추가하지 않고, `201` snapshot의 `recruitment.href`로 OPEN 모집 상세 화면에 이동한다.
 - `?create=1`은 같은 생성 dialog만 여는 deep-link다. 다른 값은 무시하고 실제 모집 mutation은 기존 확인
   버튼과 create command를 거쳐야 한다.

@@ -898,7 +898,7 @@ CHECK ((format='TEN_PERSON' AND semifinal_best_of IS NULL)
     OR (format='TWENTY_PERSON' AND semifinal_best_of IN (1,3,5)))
 ```
 
-Discord `/경매모집`과 Web `/g/{guildId}/auction`은 생성 주체만 다르고 같은 create transaction을 사용한다.
+Discord `/경매내전_10인`·`/경매내전_20인`과 Web `/g/{guildId}/auction`은 생성 주체만 다르고 같은 create transaction을 사용한다.
 요청은 `format`, `final_best_of`, `hard_fearless`와 20인일 때 `semifinal_best_of`를 정하며 `target_count`는
 format에서 파생한다. 10인은 `semifinal_best_of=NULL`이고, 20인은 두 준결승이 같은 값을 공유한다. 생략한
 호환 요청은 BO3/하드 피어리스 사용으로 정규화한다. transaction은 ACTIVE guild member와 현재 season/counter를 lock한 뒤 OPEN
