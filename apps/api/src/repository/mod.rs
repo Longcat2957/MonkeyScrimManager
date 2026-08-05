@@ -12,6 +12,7 @@ pub mod guild_full_data_transfer;
 pub mod guild_leaderboard;
 pub mod guild_record_profiles;
 pub mod guild_seasons;
+pub mod guild_statistics;
 pub mod idempotency;
 pub mod mmr;
 pub mod notification_outbox;

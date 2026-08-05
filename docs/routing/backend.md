@@ -1602,6 +1602,57 @@ Riot ID 문자열이고 `profileIconId`와 함께 대상 사용자의 `show_riot
 계산한다. 순위는 page-relative가 아니라 전체 정렬 기준이다. 이 endpoint는 pagination/filter query와
 WS를 사용하지 않는다.
 
+### GET /api/guilds/{guildId}/statistics
+
+길드의 시즌별 이야기형 통계 snapshot이다. 로그인한 ACTIVE guild member만 읽을 수 있으며, 접근할 수 없는
+guild 또는 inactive member는 존재 여부를 숨기는 `404 not_found`다. Riot ID, PUUID, privacy flag는 반환하지
+않는다. 운영 dashboard의 queue와 섞지 않고, 통계 전용 소비자가 사용할 read API로 둔다.
+
+```text
+seasonId optional UUID
+scope    optional ALL | REGULAR | AUCTION (default ALL)
+```
+
+`seasonId`가 없으면 ACTIVE season을 고른다. ACTIVE season이 없으면 `selectedSeasonId=null`과 zero/empty
+section을 `200`으로 반환한다. 명시한 season은 CLOSED도 허용하지만 현재 guild 소유가 아니면
+`404 season_not_found`다. 잘못된 season ID와 scope은 각각 `400 invalid_season_id`, `400 invalid_scope`다.
+
+```text
+seasons[] = id, name, status ACTIVE|CLOSED
+selectedSeasonId | null
+scope ALL|REGULAR|AUCTION
+overview = games, regularGames, auctionGames, uniquePlayers,
+           blueWins, redWins, averageDurationSeconds|null,
+           coverage { durationGames, participantStatGames,
+                      championPickGames, championBanGames }
+players = minimumWinRateGames,
+          mostActive[] { userId, name, games, wins, losses },
+          bestWinRates[] { userId, name, games, wins, losses }
+relationships.bestDuos[] = userAId, userAName, userBId, userBName, games, wins, losses
+champions.picks[] = championId, lane, games, wins, losses
+champions.bans[] = championId, bans
+auction = completedTournaments,
+          captains[] { userId, name, teamsCaptained, titles, finalAppearances,
+                       matchWins, matchLosses, gameWins, gameLosses, totalSpentPoints },
+          topBids[] { tournamentId, tournamentTitle, teamName, userId, name, points,
+                      games, wins, losses, wonTournament }
+```
+
+모든 일반/경매 공통 game 집계는 `games.status='CONFIRMED'`이고 parent series, auction match 및 tournament가
+취소·삭제되지 않은 row만 사용한다. `VOIDED` game, cancelled parent, MMR reversal은 포함하지 않는다.
+`scope=REGULAR`과 `scope=AUCTION`은 game parent로 분리하며, REGULAR scope의 `auction` section은 항상 empty다.
+`averageDurationSeconds`와 coverage count는 nullable/부분 입력 데이터를 0으로 위장하지 않기 위한 정보다.
+
+팀장 성적은 개인 실력 판정이 아니라 completed tournament에서 `acquiredVia=CAPTAIN`인 final team의 성적이다.
+우승은 `champion_team_id`, match 승패는 completed auction match의 `winner_team_id`, game 승패는 확정 game의
+side preset으로 계산한다. 지출은 final team의 `initial_points-current_points`이며, `topBids`는 raw action log를
+합산하지 않고 최종 active BID member가 참조하는 `AWARD_BID`만 사용한다. 따라서 되돌린 낙찰은 순위에 남지
+않는다. `games/wins/losses`, `matches`, `teamsCaptained`는 항상 같이 반환해 작은 표본을 숨기지 않는다.
+
+`mostActive`, `bestWinRates`, `bestDuos`, champion picks/bans, captain과 top bid 목록은 각각 최대 10개다.
+승률 leader는 최소 3 game 표본만 넣으며 그 기준은 `minimumWinRateGames`로 반환한다. 이 endpoint는 WebSocket을
+구독하거나 모든 시즌을 암묵적으로 합치지 않는다.
+
 ## Riot 외부 전적
 
 ### GET /api/riot/records/suggestions

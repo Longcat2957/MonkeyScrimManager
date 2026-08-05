@@ -13,6 +13,7 @@ mod guild_full_data_transfer_routes;
 mod guild_leaderboard_routes;
 mod guild_record_profile_routes;
 mod guild_season_routes;
+mod guild_statistics_routes;
 mod middleware;
 mod notification_routes;
 mod realtime_routes;
@@ -134,6 +135,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/leaderboard",
             get(guild_leaderboard_routes::leaderboard),
+        )
+        .route(
+            "/api/guilds/{guild_id}/statistics",
+            get(guild_statistics_routes::statistics),
         )
         .route(
             "/api/guilds/{guild_id}/operations",
