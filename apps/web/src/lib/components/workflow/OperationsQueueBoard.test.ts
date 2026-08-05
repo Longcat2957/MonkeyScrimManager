@@ -68,4 +68,8 @@ describe('operations queue board', () => {
 		expect(source).toContain('operationActionLabelForRole(item, currentUserRole)');
 		expect(source).not.toContain('function statusTone');
 	});
+
+	it('keeps every stage marker on the same progress-track center line', () => {
+		expect(source).toContain('class="flex h-3 w-full items-center" aria-hidden="true"');
+	});
 });

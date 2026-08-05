@@ -116,7 +116,7 @@
 				<ol class="flex min-w-[32rem]" aria-label={`${primaryItem.title} 진행 단계`}>
 					{#each primaryStages as stage, index (stage.label)}
 						<li class="flex min-w-0 flex-1 flex-col items-center">
-							<div class="flex w-full items-center" aria-hidden="true">
+							<div class="flex h-3 w-full items-center" aria-hidden="true">
 								<span
 									class={`h-px flex-1 ${
 										index === 0
