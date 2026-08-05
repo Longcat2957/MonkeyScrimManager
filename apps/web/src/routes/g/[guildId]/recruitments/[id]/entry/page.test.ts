@@ -29,6 +29,11 @@ describe('entry draft page route binding', () => {
 		expect(source).toContain('riotTier: participant.riotTier');
 	});
 
+	it('passes authoritative head-to-head records through to the entry board', () => {
+		expect(source).toContain('const headToHead = $derived(snapshot?.headToHead ?? []);');
+		expect(source).toContain('{headToHead}');
+	});
+
 	it('starts a series only after server authorization and a complete ten-player assignment', () => {
 		expect(source).toContain(
 			'canCreateSeries = $derived(Boolean(snapshot?.capabilities.canCreateSeries))'

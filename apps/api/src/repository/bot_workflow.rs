@@ -1077,6 +1077,8 @@ impl WebAuctionMatchLineupMutation {
 pub struct EntryDraftSnapshot {
     pub recruitment: EntryDraftRecruitmentSnapshot,
     pub draft: EntryDraftStateSnapshot,
+    #[serde(default)]
+    pub head_to_head: Vec<EntryDraftHeadToHeadSnapshot>,
     pub capabilities: EntryDraftCapabilities,
 }
 
@@ -1104,6 +1106,17 @@ pub struct EntryDraftStateSnapshot {
     pub updated_by: Option<EntryDraftEditorSnapshot>,
     pub participants: Vec<EntryDraftParticipantSnapshot>,
     pub assignments: Vec<EntryDraftAssignmentSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryDraftHeadToHeadSnapshot {
+    pub lane: Lane,
+    pub user_a_id: UserId,
+    pub user_b_id: UserId,
+    pub plays: i64,
+    pub user_a_wins: i64,
+    pub user_b_wins: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -13863,6 +13876,7 @@ async fn entry_draft_snapshot(
 ) -> Result<EntryDraftSnapshot, AttemptError> {
     let recruitment = sqlx::query_as::<_, EntryDraftRecruitmentRow>(
         "SELECT recruitment.id,
+                recruitment.season_id,
                 recruitment.display_number,
                 recruitment.title,
                 recruitment.status,
@@ -14064,6 +14078,13 @@ async fn entry_draft_snapshot(
             profile_icon_id: row.profile_icon_id,
         })
         .collect::<Vec<_>>();
+    let head_to_head = entry_draft_head_to_head_snapshot(
+        transaction,
+        guild_id,
+        recruitment_id,
+        recruitment.season_id,
+    )
+    .await?;
     let is_operator = is_active_session_operator(transaction, guild_id, viewer_id).await?;
     let can_edit = recruitment.status == RecruitmentStatus::Closed && is_operator;
     let has_complete_assignments = has_complete_entry_assignments(
@@ -14126,6 +14147,7 @@ async fn entry_draft_snapshot(
                 .map(EntryDraftAssignmentRow::into_snapshot)
                 .collect::<Result<_, _>>()?,
         },
+        head_to_head,
         capabilities: EntryDraftCapabilities {
             can_edit,
             can_reset: can_edit,
@@ -14137,6 +14159,69 @@ async fn entry_draft_snapshot(
             can_cancel,
         },
     })
+}
+
+async fn entry_draft_head_to_head_snapshot(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    recruitment_id: RecruitmentId,
+    season_id: Uuid,
+) -> Result<Vec<EntryDraftHeadToHeadSnapshot>, AttemptError> {
+    let rows = sqlx::query_as::<_, EntryDraftHeadToHeadRow>(
+        "SELECT ledger.lane,
+                ledger.user_id AS user_a_id,
+                ledger.opponent_user_id AS user_b_id,
+                COUNT(*) AS plays,
+                SUM(ledger.wins_delta)::bigint AS user_a_wins,
+                (COUNT(*) - SUM(ledger.wins_delta))::bigint AS user_b_wins
+         FROM mmr_ledger_entries AS ledger
+         JOIN games AS game
+           ON game.guild_id = ledger.guild_id
+          AND game.id = ledger.game_id
+          AND game.status = 'CONFIRMED'
+          AND game.series_id IS NOT NULL
+         JOIN recruitment_participants AS user_a
+           ON user_a.guild_id = ledger.guild_id
+          AND user_a.recruitment_id = $2
+          AND user_a.user_id = ledger.user_id
+          AND user_a.status = 'JOINED'
+         JOIN recruitment_participants AS user_b
+           ON user_b.guild_id = ledger.guild_id
+          AND user_b.recruitment_id = $2
+          AND user_b.user_id = ledger.opponent_user_id
+          AND user_b.status = 'JOINED'
+         WHERE ledger.guild_id = $1
+           AND ledger.season_id = $3
+           AND ledger.source_type = 'GAME_RESULT'
+           AND ledger.user_id < ledger.opponent_user_id
+         GROUP BY ledger.lane, ledger.user_id, ledger.opponent_user_id
+         ORDER BY CASE ledger.lane
+                      WHEN 'TOP' THEN 1
+                      WHEN 'JUNGLE' THEN 2
+                      WHEN 'MID' THEN 3
+                      WHEN 'BOTTOM' THEN 4
+                      WHEN 'SUPPORT' THEN 5
+                  END,
+                  ledger.user_id,
+                  ledger.opponent_user_id",
+    )
+    .bind(guild_id)
+    .bind(recruitment_id.as_uuid())
+    .bind(season_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| EntryDraftHeadToHeadSnapshot {
+            lane: row.lane,
+            user_a_id: row.user_a_id,
+            user_b_id: row.user_b_id,
+            plays: row.plays,
+            user_a_wins: row.user_a_wins,
+            user_b_wins: row.user_b_wins,
+        })
+        .collect())
 }
 
 async fn series_pick_ban_snapshot(
@@ -21849,6 +21934,7 @@ struct RecruitmentLaneRow {
 #[derive(Debug, FromRow)]
 struct EntryDraftRecruitmentRow {
     id: Uuid,
+    season_id: Uuid,
     display_number: i64,
     title: String,
     status: RecruitmentStatus,
@@ -21876,6 +21962,16 @@ struct EntryDraftParticipantRow {
     solo_rank_tier: Option<String>,
     solo_rank_division: Option<String>,
     profile_icon_id: Option<i32>,
+}
+
+#[derive(Debug, FromRow)]
+struct EntryDraftHeadToHeadRow {
+    lane: Lane,
+    user_a_id: UserId,
+    user_b_id: UserId,
+    plays: i64,
+    user_a_wins: i64,
+    user_b_wins: i64,
 }
 
 fn compact_riot_tier(tier: Option<&str>, division: Option<&str>) -> Option<String> {

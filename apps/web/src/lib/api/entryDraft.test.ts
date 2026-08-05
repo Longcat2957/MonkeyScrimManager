@@ -55,6 +55,16 @@ const snapshot: EntryDraftSnapshot = {
 		],
 		assignments: [{ participantId, team: 'TEAM_1', lane: 'MID' }]
 	},
+	headToHead: [
+		{
+			lane: 'MID',
+			userAId: participantId,
+			userBId: '1525847677542207549',
+			plays: 5,
+			userAWins: 3,
+			userBWins: 2
+		}
+	],
 	capabilities: {
 		canEdit: true,
 		canReset: true,

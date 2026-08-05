@@ -3,16 +3,16 @@
 		type EntrySlot,
 		laneLabel,
 		type Lane,
-		type MockEntryHeadToHeadRecord,
 		type MockEntryParticipant
 	} from '$lib/fixtures/workflow';
+	import type { EntryDraftHeadToHeadRecord } from '$lib/contracts/entryDraft';
 	import { entrySlot, participantForSlot } from './entryDraft';
 
 	interface Props {
 		activeLanes: Lane[];
 		assignments: Record<string, EntrySlot>;
 		participants: MockEntryParticipant[];
-		headToHead: MockEntryHeadToHeadRecord[];
+		headToHead: EntryDraftHeadToHeadRecord[];
 	}
 
 	let { activeLanes, assignments, participants, headToHead }: Props = $props();

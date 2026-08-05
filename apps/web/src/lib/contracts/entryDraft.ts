@@ -56,6 +56,33 @@ export const entryDraftAssignmentSchema = z
 	})
 	.strict();
 
+export const entryDraftHeadToHeadRecordSchema = z
+	.object({
+		lane: championPreferenceLaneSchema,
+		userAId: userIdSchema,
+		userBId: userIdSchema,
+		plays: z.number().int().positive(),
+		userAWins: nonnegativeIntegerSchema,
+		userBWins: nonnegativeIntegerSchema
+	})
+	.strict()
+	.superRefine((record, context) => {
+		if (record.userAId === record.userBId) {
+			context.addIssue({
+				code: 'custom',
+				message: 'Head-to-head users must be distinct',
+				path: ['userBId']
+			});
+		}
+		if (record.userAWins + record.userBWins !== record.plays) {
+			context.addIssue({
+				code: 'custom',
+				message: 'Head-to-head wins must add up to plays',
+				path: ['plays']
+			});
+		}
+	});
+
 export const entryDraftSchema = z
 	.object({
 		revision: nonnegativeIntegerSchema,
@@ -88,11 +115,13 @@ export const entryDraftSnapshotSchema = z
 	.object({
 		recruitment: entryDraftRecruitmentSchema,
 		draft: entryDraftSchema,
+		headToHead: z.array(entryDraftHeadToHeadRecordSchema).max(225),
 		capabilities: entryDraftCapabilitiesSchema
 	})
 	.strict();
 
 export type EntryDraftAssignment = z.infer<typeof entryDraftAssignmentSchema>;
+export type EntryDraftHeadToHeadRecord = z.infer<typeof entryDraftHeadToHeadRecordSchema>;
 export type EntryDraftParticipant = z.infer<typeof entryDraftParticipantSchema>;
 export type EntryDraftSlot = z.infer<typeof entryDraftSlotSchema>;
 export type EntryDraftSnapshot = z.infer<typeof entryDraftSnapshotSchema>;

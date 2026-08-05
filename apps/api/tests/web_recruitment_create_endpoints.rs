@@ -3453,11 +3453,23 @@ async fn run_flow() -> TestResult {
     );
 
     seed_entry_draft_riot_tier(&pool).await?;
+    seed_entry_draft_head_to_head_history(&pool).await?;
     let entry_path = format!("{path}/{full_recruitment_id}/entry-draft");
     let entry_snapshot = browser_get(&app, &entry_path, MEMBER_SESSION).await?;
     assert_eq!(entry_snapshot.status(), StatusCode::OK);
     let entry_snapshot = body_json(entry_snapshot).await?;
     assert_eq!(entry_snapshot["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(
+        entry_snapshot["data"]["headToHead"],
+        json!([{
+            "lane": "TOP",
+            "userAId": MEMBER_ID,
+            "userBId": CANDIDATE_ID,
+            "plays": 2,
+            "userAWins": 1,
+            "userBWins": 1
+        }])
+    );
     assert_eq!(
         entry_snapshot["data"]["draft"]["participants"]
             .as_array()
@@ -4704,6 +4716,197 @@ async fn seed_entry_draft_riot_tier(pool: &PgPool) -> TestResult {
     .bind(now)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+async fn seed_entry_draft_head_to_head_history(pool: &PgPool) -> TestResult {
+    let source_recruitment_id = seed_closed_entry_recruitment(pool, 100, 3, false).await?;
+    let series_id = Uuid::now_v7();
+    let now = OffsetDateTime::now_utc();
+    sqlx::query(
+        "INSERT INTO series (
+             guild_id, id, season_id, source_recruitment_id, display_number, title,
+             best_of, hard_fearless, status, winning_team, terminal_reason, revision,
+             started_at, ended_at, created_by, updated_by, updated_at, deleted_at
+         ) VALUES (
+             $1, $2, $3, $4, 100, '상대전적 집계용 일반 내전',
+             3, false, 'IN_PROGRESS', NULL, NULL, 0,
+             $5, NULL, $6, $6, $5, NULL
+         )",
+    )
+    .bind(GUILD_ID)
+    .bind(series_id)
+    .bind(Uuid::parse_str(SEASON_ID)?)
+    .bind(Uuid::parse_str(&source_recruitment_id)?)
+    .bind(now)
+    .bind(MEMBER_ID)
+    .execute(pool)
+    .await?;
+
+    for (game_number, member_won, voided) in
+        [(1_i16, true, false), (2, false, false), (3, true, true)]
+    {
+        seed_regular_entry_head_to_head_game(pool, series_id, game_number, member_won, voided)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn seed_regular_entry_head_to_head_game(
+    pool: &PgPool,
+    series_id: Uuid,
+    game_number: i16,
+    member_won: bool,
+    voided: bool,
+) -> TestResult {
+    let now = OffsetDateTime::now_utc();
+    let input_id = Uuid::now_v7();
+    let game_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO game_inputs (
+             guild_id, id, series_id, auction_match_id, set_number, side_preset,
+             winning_side, patch_version, status, updated_by, updated_at
+         ) VALUES ($1, $2, $3, NULL, $4, 'DEFAULT', 'BLUE', NULL, $5, $6, $7)",
+    )
+    .bind(GUILD_ID)
+    .bind(input_id)
+    .bind(series_id)
+    .bind(game_number)
+    .bind(if voided { "SUPERSEDED" } else { "SUBMITTED" })
+    .bind(MEMBER_ID)
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    let voided_by = if voided { Some(MEMBER_ID) } else { None };
+    let voided_by_type = if voided { Some("USER") } else { None };
+    let voided_at = if voided { Some(now) } else { None };
+    let void_reason = if voided {
+        Some("상대전적 fixture 취소")
+    } else {
+        None
+    };
+    sqlx::query(
+        "INSERT INTO games (
+             guild_id, id, season_id, series_id, auction_match_id, source_input_id,
+             game_number, side_preset, winning_side, duration_seconds, patch_version,
+             riot_match_id, status, mmr_status, played_at, confirmed_by, confirmed_by_type,
+             confirmed_at, voided_by, voided_by_type, voided_at, void_reason
+         ) VALUES (
+             $1, $2, $3, $4, NULL, $5,
+             $6, 'DEFAULT', 'BLUE', NULL, NULL,
+             NULL, $7, $8, $9, $10, 'USER',
+             $9, $11, $12, $13, $14
+         )",
+    )
+    .bind(GUILD_ID)
+    .bind(game_id)
+    .bind(Uuid::parse_str(SEASON_ID)?)
+    .bind(series_id)
+    .bind(input_id)
+    .bind(game_number)
+    .bind(if voided { "VOIDED" } else { "CONFIRMED" })
+    .bind(if voided { "REVERSED" } else { "APPLIED" })
+    .bind(now)
+    .bind(MEMBER_ID)
+    .bind(voided_by)
+    .bind(voided_by_type)
+    .bind(voided_at)
+    .bind(void_reason)
+    .execute(pool)
+    .await?;
+
+    for (user_id, team) in [(MEMBER_ID, "TEAM_1"), (CANDIDATE_ID, "TEAM_2")] {
+        sqlx::query(
+            "INSERT INTO game_participants (guild_id, game_id, user_id, team, lane, champion_id)
+             VALUES ($1, $2, $3, $4, 'TOP', NULL)",
+        )
+        .bind(GUILD_ID)
+        .bind(game_id)
+        .bind(user_id)
+        .bind(team)
+        .execute(pool)
+        .await?;
+    }
+
+    let member_wins = i16::from(member_won);
+    let results = [
+        (
+            Uuid::now_v7(),
+            MEMBER_ID,
+            CANDIDATE_ID,
+            member_wins,
+            if member_won { 10.0 } else { -10.0 },
+        ),
+        (
+            Uuid::now_v7(),
+            CANDIDATE_ID,
+            MEMBER_ID,
+            1_i16 - member_wins,
+            if member_won { -10.0 } else { 10.0 },
+        ),
+    ];
+    for &(entry_id, user_id, opponent_user_id, wins_delta, delta) in &results {
+        sqlx::query(
+            "INSERT INTO mmr_ledger_entries (
+                 guild_id, id, season_id, user_id, lane, lane_revision, source_type,
+                 source_id, game_id, opponent_user_id, mmr_before, mmr_after, delta,
+                 games_played_delta, wins_delta, reverses_entry_id, reversed_source_type,
+                 actor_type, actor_id, note, request_id, created_at
+             ) VALUES (
+                 $1, $2, $3, $4, 'TOP', $5, 'GAME_RESULT',
+                 $6, $6, $7, 1500, 1500 + $8, $8,
+                 1, $9, NULL, NULL,
+                 'USER', $10, NULL, NULL, $11
+             )",
+        )
+        .bind(GUILD_ID)
+        .bind(entry_id)
+        .bind(Uuid::parse_str(SEASON_ID)?)
+        .bind(user_id)
+        .bind(i64::from(game_number))
+        .bind(game_id)
+        .bind(opponent_user_id)
+        .bind(delta)
+        .bind(wins_delta)
+        .bind(MEMBER_ID)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    }
+
+    if voided {
+        for &(entry_id, user_id, opponent_user_id, wins_delta, delta) in &results {
+            sqlx::query(
+                "INSERT INTO mmr_ledger_entries (
+                     guild_id, id, season_id, user_id, lane, lane_revision, source_type,
+                     source_id, game_id, opponent_user_id, mmr_before, mmr_after, delta,
+                     games_played_delta, wins_delta, reverses_entry_id, reversed_source_type,
+                     actor_type, actor_id, note, request_id, created_at
+                 ) VALUES (
+                     $1, $2, $3, $4, 'TOP', $5, 'GAME_REVERSAL',
+                     $6, $6, $7, 1500 + $8, 1500, -$8,
+                     -1, -$9, $10, 'GAME_RESULT',
+                     'USER', $11, NULL, NULL, $12
+                 )",
+            )
+            .bind(GUILD_ID)
+            .bind(Uuid::now_v7())
+            .bind(Uuid::parse_str(SEASON_ID)?)
+            .bind(user_id)
+            .bind(i64::from(game_number) + 1)
+            .bind(game_id)
+            .bind(opponent_user_id)
+            .bind(delta)
+            .bind(wins_delta)
+            .bind(entry_id)
+            .bind(MEMBER_ID)
+            .bind(now)
+            .execute(pool)
+            .await?;
+        }
+    }
+
     Ok(())
 }
 

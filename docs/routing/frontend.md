@@ -390,6 +390,9 @@ read-only로 둔다. `canCreateAuctionRecruitment`가 true면 lane assignment �
 `canSendParticipantConfirmationDms`가 true인 current active operator에게만 별도 `참가 확정 DM 발송` action을
 표시한다. 마감 자체는 DM을 보내지 않으며, 이 action의 성공 응답은 새로 queue된 수와 이미 queue된 수를 보여 준다.
 
+`EntryDraftSnapshot.headToHead`는 현재 배치된 두 참가자의 같은 lane 상대전적을 표시하는 보조 rail에
+그대로 전달한다. 배치를 교환하면 같은 row의 승패 방향만 각 TEAM_1 참가자 기준으로 반전한다.
+
 route는 same-origin `/ws`에서 모집 topic과 entry-draft topic을 함께 구독하고, 두 topic이 모두 포함된
 `subscribed` ack 뒤에만 `RealtimeEditStateBar`를 connected로 표시한다. 전자는 roster/status/capability
 변경을 recruitment revision으로, 후자는 assignment/draft metadata 변경을 draft revision으로 처리한다. 더 큰

@@ -630,6 +630,8 @@ draft
     riotTier | null, profileIconId | null, championIds
   assignments[]
     participantId, team TEAM_1|TEAM_2, lane
+headToHead[]
+  lane, userAId, userBId, plays, userAWins, userBWins
 capabilities
   canEdit, canReset, canCreateSeries, canCreateAuctionRecruitment,
   canSendParticipantConfirmationDms, canReopen, canCancel
@@ -650,6 +652,10 @@ lane assignment를 요구하지 않는다. 경매 전환 command도 source 모�
 `RANKED_SOLO_5x5`만 compact 표기(`P3`, `E2` 등)로 투영한다. 이 read는 Riot API를 호출하거나 Riot ID,
 PUUID를 노출하지 않는다. 주 계정, cache, 솔로랭크가 없거나 cache 값이 canonical tier/division이 아니면
 `null`이다.
+
+`headToHead`는 현재 모집의 JOINED 참가자끼리 같은 lane에서 맞붙은 현재 season의 확정 일반 내전
+game만 집계한다. 취소된 game과 경매 game은 제외한다. 각 row의 `userAId`와 `userBId`는 stable ID 순으로
+고정하며 두 win 수의 합은 `plays`와 같다.
 
 ### PATCH /api/guilds/{guildId}/recruitments/{id}/entry-draft
 

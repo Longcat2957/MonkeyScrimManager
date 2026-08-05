@@ -93,6 +93,7 @@
 	];
 	const participants = $derived(snapshot ? toBoardParticipants(snapshot) : []);
 	const assignments = $derived(snapshot ? toBoardAssignments(snapshot) : {});
+	const headToHead = $derived(snapshot?.headToHead ?? []);
 	const recruitment = $derived(snapshot?.recruitment ?? null);
 	const isMutating = $derived(mutation !== null);
 	const canEdit = $derived(Boolean(snapshot?.capabilities.canEdit));
@@ -889,6 +890,7 @@
 		<EntryDraftBoard
 			{participants}
 			{assignments}
+			{headToHead}
 			targetCount={snapshot.recruitment.targetCount}
 			profileIconVersion={data.championCatalog.version}
 			readOnly={!canEdit}

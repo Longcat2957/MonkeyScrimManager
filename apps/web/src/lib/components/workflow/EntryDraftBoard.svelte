@@ -5,11 +5,11 @@
 		LANES,
 		TEAMS,
 		type EntrySlot,
-		type MockEntryHeadToHeadRecord,
 		type MockEntryParticipant,
 		type MockEntrySynergyRecord,
 		type Team
 	} from '$lib/fixtures/workflow';
+	import type { EntryDraftHeadToHeadRecord } from '$lib/contracts/entryDraft';
 	import EntryCandidatePool from './EntryCandidatePool.svelte';
 	import EntryHeadToHeadRail from './EntryHeadToHeadRail.svelte';
 	import EntrySynergyRail from './EntrySynergyRail.svelte';
@@ -20,7 +20,7 @@
 		participants: MockEntryParticipant[];
 		assignments: Record<string, EntrySlot>;
 		synergies?: MockEntrySynergyRecord[];
-		headToHead?: MockEntryHeadToHeadRecord[];
+		headToHead?: EntryDraftHeadToHeadRecord[];
 		targetCount?: number;
 		profileIconVersion?: string | null;
 		readOnly?: boolean;
