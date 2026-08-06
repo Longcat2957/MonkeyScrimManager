@@ -12,6 +12,10 @@ dist
 coverage
 target
 
+# Raw design imports are not part of the product build. Optimized assets live in apps/web/static.
+/external_assets/
+/GeneratedImageForLogo/
+
 *.local
 *.log
 *.pem
