@@ -23,6 +23,11 @@ export interface ChampionCatalogLoadOptions {
 }
 
 const slugTokenPattern = /[a-z0-9]+/g;
+const canonicalChampionIdPattern = /^[A-Za-z0-9]{1,64}$/;
+
+export function isCanonicalChampionId(value: string): boolean {
+	return canonicalChampionIdPattern.test(value);
+}
 
 export function normalizeChampionSlug(value: string): string {
 	return (value.toLowerCase().match(slugTokenPattern) ?? []).join('');
@@ -159,8 +164,11 @@ export function createChampionCatalog(
 ): ChampionCatalog {
 	const intlLocale = dataDragonLocaleToIntlLocale(locale);
 	const champions = Object.values(response.data)
+		.filter((champion) => isCanonicalChampionId(champion.id))
 		.map((champion) => toCatalogEntry(champion))
 		.sort((a, b) => a.name.localeCompare(b.name, intlLocale));
+
+	assertUsableChampionCatalog(champions);
 
 	return {
 		version: response.version,
@@ -171,6 +179,23 @@ export function createChampionCatalog(
 		byName: Object.fromEntries(champions.map((champion) => [champion.name, champion])),
 		byIdSlug: Object.fromEntries(champions.map((champion) => [champion.idSlug, champion]))
 	};
+}
+
+function assertUsableChampionCatalog(champions: ChampionCatalogEntry[]): void {
+	if (champions.length === 0) {
+		throw new Error('Data Dragon champion catalog has no canonical champions');
+	}
+
+	for (const [field, valueOf] of [
+		['id', (champion: ChampionCatalogEntry) => champion.id],
+		['key', (champion: ChampionCatalogEntry) => champion.key],
+		['name', (champion: ChampionCatalogEntry) => champion.name]
+	] as const) {
+		const values = champions.map(valueOf);
+		if (new Set(values).size !== values.length) {
+			throw new Error(`Data Dragon champion catalog has duplicate canonical ${field} values`);
+		}
+	}
 }
 
 export function findChampion(

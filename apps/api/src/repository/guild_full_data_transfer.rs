@@ -23,6 +23,7 @@ const ARCHIVE_KIND: &str = "GUILD_FULL_SNAPSHOT";
 const ARCHIVE_SCHEMA_VERSION: u16 = 1;
 const MAX_ARCHIVE_ROWS: usize = 250_000;
 const MAX_TEXT_CHARS: usize = 100;
+const MAX_CHAMPION_ID_BYTES: usize = 64;
 const PREVIEW_TTL: Duration = Duration::minutes(15);
 const IDEMPOTENCY_TTL: Duration = Duration::hours(24);
 const APPLY_METHOD: &str = "POST";
@@ -36,6 +37,14 @@ const CROSS_GUILD_DISCORD_LINKS: [(&str, &[&str]); 4] = [
         "auction_tournaments",
         &["end_card_channel_id", "end_card_message_id"],
     ),
+];
+
+const CHAMPION_ID_TABLE_NAMES: [&str; 5] = [
+    "user_champion_preferences",
+    "game_input_picks",
+    "game_input_bans",
+    "game_participants",
+    "game_bans",
 ];
 
 const ACTIVE_SEASON_DOMAIN_TABLE_NAMES: [&str; 8] = [
@@ -733,9 +742,30 @@ fn validate_archive(
             {
                 return Err(GuildFullDataTransferRepositoryError::InvalidArchive);
             }
+            if CHAMPION_ID_TABLE_NAMES.contains(&table.as_str())
+                && !valid_archive_champion_id(table, object.get("champion_id"))
+            {
+                return Err(
+                    GuildFullDataTransferRepositoryError::ArchiveConstraintViolation {
+                        table: table.to_owned(),
+                    },
+                );
+            }
         }
     }
     Ok(())
+}
+
+fn valid_archive_champion_id(table: &str, value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(value)) => {
+            !value.is_empty()
+                && value.len() <= MAX_CHAMPION_ID_BYTES
+                && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        }
+        Some(Value::Null) => table == "game_participants",
+        _ => false,
+    }
 }
 
 fn valid_text(value: &str) -> bool {
@@ -1774,6 +1804,43 @@ mod tests {
             validate_archive(&value),
             Err(GuildFullDataTransferRepositoryError::InvalidArchive)
         ));
+    }
+
+    #[test]
+    fn archive_rejects_mode_specific_champion_ids_before_preview() {
+        for table in CHAMPION_ID_TABLE_NAMES {
+            let mut value = archive();
+            let mut row = json!({ "champion_id": "Jade_Ahri" });
+            if GUILD_SCOPED_TABLE_NAMES.contains(&table) {
+                row.as_object_mut().expect("row").insert(
+                    "guild_id".to_owned(),
+                    Value::String(value.source.guild_id.as_str().to_owned()),
+                );
+            }
+            value.tables.get_mut(table).expect("table").push(row);
+
+            assert!(matches!(
+                validate_archive(&value),
+                Err(GuildFullDataTransferRepositoryError::ArchiveConstraintViolation {
+                    table: rejected_table
+                }) if rejected_table == table
+            ));
+        }
+    }
+
+    #[test]
+    fn archive_allows_an_unselected_game_participant_champion() {
+        let mut value = archive();
+        value
+            .tables
+            .get_mut("game_participants")
+            .expect("table")
+            .push(json!({
+                "guild_id": value.source.guild_id.as_str(),
+                "champion_id": null
+            }));
+
+        assert!(validate_archive(&value).is_ok());
     }
 
     #[test]

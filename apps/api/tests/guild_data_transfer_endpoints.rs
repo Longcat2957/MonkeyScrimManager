@@ -226,6 +226,24 @@ async fn assert_full_data_transfer_flow(app: &Router, pool: &PgPool) -> TestResu
             .map(Vec::len),
         Some(2)
     );
+
+    let mut polluted_archive = archive.clone();
+    polluted_archive["tables"]["user_champion_preferences"][0]["champion_id"] = json!("Jade_Ahri");
+    let rejected = operator_post(
+        app,
+        &preview_path,
+        Some(json!({ "archive": polluted_archive })),
+        None,
+    )
+    .await?;
+    assert_error(
+        rejected,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "full_archive_constraint_violation",
+        "전체 백업의 챔피언 ID에 일반 게임에서 사용할 수 없는 값이 포함되어 있습니다.",
+    )
+    .await?;
+
     make_cross_guild_archive(&mut archive)?;
     replace_with_current_global_profile(pool).await?;
 

@@ -3355,4 +3355,14 @@ mod tests {
             Err(DummyUsersRepositoryError::InvalidInput { field: "laneMmr" })
         ));
     }
+
+    #[test]
+    fn champion_preferences_reject_mode_specific_ids() {
+        assert!(matches!(
+            validate_champion_ids(&["Jade_Ahri".to_owned()]),
+            Err(DummyUsersRepositoryError::InvalidInput {
+                field: "championIds"
+            })
+        ));
+    }
 }

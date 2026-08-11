@@ -23758,6 +23758,12 @@ mod tests {
             set_pick.clone(),
             set_pick.clone(),
         ]));
+        assert!(!validate_series_pick_ban_bulk_items(&[
+            SeriesPickBanBulkItem::SetPick {
+                player_id: UserId::from(&user_id("100000000000000001")),
+                champion_id: "Jade_Ahri".to_owned(),
+            },
+        ]));
         assert!(
             serde_json::from_value::<SeriesPickBanOperation>(json!({
                 "type": "APPLY_BULK",
