@@ -16328,6 +16328,7 @@ async fn enqueue_recruitment_message_update(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn enqueue_recruitment_message_notification(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -16448,6 +16449,7 @@ async fn enqueue_auction_recruitment_message_update(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn enqueue_auction_recruitment_message_notification(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,

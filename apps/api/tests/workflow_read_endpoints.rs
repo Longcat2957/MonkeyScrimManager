@@ -597,7 +597,7 @@ async fn assert_browser_auction_tournament_cancel(app: &Router) -> TestResult {
     let restore = body_json(restore).await?;
     assert_eq!(restore["data"]["recruitment"]["status"], "CLOSED");
     assert_eq!(restore["data"]["permissions"]["canRestore"], false);
-    assert_eq!(restore["data"]["links"]["draft"].is_string(), true);
+    assert!(restore["data"]["links"]["draft"].is_string());
     Ok(())
 }
 
