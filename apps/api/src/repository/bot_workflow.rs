@@ -74,10 +74,16 @@ const SERIES_GAME_REVERT_METHOD: &str = "DELETE";
 const SERIES_GAME_REVERT_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/games/last";
 const SERIES_EARLY_COMPLETE_METHOD: &str = "POST";
 const SERIES_EARLY_COMPLETE_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/complete";
+const RECRUITMENT_CANCEL_ROUTE: &str = "/api/guilds/{guildId}/recruitments/{id}";
+const RECRUITMENT_RESTORE_ROUTE: &str = "/api/guilds/{guildId}/recruitments/{id}/restore";
 const AUCTION_RECRUITMENT_CREATE_ROUTE: &str = "/api/guilds/{guildId}/auction-recruitments";
 const AUCTION_RECRUITMENT_CLOSE_ROUTE: &str =
     "/api/guilds/{guildId}/auction-recruitments/{id}/close";
+const AUCTION_RECRUITMENT_REOPEN_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-recruitments/{id}/reopen";
 const AUCTION_RECRUITMENT_CANCEL_ROUTE: &str = "/api/guilds/{guildId}/auction-recruitments/{id}";
+const AUCTION_RECRUITMENT_RESTORE_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-recruitments/{id}/restore";
 const AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE: &str =
     "/api/guilds/{guildId}/auction-recruitments/{id}/participant-confirmation-dms";
 const AUCTION_RECRUITMENT_FORCE_CANCEL_METHOD: &str = "POST";
@@ -439,6 +445,8 @@ pub struct AuctionRecruitmentLinksSnapshot {
 pub struct AuctionRecruitmentPermissions {
     pub can_manage_members: bool,
     pub can_close: bool,
+    pub can_reopen: bool,
+    pub can_restore: bool,
     pub can_send_participant_confirmation_dms: bool,
     pub can_cancel: bool,
 }
@@ -2056,7 +2064,7 @@ pub async fn get_auction_recruitment_snapshot(
             .map_err(AttemptError::into_public)?;
     if !matches!(
         snapshot.recruitment.status,
-        RecruitmentStatus::Open | RecruitmentStatus::Closed
+        RecruitmentStatus::Open | RecruitmentStatus::Closed | RecruitmentStatus::Cancelled
     ) {
         return Err(BotWorkflowError::RecruitmentNotFound);
     }
@@ -2884,6 +2892,34 @@ pub async fn close_web_auction_recruitment(
     .await
 }
 
+pub async fn reopen_web_auction_recruitment(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: AuctionRecruitmentId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction recruitment revision must be non-negative",
+        ));
+    }
+    execute_web_auction_recruitment_lifecycle(
+        pool,
+        guild_id,
+        actor_id,
+        idempotency_key,
+        request_id,
+        WebAuctionRecruitmentLifecycle::Reopen {
+            recruitment_id,
+            expected_revision,
+        },
+    )
+    .await
+}
+
 pub async fn dispatch_web_auction_recruitment_participant_confirmation_dms(
     pool: &PgPool,
     guild_id: &GuildId,
@@ -2935,16 +2971,53 @@ pub async fn cancel_web_auction_recruitment(
     guild_id: &GuildId,
     recruitment_id: AuctionRecruitmentId,
     actor_id: &UserId,
+    expected_revision: i64,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction recruitment revision must be non-negative",
+        ));
+    }
     execute_web_auction_recruitment_lifecycle(
         pool,
         guild_id,
         actor_id,
         idempotency_key,
         request_id,
-        WebAuctionRecruitmentLifecycle::Cancel { recruitment_id },
+        WebAuctionRecruitmentLifecycle::Cancel {
+            recruitment_id,
+            expected_revision,
+        },
+    )
+    .await
+}
+
+pub async fn restore_web_auction_recruitment(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: AuctionRecruitmentId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction recruitment revision must be non-negative",
+        ));
+    }
+    execute_web_auction_recruitment_lifecycle(
+        pool,
+        guild_id,
+        actor_id,
+        idempotency_key,
+        request_id,
+        WebAuctionRecruitmentLifecycle::Restore {
+            recruitment_id,
+            expected_revision,
+        },
     )
     .await
 }
@@ -3113,16 +3186,53 @@ pub async fn cancel_web_recruitment(
     guild_id: &GuildId,
     recruitment_id: RecruitmentId,
     actor_id: &UserId,
+    expected_revision: i64,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<RecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected recruitment revision must be non-negative",
+        ));
+    }
     execute_web_recruitment_mutation(
         pool,
         guild_id,
         actor_id,
         idempotency_key,
         request_id,
-        WebRecruitmentMutation::Cancel { recruitment_id },
+        WebRecruitmentMutation::Cancel {
+            recruitment_id,
+            expected_revision,
+        },
+    )
+    .await
+}
+
+pub async fn restore_web_recruitment(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: RecruitmentId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<RecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected recruitment revision must be non-negative",
+        ));
+    }
+    execute_web_recruitment_mutation(
+        pool,
+        guild_id,
+        actor_id,
+        idempotency_key,
+        request_id,
+        WebRecruitmentMutation::Restore {
+            recruitment_id,
+            expected_revision,
+        },
     )
     .await
 }
@@ -3698,7 +3808,7 @@ pub async fn get_recruitment_snapshot(
         .map_err(AttemptError::into_public)?;
     if !matches!(
         snapshot.recruitment.status,
-        RecruitmentStatus::Open | RecruitmentStatus::Closed
+        RecruitmentStatus::Open | RecruitmentStatus::Closed | RecruitmentStatus::Cancelled
     ) {
         return Err(BotWorkflowError::RecruitmentNotFound);
     }
@@ -4632,7 +4742,10 @@ async fn execute_web_recruitment_mutation_attempt(
             .await?;
             (Some(before), snapshot)
         }
-        WebRecruitmentMutation::Cancel { recruitment_id } => {
+        WebRecruitmentMutation::Cancel {
+            recruitment_id,
+            expected_revision,
+        } => {
             let locked = lock_recruitment(transaction, guild_id, *recruitment_id).await?;
             require_active_creator_or_operator(
                 transaction,
@@ -4642,6 +4755,12 @@ async fn execute_web_recruitment_mutation_attempt(
                 &operator_role_id,
             )
             .await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
             ensure_cancellable(locked.status)?;
             let before = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
             let cancelled = sqlx::query(
@@ -4651,16 +4770,74 @@ async fn execute_web_recruitment_mutation_attempt(
                      updated_by = $1,
                      updated_at = $2,
                      cancelled_at = $2
-                 WHERE guild_id = $3 AND id = $4",
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND revision = $5
+                   AND status IN ('OPEN', 'CLOSED')",
             )
             .bind(actor_id)
             .bind(prepared.now)
             .bind(guild_id)
             .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
             .execute(&mut **transaction)
             .await?;
             if cancelled.rows_affected() != 1 {
                 return Err(AttemptError::InvariantViolation);
+            }
+            let snapshot = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
+            (Some(before), snapshot)
+        }
+        WebRecruitmentMutation::Restore {
+            recruitment_id,
+            expected_revision,
+        } => {
+            let locked = lock_recruitment(transaction, guild_id, *recruitment_id).await?;
+            require_active_creator_or_operator(
+                transaction,
+                guild_id,
+                actor_id,
+                &locked.created_by,
+                &operator_role_id,
+            )
+            .await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_restorable(locked.status)?;
+            let restored_status = if locked.closed_at.is_some() {
+                RecruitmentStatus::Closed
+            } else {
+                RecruitmentStatus::Open
+            };
+            let before = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
+            let restored = sqlx::query(
+                "UPDATE recruitments
+                 SET status = $1,
+                     revision = revision + 1,
+                     updated_by = $2,
+                     updated_at = $3,
+                     converted_at = NULL,
+                     cancelled_at = NULL,
+                     message_id = NULL
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND revision = $6
+                   AND status = 'CANCELLED'",
+            )
+            .bind(restored_status)
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
+            .execute(&mut **transaction)
+            .await?;
+            if restored.rows_affected() != 1 {
+                return Err(AttemptError::RecruitmentRestoreUnavailable(locked.status));
             }
             let snapshot = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
             (Some(before), snapshot)
@@ -6259,7 +6436,7 @@ async fn execute_web_series_lifecycle_attempt(
             if deleted.rows_affected() != 1 {
                 return Err(AttemptError::InvariantViolation);
             }
-            format!("/g/{guild_id}/series")
+            format!("/g/{guild_id}/recruitments/{source_recruitment_id}")
         }
     };
     let result = SeriesLifecycleResult { next_href };
@@ -6983,7 +7160,57 @@ async fn execute_web_auction_recruitment_lifecycle_attempt(
                     .await?;
             (Some(before), snapshot)
         }
-        WebAuctionRecruitmentLifecycle::Cancel { recruitment_id } => {
+        WebAuctionRecruitmentLifecycle::Reopen {
+            recruitment_id,
+            expected_revision,
+        } => {
+            require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id)
+                .await?;
+            let locked = lock_auction_recruitment(transaction, guild_id, *recruitment_id).await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_auction_setup_editable(locked.status)?;
+            let before =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            let updated = sqlx::query(
+                "UPDATE auction_recruitments
+                 SET status = 'OPEN',
+                     revision = revision + 1,
+                     updated_by = $1,
+                     updated_at = $2,
+                     closed_at = NULL
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND revision = $5
+                   AND status = 'CLOSED'",
+            )
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
+            .execute(&mut **transaction)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            let snapshot =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            (Some(before), snapshot)
+        }
+        WebAuctionRecruitmentLifecycle::Cancel {
+            recruitment_id,
+            expected_revision,
+        } => {
             let locked = lock_auction_recruitment(transaction, guild_id, *recruitment_id).await?;
             require_active_creator_or_operator(
                 transaction,
@@ -6993,25 +7220,96 @@ async fn execute_web_auction_recruitment_lifecycle_attempt(
                 &operator_role_id,
             )
             .await?;
-            ensure_open(locked.status)?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_cancellable(locked.status)?;
             let before =
                 auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
                     .await?;
-            sqlx::query(
+            let cancelled = sqlx::query(
                 "UPDATE auction_recruitments
                  SET status = 'CANCELLED',
                      revision = revision + 1,
                      updated_by = $1,
                      updated_at = $2,
                      cancelled_at = $2
-                 WHERE guild_id = $3 AND id = $4",
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND revision = $5
+                   AND status IN ('OPEN', 'CLOSED')",
             )
             .bind(actor_id)
             .bind(prepared.now)
             .bind(guild_id)
             .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
             .execute(&mut **transaction)
             .await?;
+            if cancelled.rows_affected() != 1 {
+                return Err(AttemptError::InvariantViolation);
+            }
+            let snapshot =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            (Some(before), snapshot)
+        }
+        WebAuctionRecruitmentLifecycle::Restore {
+            recruitment_id,
+            expected_revision,
+        } => {
+            let locked = lock_auction_recruitment(transaction, guild_id, *recruitment_id).await?;
+            require_active_creator_or_operator(
+                transaction,
+                guild_id,
+                actor_id,
+                &locked.created_by,
+                &operator_role_id,
+            )
+            .await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_restorable(locked.status)?;
+            let restored_status = if locked.closed_at.is_some() {
+                RecruitmentStatus::Closed
+            } else {
+                RecruitmentStatus::Open
+            };
+            let before =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            let restored = sqlx::query(
+                "UPDATE auction_recruitments
+                 SET status = $1,
+                     revision = revision + 1,
+                     updated_by = $2,
+                     updated_at = $3,
+                     converted_at = NULL,
+                     cancelled_at = NULL,
+                     message_id = NULL
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND revision = $6
+                   AND status = 'CANCELLED'",
+            )
+            .bind(restored_status)
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
+            .execute(&mut **transaction)
+            .await?;
+            if restored.rows_affected() != 1 {
+                return Err(AttemptError::RecruitmentRestoreUnavailable(locked.status));
+            }
             let snapshot =
                 auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
                     .await?;
@@ -8133,8 +8431,8 @@ async fn force_cancel_auction_recruitment_attempt(
                     &snapshot,
                     AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE,
                     format!(
-                        "auction-recruitment:{}:message:delete",
-                        snapshot.recruitment.id
+                        "auction-recruitment:{}:message:delete:{}",
+                        snapshot.recruitment.id, snapshot.recruitment.revision
                     ),
                     prepared.recruitment_notification_id,
                     prepared.now,
@@ -8359,8 +8657,8 @@ async fn cancel_locked_auction_tournament(
             &source_snapshot,
             AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE,
             format!(
-                "auction-recruitment:{}:message:delete",
-                source_snapshot.recruitment.id
+                "auction-recruitment:{}:message:delete:{}",
+                source_snapshot.recruitment.id, source_snapshot.recruitment.revision
             ),
             recruitment_notification_id,
             now,
@@ -9255,9 +9553,12 @@ async fn auction_recruitment_snapshot(
         permissions: AuctionRecruitmentPermissions {
             can_manage_members: status == RecruitmentStatus::Open && is_operator,
             can_close: status == RecruitmentStatus::Open && is_operator,
+            can_reopen: status == RecruitmentStatus::Closed && is_operator,
+            can_restore: status == RecruitmentStatus::Cancelled
+                && (is_operator || created_by == *viewer_id),
             can_send_participant_confirmation_dms: status == RecruitmentStatus::Closed
                 && is_operator,
-            can_cancel: status == RecruitmentStatus::Open
+            can_cancel: matches!(status, RecruitmentStatus::Open | RecruitmentStatus::Closed)
                 && (is_operator || created_by == *viewer_id),
         },
     })
@@ -15952,12 +16253,14 @@ async fn enqueue_web_recruitment_message_notification(
     notification_id: NotificationId,
     now: OffsetDateTime,
 ) -> Result<(), AttemptError> {
-    let (Some(channel_id), Some(_message_id)) = (
-        snapshot.recruitment.channel_id.as_ref(),
-        snapshot.recruitment.message_id.as_ref(),
-    ) else {
+    let Some(channel_id) = snapshot.recruitment.channel_id.as_ref() else {
         return Ok(());
     };
+    if !matches!(command, WebRecruitmentMutation::Restore { .. })
+        && snapshot.recruitment.message_id.is_none()
+    {
+        return Ok(());
+    }
     let (notification_type, deduplication_key) = match command {
         WebRecruitmentMutation::AddMember { .. }
         | WebRecruitmentMutation::RemoveMember { .. }
@@ -15970,7 +16273,17 @@ async fn enqueue_web_recruitment_message_notification(
         ),
         WebRecruitmentMutation::Cancel { .. } => (
             RECRUITMENT_MESSAGE_DELETE_TYPE,
-            format!("recruitment:{}:message:delete", snapshot.recruitment.id),
+            format!(
+                "recruitment:{}:message:delete:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
+        ),
+        WebRecruitmentMutation::Restore { .. } => (
+            RECRUITMENT_MESSAGE_CREATE_TYPE,
+            format!(
+                "recruitment:{}:message:restore:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
         ),
     };
     enqueue_recruitment_message_notification(
@@ -16055,14 +16368,23 @@ async fn enqueue_auction_recruitment_message_lifecycle_notification(
     notification_id: NotificationId,
     now: OffsetDateTime,
 ) -> Result<(), AttemptError> {
-    let (Some(channel_id), Some(_message_id)) = (
-        snapshot.recruitment.channel_id.as_ref(),
-        snapshot.recruitment.message_id.as_ref(),
-    ) else {
+    let Some(channel_id) = snapshot.recruitment.channel_id.as_ref() else {
         return Ok(());
     };
+    if !matches!(command, WebAuctionRecruitmentLifecycle::Restore { .. })
+        && snapshot.recruitment.message_id.is_none()
+    {
+        return Ok(());
+    }
     let (notification_type, deduplication_key) = match command {
         WebAuctionRecruitmentLifecycle::Close { .. } => (
+            AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE,
+            format!(
+                "auction-recruitment:{}:message:update:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
+        ),
+        WebAuctionRecruitmentLifecycle::Reopen { .. } => (
             AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE,
             format!(
                 "auction-recruitment:{}:message:update:{}",
@@ -16072,8 +16394,15 @@ async fn enqueue_auction_recruitment_message_lifecycle_notification(
         WebAuctionRecruitmentLifecycle::Cancel { .. } => (
             AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE,
             format!(
-                "auction-recruitment:{}:message:delete",
-                snapshot.recruitment.id
+                "auction-recruitment:{}:message:delete:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
+        ),
+        WebAuctionRecruitmentLifecycle::Restore { .. } => (
+            AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE,
+            format!(
+                "auction-recruitment:{}:message:restore:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
             ),
         ),
     };
@@ -16289,7 +16618,7 @@ async fn lock_recruitment(
     recruitment_id: RecruitmentId,
 ) -> Result<RecruitmentLockRow, AttemptError> {
     sqlx::query_as::<_, RecruitmentLockRow>(
-        "SELECT season_id, status, target_count, best_of, hard_fearless, revision, created_by
+        "SELECT season_id, status, closed_at, target_count, best_of, hard_fearless, revision, created_by
          FROM recruitments
          WHERE guild_id = $1 AND id = $2
          FOR UPDATE",
@@ -16307,7 +16636,7 @@ async fn lock_auction_recruitment(
     recruitment_id: AuctionRecruitmentId,
 ) -> Result<AuctionRecruitmentLockRow, AttemptError> {
     sqlx::query_as::<_, AuctionRecruitmentLockRow>(
-        "SELECT season_id, format, status, target_count, semifinal_best_of, final_best_of,
+        "SELECT season_id, format, status, closed_at, target_count, semifinal_best_of, final_best_of,
                 hard_fearless, revision, created_by
          FROM auction_recruitments
          WHERE guild_id = $1 AND id = $2
@@ -20146,6 +20475,14 @@ fn ensure_cancellable(status: RecruitmentStatus) -> Result<(), AttemptError> {
     }
 }
 
+fn ensure_restorable(status: RecruitmentStatus) -> Result<(), AttemptError> {
+    if status == RecruitmentStatus::Cancelled {
+        Ok(())
+    } else {
+        Err(AttemptError::RecruitmentRestoreUnavailable(status))
+    }
+}
+
 fn ensure_entry_editable(status: RecruitmentStatus) -> Result<(), AttemptError> {
     if status == RecruitmentStatus::Closed {
         Ok(())
@@ -20930,8 +21267,17 @@ enum WebAuctionRecruitmentLifecycle {
     Close {
         recruitment_id: AuctionRecruitmentId,
     },
+    Reopen {
+        recruitment_id: AuctionRecruitmentId,
+        expected_revision: i64,
+    },
     Cancel {
         recruitment_id: AuctionRecruitmentId,
+        expected_revision: i64,
+    },
+    Restore {
+        recruitment_id: AuctionRecruitmentId,
+        expected_revision: i64,
     },
 }
 
@@ -20949,11 +21295,23 @@ impl WebAuctionRecruitmentLifecycle {
                 audit_action: "AUCTION_RECRUITMENT_CLOSED",
                 event_type: "AUCTION_RECRUITMENT_CLOSED",
             },
+            Self::Reopen { .. } => WebAuctionRecruitmentLifecycleMetadata {
+                method: "POST",
+                route_template: AUCTION_RECRUITMENT_REOPEN_ROUTE,
+                audit_action: "AUCTION_RECRUITMENT_REOPENED",
+                event_type: "AUCTION_RECRUITMENT_REOPENED",
+            },
             Self::Cancel { .. } => WebAuctionRecruitmentLifecycleMetadata {
                 method: "DELETE",
                 route_template: AUCTION_RECRUITMENT_CANCEL_ROUTE,
                 audit_action: "AUCTION_RECRUITMENT_CANCELLED",
                 event_type: "AUCTION_RECRUITMENT_CANCELLED",
+            },
+            Self::Restore { .. } => WebAuctionRecruitmentLifecycleMetadata {
+                method: "POST",
+                route_template: AUCTION_RECRUITMENT_RESTORE_ROUTE,
+                audit_action: "AUCTION_RECRUITMENT_RESTORED",
+                event_type: "AUCTION_RECRUITMENT_RESTORED",
             },
         }
     }
@@ -21268,6 +21626,11 @@ enum WebRecruitmentMutation {
     },
     Cancel {
         recruitment_id: RecruitmentId,
+        expected_revision: i64,
+    },
+    Restore {
+        recruitment_id: RecruitmentId,
+        expected_revision: i64,
     },
 }
 
@@ -21299,9 +21662,15 @@ impl WebRecruitmentMutation {
             },
             Self::Cancel { .. } => WebRecruitmentMutationMetadata {
                 method: "DELETE",
-                route_template: "/api/guilds/{guildId}/recruitments/{id}",
+                route_template: RECRUITMENT_CANCEL_ROUTE,
                 audit_action: "RECRUITMENT_CANCELLED",
                 event_type: "RECRUITMENT_CANCELLED",
+            },
+            Self::Restore { .. } => WebRecruitmentMutationMetadata {
+                method: "POST",
+                route_template: RECRUITMENT_RESTORE_ROUTE,
+                audit_action: "RECRUITMENT_RESTORED",
+                event_type: "RECRUITMENT_RESTORED",
             },
         }
     }
@@ -21406,6 +21775,7 @@ impl SeasonRow {
 struct RecruitmentLockRow {
     season_id: Uuid,
     status: RecruitmentStatus,
+    closed_at: Option<OffsetDateTime>,
     target_count: i16,
     best_of: i16,
     hard_fearless: bool,
@@ -21418,6 +21788,7 @@ struct AuctionRecruitmentLockRow {
     season_id: Uuid,
     format: String,
     status: RecruitmentStatus,
+    closed_at: Option<OffsetDateTime>,
     target_count: i16,
     semifinal_best_of: Option<i16>,
     final_best_of: i16,
@@ -22304,6 +22675,8 @@ enum AttemptError {
     AuctionTournamentNotFound,
     #[error("recruitment must be OPEN, but is {0}")]
     RecruitmentNotOpen(RecruitmentStatus),
+    #[error("recruitment can only be restored while CANCELLED, but is {0}")]
+    RecruitmentRestoreUnavailable(RecruitmentStatus),
     #[error(
         "participant confirmation DMs can only be requested while recruitment is CLOSED, but is {0}"
     )]
@@ -22579,6 +22952,9 @@ impl AttemptError {
             Self::AuctionRecruitmentNotFound => BotWorkflowError::RecruitmentNotFound,
             Self::AuctionTournamentNotFound => BotWorkflowError::AuctionTournamentNotFound,
             Self::RecruitmentNotOpen(status) => BotWorkflowError::RecruitmentNotOpen(status),
+            Self::RecruitmentRestoreUnavailable(status) => {
+                BotWorkflowError::RecruitmentRestoreUnavailable(status)
+            }
             Self::ParticipantConfirmationDmUnavailable(status) => {
                 BotWorkflowError::ParticipantConfirmationDmUnavailable(status)
             }
@@ -22874,6 +23250,8 @@ pub enum BotWorkflowError {
     AuctionTournamentNotFound,
     #[error("recruitment must be OPEN, but is {0}")]
     RecruitmentNotOpen(RecruitmentStatus),
+    #[error("recruitment can only be restored while CANCELLED, but is {0}")]
+    RecruitmentRestoreUnavailable(RecruitmentStatus),
     #[error(
         "participant confirmation DMs can only be requested while recruitment is CLOSED, but is {0}"
     )]

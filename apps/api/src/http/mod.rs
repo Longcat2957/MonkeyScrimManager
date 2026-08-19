@@ -189,6 +189,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             post(bot_routes::reopen_recruitment),
         )
         .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}/restore",
+            post(bot_routes::restore_recruitment),
+        )
+        .route(
             "/api/guilds/{guild_id}/recruitments/{recruitment_id}/auction-recruitment",
             post(bot_routes::convert_entry_draft_to_auction_recruitment),
         )
@@ -251,6 +255,14 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/close",
             post(bot_routes::close_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/reopen",
+            post(bot_routes::reopen_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/restore",
+            post(bot_routes::restore_auction_recruitment),
         )
         .route(
             "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/participant-confirmation-dms",

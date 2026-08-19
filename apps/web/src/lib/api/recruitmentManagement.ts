@@ -11,6 +11,7 @@ import { apiRoute } from '$lib/routing';
 import { z } from 'zod';
 
 const idempotencyKeySchema = z.uuid();
+const revisionSchema = z.number().int().nonnegative();
 const recruitmentSnapshotEnvelopeSchema = z
 	.object({ data: recruitmentSnapshotSchema, meta: responseMetaSchema })
 	.strict();
@@ -24,7 +25,8 @@ type RecruitmentManagementAction =
 	| 'remove_member'
 	| 'start_entry'
 	| 'dispatch_participant_confirmation_dms'
-	| 'cancel';
+	| 'cancel'
+	| 'restore';
 
 export class RecruitmentManagementApiError extends Error {
 	constructor(
@@ -36,6 +38,16 @@ export class RecruitmentManagementApiError extends Error {
 		super(message);
 		this.name = 'RecruitmentManagementApiError';
 	}
+}
+
+export function isRecruitmentManagementRevisionConflict(
+	cause: unknown
+): cause is RecruitmentManagementApiError {
+	return (
+		cause instanceof RecruitmentManagementApiError &&
+		cause.status === 409 &&
+		cause.code === 'recruitment_revision_conflict'
+	);
 }
 
 function readCsrfToken(): string | null {
@@ -79,7 +91,8 @@ function actionLabel(action: RecruitmentManagementAction): string {
 	if (action === 'remove_member') return '참가자 제거';
 	if (action === 'start_entry') return '엔트리 편성 시작';
 	if (action === 'dispatch_participant_confirmation_dms') return '참가 확정 DM 발송';
-	return '모집 삭제';
+	if (action === 'restore') return '모집 복구';
+	return '모집 취소';
 }
 
 function fallbackErrorMessage(status: number, action: RecruitmentManagementAction): string {
@@ -94,7 +107,9 @@ function fallbackErrorMessage(status: number, action: RecruitmentManagementActio
 		if (action === 'dispatch_participant_confirmation_dms') {
 			return '참가 확정 DM 발송에는 길드 운영자 권한이 필요합니다.';
 		}
-		return '이 모집을 삭제할 권한이 없습니다.';
+		return action === 'restore'
+			? '이 모집을 복구할 권한이 없습니다.'
+			: '이 모집을 취소할 권한이 없습니다.';
 	}
 	if (status === 404) return '요청한 내전 모집을 찾을 수 없습니다.';
 	if (status === 409) return '모집 상태가 변경되었습니다. 최신 상태를 확인해 주세요.';
@@ -316,16 +331,73 @@ export async function dispatchRecruitmentParticipantConfirmationDms(
 export async function cancelRecruitment(
 	guildId: string,
 	recruitmentId: string,
+	expectedRevision: number,
 	idempotencyKey: string
-): Promise<void> {
-	await requestMutation(
+): Promise<RecruitmentSnapshot> {
+	if (!revisionSchema.safeParse(expectedRevision).success) {
+		throw new RecruitmentManagementApiError(
+			'모집 버전 정보가 올바르지 않습니다.',
+			0,
+			'invalid_revision',
+			null
+		);
+	}
+	const response = await requestMutation(
 		apiRoute(['guilds', guildId, 'recruitments', recruitmentId]),
 		{
 			method: 'DELETE',
-			headers: mutationHeaders(idempotencyKey)
+			headers: mutationHeaders(idempotencyKey),
+			body: JSON.stringify({ expectedRevision })
 		},
 		'cancel'
 	);
+	const payload = await responsePayload(response);
+	const parsed = recruitmentSnapshotEnvelopeSchema.safeParse(payload);
+	if (!parsed.success) {
+		throw new RecruitmentManagementApiError(
+			'모집 취소 응답 형식이 올바르지 않습니다.',
+			response.status,
+			'invalid_response',
+			null
+		);
+	}
+	return parsed.data.data;
+}
+
+export async function restoreRecruitment(
+	guildId: string,
+	recruitmentId: string,
+	expectedRevision: number,
+	idempotencyKey: string
+): Promise<RecruitmentSnapshot> {
+	if (!revisionSchema.safeParse(expectedRevision).success) {
+		throw new RecruitmentManagementApiError(
+			'모집 버전 정보가 올바르지 않습니다.',
+			0,
+			'invalid_revision',
+			null
+		);
+	}
+	const response = await requestMutation(
+		apiRoute(['guilds', guildId, 'recruitments', recruitmentId, 'restore']),
+		{
+			method: 'POST',
+			headers: mutationHeaders(idempotencyKey),
+			body: JSON.stringify({ expectedRevision })
+		},
+		'restore'
+	);
+	const payload = await responsePayload(response);
+	const parsed = recruitmentSnapshotEnvelopeSchema.safeParse(payload);
+	if (!parsed.success) {
+		throw new RecruitmentManagementApiError(
+			'모집 복구 응답 형식이 올바르지 않습니다.',
+			response.status,
+			'invalid_response',
+			null
+		);
+	}
+	return parsed.data.data;
 }
 
 export function recruitmentManagementErrorText(cause: unknown): string {

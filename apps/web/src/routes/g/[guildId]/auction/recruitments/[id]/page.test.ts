@@ -8,11 +8,12 @@ const guildId = '1525851181157580861';
 const recruitmentId = '01900000-0000-7000-8000-000000000501';
 
 function renderPage(
-	status: 'OPEN' | 'CLOSED',
+	status: 'OPEN' | 'CLOSED' | 'CANCELLED',
 	canClose = false,
 	canCancel = false,
 	canManageMembers = false,
-	joinedParticipantCount = 1
+	joinedParticipantCount = 1,
+	canRestore = false
 ) {
 	return render(Page, {
 		props: {
@@ -50,6 +51,8 @@ function renderPage(
 					permissions: {
 						canManageMembers,
 						canClose,
+						canReopen: false,
+						canRestore,
 						canSendParticipantConfirmationDms: false,
 						canCancel
 					}
@@ -68,16 +71,25 @@ describe('auction recruitment page', () => {
 		expect(body).toContain('Longcat');
 		expect(body).toContain('신청 라인 · 미드');
 		expect(body).not.toContain('모집 마감');
-		expect(body).not.toContain('경매 모집 삭제');
+		expect(body).not.toContain('경매 모집 취소');
 	});
 
 	it('uses server permissions for close and cancellation actions', () => {
 		const { body } = renderPage('OPEN', true, true, false, 10);
 
 		expect(body).toContain('모집 마감');
-		expect(body).toContain('경매 모집 삭제');
+		expect(body).toContain('경매 모집 취소');
 		expect(source).toContain('snapshot.permissions.canClose');
 		expect(source).toContain('snapshot.permissions.canCancel');
+		expect(source).toContain('cancelConfirmationValid');
+	});
+
+	it('keeps cancelled recruitment data reachable and exposes restoration', () => {
+		const { body } = renderPage('CANCELLED', false, false, false, 10, true);
+
+		expect(body).toContain('취소 이력으로 보존');
+		expect(body).toContain('취소 되돌리기');
+		expect(source).toContain('restoreAuctionRecruitment');
 	});
 
 	it('waits for a full roster before exposing the close action', () => {

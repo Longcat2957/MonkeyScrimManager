@@ -20,6 +20,7 @@ import { apiRoute } from '$lib/routing';
 import { z } from 'zod';
 
 const idempotencyKeySchema = z.uuid();
+const revisionSchema = z.number().int().nonnegative();
 const expectedStartAtSchema = z.iso.datetime({ offset: true });
 const auctionRecruitmentSnapshotEnvelopeSchema = z
 	.object({ data: auctionRecruitmentSnapshotSchema, meta: responseMetaSchema })
@@ -34,6 +35,8 @@ type AuctionRecruitmentAction =
 	| 'add_member'
 	| 'remove_member'
 	| 'close'
+	| 'reopen'
+	| 'restore'
 	| 'dispatch_participant_confirmation_dms'
 	| 'cancel';
 
@@ -60,6 +63,16 @@ export class AuctionRecruitmentApiError extends Error {
 		super(message);
 		this.name = 'AuctionRecruitmentApiError';
 	}
+}
+
+export function isAuctionRecruitmentRevisionConflict(
+	cause: unknown
+): cause is AuctionRecruitmentApiError {
+	return (
+		cause instanceof AuctionRecruitmentApiError &&
+		cause.status === 409 &&
+		cause.code === 'recruitment_revision_conflict'
+	);
 }
 
 function readCsrfToken(): string | null {
@@ -103,8 +116,10 @@ function actionLabel(action: AuctionRecruitmentAction): string {
 	if (action === 'add_member') return '참가자 추가';
 	if (action === 'remove_member') return '참가자 제거';
 	if (action === 'close') return '경매 모집 마감';
+	if (action === 'reopen') return '경매 모집 재개';
+	if (action === 'restore') return '경매 모집 복구';
 	if (action === 'dispatch_participant_confirmation_dms') return '참가 확정 DM 발송';
-	return '경매 모집 삭제';
+	return '경매 모집 취소';
 }
 
 function fallbackErrorMessage(status: number, action: AuctionRecruitmentAction): string {
@@ -376,6 +391,31 @@ export async function closeAuctionRecruitment(
 	);
 }
 
+export async function reopenAuctionRecruitment(
+	guildId: string,
+	recruitmentId: string,
+	expectedRevision: number,
+	idempotencyKey: string
+): Promise<AuctionRecruitmentSnapshot> {
+	if (!revisionSchema.safeParse(expectedRevision).success) {
+		throw new AuctionRecruitmentApiError(
+			'경매 모집 버전 정보가 올바르지 않습니다.',
+			0,
+			'invalid_revision',
+			null
+		);
+	}
+	return await requestAuctionRecruitment(
+		apiRoute(['guilds', guildId, 'auction-recruitments', recruitmentId, 'reopen']),
+		{
+			method: 'POST',
+			headers: mutationHeaders(idempotencyKey),
+			body: JSON.stringify({ expectedRevision })
+		},
+		'reopen'
+	);
+}
+
 export async function dispatchAuctionRecruitmentParticipantConfirmationDms(
 	guildId: string,
 	recruitmentId: string,
@@ -401,15 +441,50 @@ export async function dispatchAuctionRecruitmentParticipantConfirmationDms(
 export async function cancelAuctionRecruitment(
 	guildId: string,
 	recruitmentId: string,
+	expectedRevision: number,
 	idempotencyKey: string
 ): Promise<AuctionRecruitmentSnapshot> {
+	if (!revisionSchema.safeParse(expectedRevision).success) {
+		throw new AuctionRecruitmentApiError(
+			'경매 모집 버전 정보가 올바르지 않습니다.',
+			0,
+			'invalid_revision',
+			null
+		);
+	}
 	return await requestAuctionRecruitment(
 		apiRoute(['guilds', guildId, 'auction-recruitments', recruitmentId]),
 		{
 			method: 'DELETE',
-			headers: mutationHeaders(idempotencyKey)
+			headers: mutationHeaders(idempotencyKey),
+			body: JSON.stringify({ expectedRevision })
 		},
 		'cancel'
+	);
+}
+
+export async function restoreAuctionRecruitment(
+	guildId: string,
+	recruitmentId: string,
+	expectedRevision: number,
+	idempotencyKey: string
+): Promise<AuctionRecruitmentSnapshot> {
+	if (!revisionSchema.safeParse(expectedRevision).success) {
+		throw new AuctionRecruitmentApiError(
+			'경매 모집 버전 정보가 올바르지 않습니다.',
+			0,
+			'invalid_revision',
+			null
+		);
+	}
+	return await requestAuctionRecruitment(
+		apiRoute(['guilds', guildId, 'auction-recruitments', recruitmentId, 'restore']),
+		{
+			method: 'POST',
+			headers: mutationHeaders(idempotencyKey),
+			body: JSON.stringify({ expectedRevision })
+		},
+		'restore'
 	);
 }
 

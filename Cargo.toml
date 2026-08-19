@@ -31,3 +31,15 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
 unicode-casefold = "=0.2.0"
 unicode-normalization = "=0.1.25"
 uuid = { version = "=1.23.4", features = ["serde", "v7"] }
+
+# The API has many integration-test crates that each link the full server. Full
+# debug info plus Cargo's per-crate incremental cache previously grew `target/`
+# beyond 20 GiB. Keep useful line tables for local binaries, while test binaries
+# favor a bounded build footprint.
+[profile.dev]
+debug = 1
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false

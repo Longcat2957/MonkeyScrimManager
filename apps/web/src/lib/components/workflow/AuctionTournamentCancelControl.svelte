@@ -84,10 +84,15 @@
 		cancelling = true;
 		cancelError = '';
 		try {
-			await cancelAuctionTournament(guildId, tournament.id, command, idempotencyKey);
+			const result = await cancelAuctionTournament(guildId, tournament.id, command, idempotencyKey);
 			idempotencyKeys.complete('auction-tournament-cancel');
 			dialogOpen = false;
-			await goto(resolve('/g/[guildId]/auction', { guildId }));
+			await goto(
+				resolve('/g/[guildId]/auction/recruitments/[id]', {
+					guildId,
+					id: result.sourceRecruitmentId
+				})
+			);
 		} catch (cause) {
 			if (isAuctionTournamentCancelRevisionConflict(cause)) {
 				idempotencyKeys.invalidate('auction-tournament-cancel');

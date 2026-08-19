@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { LoaderCircle, Mail } from 'lucide-svelte';
+	import { Dialog } from 'bits-ui';
+	import { LoaderCircle, Mail, RotateCcw, X } from 'lucide-svelte';
 	import {
 		auctionRecruitmentErrorText,
-		dispatchAuctionRecruitmentParticipantConfirmationDms
+		dispatchAuctionRecruitmentParticipantConfirmationDms,
+		isAuctionRecruitmentRevisionConflict,
+		reopenAuctionRecruitment
 	} from '$lib/api/auctionRecruitment';
 	import {
 		auctionTournamentErrorText,
@@ -28,6 +31,8 @@
 	let setupOverrideSourceKey = $state<string | null>(null);
 	let saving = $state(false);
 	let creating = $state(false);
+	let reopening = $state(false);
+	let reopenDialogOpen = $state(false);
 	let dispatchingParticipantConfirmationDms = $state(false);
 	let participantConfirmationDmIdempotencyKey = $state<string | null>(null);
 	let mutationError = $state('');
@@ -48,7 +53,10 @@
 	const canSendParticipantConfirmationDms = $derived(
 		data.snapshot.permissions.canSendParticipantConfirmationDms
 	);
-	const isMutating = $derived(saving || creating || dispatchingParticipantConfirmationDms);
+	const canReopenRecruitment = $derived(data.snapshot.permissions.canReopen);
+	const isMutating = $derived(
+		saving || creating || reopening || dispatchingParticipantConfirmationDms
+	);
 
 	function applySetupSnapshot(nextSnapshot: AuctionSetupDraftSnapshot) {
 		setupOverrideSourceKey = incomingSetupKey;
@@ -153,9 +161,38 @@
 				mutationNotice = 'DM을 받을 Discord 참가자가 없습니다.';
 			}
 		} catch (cause) {
-			mutationError = auctionRecruitmentErrorText(cause);
+			if (isAuctionRecruitmentRevisionConflict(cause)) {
+				idempotencyKeys.invalidate('auction-recruitment-reopen');
+				await recoverAuthoritativeSetup(auctionRecruitmentErrorText(cause));
+			} else {
+				mutationError = auctionRecruitmentErrorText(cause);
+			}
 		} finally {
 			dispatchingParticipantConfirmationDms = false;
+		}
+	}
+
+	async function reopenRecruitment() {
+		if (isMutating || !canReopenRecruitment) return;
+		const operation = { expectedRevision: recruitment.revision };
+		const idempotencyKey = idempotencyKeys.keyFor('auction-recruitment-reopen', operation);
+		reopening = true;
+		mutationError = '';
+		mutationNotice = '';
+		try {
+			const nextSnapshot = await reopenAuctionRecruitment(
+				data.guildId,
+				recruitment.id,
+				operation.expectedRevision,
+				idempotencyKey
+			);
+			idempotencyKeys.complete('auction-recruitment-reopen');
+			reopenDialogOpen = false;
+			await goto(nextSnapshot.recruitment.href);
+		} catch (cause) {
+			mutationError = auctionRecruitmentErrorText(cause);
+		} finally {
+			reopening = false;
 		}
 	}
 </script>
@@ -171,6 +208,20 @@
 		description={`${recruitment.title} · 모집 #${recruitment.displayNumber} · ${formatLabel} · ${rulesLabel}`}
 	>
 		{#snippet actions()}
+			{#if canReopenRecruitment}
+				<button
+					type="button"
+					disabled={isMutating}
+					onclick={() => (reopenDialogOpen = true)}
+					class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-50 enabled:hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+				>
+					{#if reopening}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 모집 재개 중
+					{:else}
+						<RotateCcw size={14} aria-hidden="true" /> 모집 단계로 되돌리기
+					{/if}
+				</button>
+			{/if}
 			{#if canSendParticipantConfirmationDms}
 				<button
 					type="button"
@@ -229,3 +280,48 @@
 		onCreate={startTournament}
 	/>
 </div>
+
+<Dialog.Root bind:open={reopenDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+		<Dialog.Content
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-4 shadow-2xl shadow-black/50 outline-none"
+		>
+			<div class="flex items-center justify-between gap-3">
+				<Dialog.Title class="text-sm font-semibold text-slate-50">모집 단계로 되돌리기</Dialog.Title
+				>
+				<Dialog.Close
+					disabled={isMutating}
+					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
+					aria-label="모집 재개 창 닫기"
+				>
+					<X size={16} aria-hidden="true" />
+				</Dialog.Close>
+			</div>
+			<Dialog.Description class="mt-2 text-xs leading-5 text-slate-400">
+				모집 #{recruitment.displayNumber}을 다시 참가 모집 상태로 전환합니다. 현재 참가자와
+				팀장·시작 포인트 설정은 보존되며, 참가자를 제거하면 해당 팀장 지정만 자동으로 해제됩니다.
+			</Dialog.Description>
+			<div class="mt-4 flex justify-end gap-2">
+				<Dialog.Close
+					disabled={isMutating}
+					class="h-8 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
+				>
+					닫기
+				</Dialog.Close>
+				<button
+					type="button"
+					disabled={isMutating || !canReopenRecruitment}
+					onclick={() => void reopenRecruitment()}
+					class="inline-flex h-8 items-center gap-1.5 border border-amber-300/40 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 enabled:hover:bg-amber-400/16 disabled:cursor-not-allowed disabled:opacity-35"
+				>
+					{#if reopening}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 되돌리는 중
+					{:else}
+						<RotateCcw size={14} aria-hidden="true" /> 모집 재개
+					{/if}
+				</button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>

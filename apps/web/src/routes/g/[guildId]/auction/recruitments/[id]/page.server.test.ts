@@ -34,6 +34,8 @@ describe('auction recruitment page server load', () => {
 					permissions: {
 						canManageMembers: false,
 						canClose: false,
+						canReopen: false,
+						canRestore: false,
 						canSendParticipantConfirmationDms: false,
 						canCancel: true
 					}

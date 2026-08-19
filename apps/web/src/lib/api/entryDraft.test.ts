@@ -106,6 +106,8 @@ const auctionSnapshot: AuctionRecruitmentSnapshot = {
 	permissions: {
 		canManageMembers: false,
 		canClose: false,
+		canReopen: true,
+		canRestore: false,
 		canSendParticipantConfirmationDms: true,
 		canCancel: true
 	}

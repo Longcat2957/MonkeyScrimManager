@@ -362,6 +362,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -1388,7 +1390,9 @@ paths:
       description: >-
         Returns the authoritative recruitment roster for the entry recruitment stage. OPEN
         recruitments remain in Discord participant collection; CLOSED recruitments expose the
-        entry composition link in the returned snapshot.
+        entry composition link in the returned snapshot. CANCELLED recruitments remain available
+        by exact ID so an eligible creator or operator can restore retained participants and entry
+        assignments; they stay absent from the actionable list.
       security:
         - SessionCookie: []
       parameters:
@@ -1416,12 +1420,11 @@ paths:
       operationId: cancelGuildRecruitment
       summary: Soft-cancel an open or closed general recruitment
       description: >-
-        Browser-only, bodyless command. The creator or a current active operator can transition an
-        OPEN or CLOSED recruitment to CANCELLED. Participants, entry assignments, and entry-draft
-        history are retained, while the cancelled recruitment is removed from normal detail,
-        actionable-list, and entry-draft reads. The EntryDraftSnapshot canCancel capability is true
-        for an eligible creator or current active operator in either source state. An identical
-        browser idempotency key replays the resulting CANCELLED snapshot. A bound Discord
+        Browser-only optimistic soft-cancel command. The creator or a current active operator can
+        transition an OPEN or CLOSED recruitment to CANCELLED when expectedRevision is current.
+        Participants, entry assignments, and entry-draft history are retained. The exact detail
+        remains readable for recovery while actionable-list and entry-draft reads hide the row. An
+        identical browser idempotency key replays the resulting CANCELLED snapshot. A bound Discord
         recruitment message queues RECRUITMENT_MESSAGE_DELETE in the same transaction.
       security:
         - SessionCookie: []
@@ -1430,6 +1433,12 @@ paths:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/RecruitmentId'
         - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
       responses:
         '200':
           description: Recruitment cancelled or an identical browser command replayed.
@@ -1450,6 +1459,57 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/restore:
+    post:
+      operationId: restoreGuildRecruitment
+      summary: Restore a soft-cancelled general recruitment
+      description: >-
+        Browser-only recovery command for the creator or a current active operator. The recruitment
+        must be CANCELLED and expectedRevision must be current. The server restores CLOSED when the
+        recruitment had reached entry editing before cancellation, otherwise OPEN. Participant and
+        entry data are preserved, cancellation/conversion markers are cleared, and a replacement
+        Discord recruitment message is queued without reapplying any cancelled game or MMR result.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
+      responses:
+        '200':
+          description: Recruitment restored to its safe prior stage or replayed idempotently.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -2373,8 +2433,10 @@ paths:
       operationId: getGuildAuctionRecruitment
       summary: Get an auction recruitment snapshot
       description: >-
-        Returns the authoritative roster and viewer capabilities for an OPEN or CLOSED auction
-        recruitment. CANCELLED and CONVERTED rows are hidden. The draft link is null until a full
+        Returns the authoritative roster and viewer capabilities for an OPEN, CLOSED, or CANCELLED
+        auction recruitment. CANCELLED recruitments remain available by exact ID so an eligible
+        creator or operator can restore the retained roster and captain setup; they stay absent
+        from the actionable list. CONVERTED rows are hidden. The draft link is null until a full
         recruitment is closed by an operator, then points to the closed roster stage-gate.
       security:
         - SessionCookie: []
@@ -2401,11 +2463,13 @@ paths:
           $ref: '#/components/responses/InternalError'
     delete:
       operationId: cancelGuildAuctionRecruitment
-      summary: Cancel an open auction recruitment
+      summary: Soft-cancel an open or closed auction recruitment
       description: >-
-        Browser-only soft-cancel command. The creator or a current active operator can cancel an
-        OPEN recruitment. Participants and setup rows remain retained history; the
-        resource is hidden from subsequent reads.
+        Browser-only optimistic soft-cancel command. The creator or a current active operator can
+        transition an OPEN or CLOSED recruitment to CANCELLED when expectedRevision is current.
+        Participants and captain setup rows remain retained. The exact detail remains readable for
+        recovery while actionable-list and setup-draft reads hide the row. A bound Discord
+        recruitment message queues AUCTION_RECRUITMENT_MESSAGE_DELETE in the same transaction.
       security:
         - SessionCookie: []
           CsrfHeader: []
@@ -2413,6 +2477,12 @@ paths:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/AuctionRecruitmentId'
         - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
       responses:
         '200':
           description: Cancelled auction recruitment snapshot or an idempotent replay.
@@ -2433,6 +2503,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -2537,6 +2609,104 @@ paths:
       responses:
         '200':
           description: Closed auction recruitment snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/reopen:
+    post:
+      operationId: reopenGuildAuctionRecruitment
+      summary: Return a closed auction recruitment to recruiting
+      description: >-
+        Browser-only operator command for both ten-person and twenty-person auctions. The
+        recruitment must be CLOSED and expectedRevision must be current. Success restores OPEN,
+        clears closedAt, and keeps the joined roster and captain setup draft so recruitment can
+        continue safely. A bound Discord recruitment message is updated in the same transaction.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
+      responses:
+        '200':
+          description: Auction recruitment returned to OPEN or replayed idempotently.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/restore:
+    post:
+      operationId: restoreGuildAuctionRecruitment
+      summary: Restore a soft-cancelled auction recruitment
+      description: >-
+        Browser-only recovery command for the creator or a current active operator. The recruitment
+        must be CANCELLED and expectedRevision must be current. The server restores CLOSED when the
+        recruitment had reached captain selection before cancellation, otherwise OPEN. The roster
+        and captain setup are preserved, cancellation/conversion markers are cleared, and a
+        replacement Discord recruitment message is queued without resurrecting cancelled
+        tournaments, games, or MMR results.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
+      responses:
+        '200':
+          description: Auction recruitment restored to its safe prior stage or replayed idempotently.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/RequestId'
@@ -6728,6 +6898,18 @@ components:
       type: object
       additionalProperties: false
       required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    RecruitmentLifecycleRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      description: >-
+        Optimistic lifecycle guard used by cancellation, restoration, and recruitment-stage
+        rollback commands. The client must send the latest visible recruitment revision.
       properties:
         expectedRevision:
           type: integer
@@ -11828,12 +12010,27 @@ components:
     AuctionRecruitmentPermissions:
       type: object
       additionalProperties: false
-      required: [canManageMembers, canClose, canCancel]
+      required:
+        - canManageMembers
+        - canClose
+        - canReopen
+        - canRestore
+        - canSendParticipantConfirmationDms
+        - canCancel
       properties:
         canManageMembers:
           type: boolean
         canClose:
           type: boolean
+        canReopen:
+          type: boolean
+          description: True for an active operator while the recruitment is CLOSED.
+        canRestore:
+          type: boolean
+          description: True for an eligible creator or active operator while it is CANCELLED.
+        canSendParticipantConfirmationDms:
+          type: boolean
+          description: True for an active operator while the recruitment is CLOSED.
         canCancel:
           type: boolean
     AuctionRecruitmentSnapshot:

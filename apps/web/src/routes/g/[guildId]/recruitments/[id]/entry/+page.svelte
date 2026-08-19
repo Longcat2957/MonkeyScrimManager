@@ -19,6 +19,7 @@
 	import {
 		cancelRecruitment,
 		dispatchRecruitmentParticipantConfirmationDms,
+		isRecruitmentManagementRevisionConflict,
 		recruitmentManagementErrorText
 	} from '$lib/api/recruitmentManagement';
 	import EntryDraftBoard from '$lib/components/workflow/EntryDraftBoard.svelte';
@@ -74,6 +75,7 @@
 	let cancelDialogOpen = $state(false);
 	let cancelError = $state('');
 	let cancelIdempotencyKey = $state<string | null>(null);
+	let cancelConfirmationInput = $state('');
 	let createAuctionRecruitmentDialogOpen = $state(false);
 	let createAuctionRecruitmentExpectedStartDate = $state('');
 	let createAuctionRecruitmentExpectedStartTime = $state('');
@@ -107,6 +109,12 @@
 	);
 	const canReopen = $derived(Boolean(snapshot?.capabilities.canReopen));
 	const canCancel = $derived(Boolean(snapshot?.capabilities.canCancel));
+	const cancelConfirmationText = $derived(
+		snapshot ? `모집 #${snapshot.recruitment.displayNumber} 취소` : ''
+	);
+	const cancelConfirmationValid = $derived(
+		cancelConfirmationInput.trim() === cancelConfirmationText
+	);
 	const hasCompleteAssignments = $derived(snapshot ? hasCompleteEntryAssignments(snapshot) : false);
 	const canShowCreateSeries = $derived(canEdit || canCreateSeries);
 	const canShowCreateAuctionRecruitment = $derived(canEdit || canCreateAuctionRecruitment);
@@ -677,13 +685,21 @@
 	function openCancelDialog() {
 		if (!snapshot || !canCancel || mutationLocked) return;
 		cancelError = '';
+		cancelConfirmationInput = '';
 		cancelDialogOpen = true;
 	}
 
 	async function confirmCancellation() {
 		const route = currentEntryRoute();
 		const currentSnapshot = snapshot;
-		if (!isCurrentRoute(route) || !currentSnapshot || !canCancel || mutationLocked) return;
+		if (
+			!isCurrentRoute(route) ||
+			!currentSnapshot ||
+			!canCancel ||
+			!cancelConfirmationValid ||
+			mutationLocked
+		)
+			return;
 
 		const idempotencyKey = (cancelIdempotencyKey ??= globalThis.crypto.randomUUID());
 		mutation = 'cancel';
@@ -691,11 +707,25 @@
 		mutationError = '';
 		mutationNotice = '';
 		try {
-			await cancelRecruitment(route.guildId, currentSnapshot.recruitment.id, idempotencyKey);
+			await cancelRecruitment(
+				route.guildId,
+				currentSnapshot.recruitment.id,
+				currentSnapshot.recruitment.revision,
+				idempotencyKey
+			);
 			if (!isCurrentRoute(route)) return;
-			await goto(resolve('/g/[guildId]/series', { guildId: route.guildId }));
+			await goto(
+				resolve('/g/[guildId]/recruitments/[id]', {
+					guildId: route.guildId,
+					id: route.recruitmentId
+				})
+			);
 		} catch (cause) {
 			if (!isCurrentRoute(route)) return;
+			if (isRecruitmentManagementRevisionConflict(cause)) {
+				cancelIdempotencyKey = null;
+				queueRealtimeSnapshotRefresh(route);
+			}
 			cancelError = recruitmentManagementErrorText(cause);
 		} finally {
 			if (isCurrentRoute(route)) {
@@ -797,8 +827,8 @@
 						disabled={mutationLocked}
 						onclick={openCancelDialog}
 						class="grid size-10 place-items-center border border-rose-300/25 text-rose-200 enabled:hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-45"
-						aria-label="모집 삭제"
-						title="모집 삭제"
+						aria-label="모집 취소"
+						title="모집 취소"
 					>
 						<Trash2 size={15} aria-hidden="true" />
 					</button>
@@ -1071,20 +1101,29 @@
 			<header
 				class="flex h-12 items-center justify-between border-b border-[var(--color-app-border)] px-4"
 			>
-				<Dialog.Title class="text-sm font-semibold text-slate-50">모집 삭제</Dialog.Title>
+				<Dialog.Title class="text-sm font-semibold text-slate-50">모집 취소</Dialog.Title>
 				<Dialog.Close
 					disabled={isMutating}
 					class="grid size-8 place-items-center text-slate-400 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:opacity-35"
-					aria-label="모집 삭제 창 닫기"
+					aria-label="모집 취소 창 닫기"
 				>
 					<X size={16} aria-hidden="true" />
 				</Dialog.Close>
 			</header>
 			<div class="grid gap-3 p-4">
 				<Dialog.Description class="text-xs leading-5 text-slate-400">
-					모집 #{snapshot?.recruitment.displayNumber}을 삭제하면 현재 엔트리 배치를 더 이상 진행할
-					수 없습니다.
+					모집 #{snapshot?.recruitment.displayNumber}을 취소 상태로 전환합니다. 현재 참가자와 엔트리
+					배치는 보존되며, 취소 후 모집 화면에서 복구할 수 있습니다.
 				</Dialog.Description>
+				<label class="grid gap-1.5 text-xs font-semibold text-slate-300">
+					<span>확인 문구</span>
+					<input
+						bind:value={cancelConfirmationInput}
+						disabled={isMutating}
+						placeholder={cancelConfirmationText}
+						class="h-9 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-medium text-slate-100 outline-none focus:border-rose-300/50 disabled:opacity-35"
+					/>
+				</label>
 				{#if cancelError}
 					<p
 						class="border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs leading-5 text-rose-300"
@@ -1103,14 +1142,14 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={isMutating}
+					disabled={isMutating || !cancelConfirmationValid}
 					onclick={confirmCancellation}
 					class="inline-flex h-9 items-center gap-1.5 border border-rose-300/35 bg-rose-400/10 px-3 text-xs font-semibold text-rose-100 disabled:opacity-35"
 				>
 					{#if mutation === 'cancel'}
-						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 삭제 중
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 취소 중
 					{:else}
-						<Trash2 size={14} aria-hidden="true" /> 모집 삭제
+						<Trash2 size={14} aria-hidden="true" /> 모집 취소
 					{/if}
 				</button>
 			</footer>

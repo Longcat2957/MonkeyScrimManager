@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
 	import { SvelteMap } from 'svelte/reactivity';
 	import {
@@ -8,6 +7,7 @@
 		Gavel,
 		LoaderCircle,
 		Plus,
+		RotateCcw,
 		Search,
 		Trash2,
 		UserPlus,
@@ -20,7 +20,9 @@
 		cancelAuctionRecruitment,
 		closeAuctionRecruitment,
 		fetchAuctionRecruitment,
-		removeAuctionRecruitmentMember
+		isAuctionRecruitmentRevisionConflict,
+		removeAuctionRecruitmentMember,
+		restoreAuctionRecruitment
 	} from '$lib/api/auctionRecruitment';
 	import { fetchGuildAdminMembers, GuildAdminMembersApiError } from '$lib/api/guildAdminMembers';
 	import type { AuctionRecruitmentSnapshot } from '$lib/contracts/auctionRecruitmentSnapshot';
@@ -67,6 +69,10 @@
 	let cancelSubmitting = $state(false);
 	let cancelError = $state('');
 	let cancelIdempotencyKey = $state<string | null>(null);
+	let cancelConfirmationInput = $state('');
+	let restoreSubmitting = $state(false);
+	let restoreError = $state('');
+	let restoreIdempotencyKey = $state<string | null>(null);
 	let realtimeRefreshPendingRouteKey = $state<string | null>(null);
 	let realtimeRefreshingRouteKey = $state<string | null>(null);
 	let auctionRecruitmentRealtimeSocket: BrowserRealtimeSocket | null = null;
@@ -82,11 +88,19 @@
 	const recruitment = $derived(snapshot.recruitment);
 	const participants = $derived(snapshot.participants);
 	const isOpen = $derived(recruitment.status === 'OPEN');
+	const isCancelled = $derived(recruitment.status === 'CANCELLED');
 	const canManageMembers = $derived(snapshot.permissions.canManageMembers);
+	const canRestore = $derived(snapshot.permissions.canRestore);
+	const cancelConfirmationText = $derived(`경매 모집 #${recruitment.displayNumber} 취소`);
+	const cancelConfirmationValid = $derived(
+		cancelConfirmationInput.trim() === cancelConfirmationText
+	);
 	const isAtCapacity = $derived(participants.length >= recruitment.participantCount);
 	const canCloseRecruitment = $derived(isOpen && snapshot.permissions.canClose && isAtCapacity);
 	const isRosterMutating = $derived(addingMemberId !== null || removingMemberId !== null);
-	const isMutating = $derived(closingRecruitment || cancelSubmitting || isRosterMutating);
+	const isMutating = $derived(
+		closingRecruitment || cancelSubmitting || restoreSubmitting || isRosterMutating
+	);
 	const participantIds = $derived(new Set(participants.map((participant) => participant.id)));
 	const candidateMembers = $derived(
 		(memberSnapshot?.members ?? []).filter((member) => {
@@ -325,21 +339,74 @@
 	function openCancelDialog() {
 		if (!snapshot.permissions.canCancel || isMutating) return;
 		cancelError = '';
+		cancelConfirmationInput = '';
 		cancelDialogOpen = true;
 	}
 
 	async function confirmCancellation() {
-		if (!snapshot.permissions.canCancel || isMutating) return;
+		if (!snapshot.permissions.canCancel || !cancelConfirmationValid || isMutating) return;
 		const idempotencyKey = (cancelIdempotencyKey ??= globalThis.crypto.randomUUID());
 		cancelSubmitting = true;
 		cancelError = '';
 		try {
-			await cancelAuctionRecruitment(data.guildId, recruitment.id, idempotencyKey);
-			await goto(resolve('/g/[guildId]/auction', { guildId: data.guildId }));
+			const sourceSnapshotKey = incomingSnapshotKey;
+			const nextSnapshot = await cancelAuctionRecruitment(
+				data.guildId,
+				recruitment.id,
+				recruitment.revision,
+				idempotencyKey
+			);
+			if (incomingSnapshotKey === sourceSnapshotKey) {
+				snapshotOverrideSourceKey = sourceSnapshotKey;
+				snapshotOverride = nextSnapshot;
+			}
+			cancelIdempotencyKey = null;
+			cancelDialogOpen = false;
+			mutationNotice =
+				'경매 모집을 취소했습니다. 참가자와 팀장 설정은 보존되며 아래 버튼으로 복구할 수 있습니다.';
 		} catch (cause) {
+			if (isAuctionRecruitmentRevisionConflict(cause)) {
+				cancelIdempotencyKey = null;
+				queueRealtimeSnapshotRefresh(currentAuctionRecruitmentRoute());
+			}
 			cancelError = auctionRecruitmentErrorText(cause);
 		} finally {
 			cancelSubmitting = false;
+			void flushRealtimeSnapshotRefresh(currentAuctionRecruitmentRoute());
+		}
+	}
+
+	async function restoreCancellation() {
+		if (!canRestore || isMutating) return;
+		const idempotencyKey = (restoreIdempotencyKey ??= globalThis.crypto.randomUUID());
+		restoreSubmitting = true;
+		restoreError = '';
+		mutationNotice = '';
+		try {
+			const sourceSnapshotKey = incomingSnapshotKey;
+			const nextSnapshot = await restoreAuctionRecruitment(
+				data.guildId,
+				recruitment.id,
+				recruitment.revision,
+				idempotencyKey
+			);
+			if (incomingSnapshotKey === sourceSnapshotKey) {
+				snapshotOverrideSourceKey = sourceSnapshotKey;
+				snapshotOverride = nextSnapshot;
+			}
+			restoreIdempotencyKey = null;
+			mutationNotice =
+				nextSnapshot.recruitment.status === 'CLOSED'
+					? '취소를 되돌리고 팀장 선택 단계로 복구했습니다.'
+					: '취소를 되돌리고 모집 단계로 복구했습니다.';
+		} catch (cause) {
+			if (isAuctionRecruitmentRevisionConflict(cause)) {
+				restoreIdempotencyKey = null;
+				queueRealtimeSnapshotRefresh(currentAuctionRecruitmentRoute());
+			}
+			restoreError = auctionRecruitmentErrorText(cause);
+		} finally {
+			restoreSubmitting = false;
 			void flushRealtimeSnapshotRefresh(currentAuctionRecruitmentRoute());
 		}
 	}
@@ -356,6 +423,20 @@
 		description={`${recruitment.title} · 모집 #${recruitment.displayNumber} · ${formatLabel} · ${rulesLabel}`}
 	>
 		{#snippet actions()}
+			{#if isCancelled && canRestore}
+				<button
+					type="button"
+					disabled={isMutating}
+					onclick={() => void restoreCancellation()}
+					class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 hover:bg-amber-400/15 disabled:opacity-35"
+				>
+					{#if restoreSubmitting}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 복구 중
+					{:else}
+						<RotateCcw size={14} aria-hidden="true" /> 취소 되돌리기
+					{/if}
+				</button>
+			{/if}
 			{#if canManageMembers}
 				<button
 					type="button"
@@ -394,14 +475,24 @@
 					disabled={isMutating}
 					onclick={openCancelDialog}
 					class="grid size-9 shrink-0 place-items-center border border-rose-300/25 text-rose-200 hover:bg-rose-400/10 disabled:opacity-35"
-					aria-label="경매 모집 삭제"
-					title="경매 모집 삭제"
+					aria-label="경매 모집 취소"
+					title="경매 모집 취소"
 				>
 					<Trash2 size={14} aria-hidden="true" />
 				</button>
 			{/if}
 		{/snippet}
 	</WorkspaceHeader>
+
+	{#if isCancelled}
+		<p
+			class="border border-amber-300/25 bg-amber-400/8 px-3 py-2 text-xs leading-5 text-amber-100"
+			role="status"
+		>
+			이 경매 모집은 취소 이력으로 보존되어 있습니다. 참가자와 팀장 설정은 삭제되지 않았으며,
+			운영자는 안전한 이전 단계로 복구할 수 있습니다.
+		</p>
+	{/if}
 
 	{#if closeError}
 		<p
@@ -425,6 +516,14 @@
 			role="alert"
 		>
 			{memberMutationError}
+		</p>
+	{/if}
+	{#if restoreError}
+		<p
+			class="border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs leading-5 text-rose-300"
+			role="alert"
+		>
+			{restoreError}
 		</p>
 	{/if}
 
@@ -635,20 +734,29 @@
 			<header
 				class="flex h-12 items-center justify-between border-b border-[var(--color-app-border)] px-4"
 			>
-				<Dialog.Title class="text-sm font-semibold text-slate-50">경매 모집 삭제</Dialog.Title>
+				<Dialog.Title class="text-sm font-semibold text-slate-50">경매 모집 취소</Dialog.Title>
 				<Dialog.Close
 					disabled={cancelSubmitting}
 					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
-					aria-label="경매 모집 삭제 취소"
+					aria-label="경매 모집 취소 창 닫기"
 				>
 					<X size={16} aria-hidden="true" />
 				</Dialog.Close>
 			</header>
 			<div class="grid gap-3 p-4">
 				<Dialog.Description class="text-xs leading-5 text-slate-400">
-					모집 #{recruitment.displayNumber}을 삭제하면 Discord 참가 메시지와 마감 명단을 계속 확인할
-					수 없습니다.
+					모집 #{recruitment.displayNumber}을 취소 상태로 전환하고 Discord 참가 메시지를 내립니다.
+					참가자와 팀장 설정은 보존되며, 취소 후 이 화면에서 복구할 수 있습니다.
 				</Dialog.Description>
+				<label class="grid gap-1.5 text-xs font-semibold text-slate-300">
+					<span>확인 문구</span>
+					<input
+						bind:value={cancelConfirmationInput}
+						disabled={cancelSubmitting}
+						placeholder={cancelConfirmationText}
+						class="h-9 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-medium text-slate-100 outline-none focus:border-rose-300/50 disabled:opacity-35"
+					/>
+				</label>
 				{#if cancelError}
 					<p
 						class="border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs leading-5 text-rose-300"
@@ -667,14 +775,14 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={cancelSubmitting}
+					disabled={cancelSubmitting || !cancelConfirmationValid}
 					onclick={confirmCancellation}
 					class="inline-flex h-9 items-center gap-1.5 border border-rose-300/35 bg-rose-400/10 px-3 text-xs font-semibold text-rose-100 disabled:opacity-35"
 				>
 					{#if cancelSubmitting}
-						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 삭제 중
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 취소 중
 					{:else}
-						<Trash2 size={14} aria-hidden="true" /> 삭제
+						<Trash2 size={14} aria-hidden="true" /> 경매 모집 취소
 					{/if}
 				</button>
 			</footer>

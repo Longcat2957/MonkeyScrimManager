@@ -4,8 +4,10 @@ import {
 	cancelRecruitment,
 	closeRecruitmentForEntry,
 	dispatchRecruitmentParticipantConfirmationDms,
+	isRecruitmentManagementRevisionConflict,
 	removeRecruitmentMember,
-	recruitmentManagementErrorText
+	recruitmentManagementErrorText,
+	restoreRecruitment
 } from './recruitmentManagement';
 
 const guildId = '1525851181157580861';
@@ -65,22 +67,48 @@ describe('recruitment management API client', () => {
 	});
 
 	it('cancels a recruitment through the same-origin DELETE endpoint', async () => {
+		const cancelledSnapshot = {
+			...snapshot,
+			recruitment: { ...snapshot.recruitment, status: 'CANCELLED' as const, revision: 2 }
+		};
 		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
 			void args;
-			return new Response(null, { status: 204 });
+			return Response.json({ data: cancelledSnapshot, meta: { requestId } });
 		});
 		installBrowser(fetcher);
 
-		await expect(
-			cancelRecruitment(guildId, recruitmentId, idempotencyKey)
-		).resolves.toBeUndefined();
+		await expect(cancelRecruitment(guildId, recruitmentId, 1, idempotencyKey)).resolves.toEqual(
+			cancelledSnapshot
+		);
 
 		const [path, init] = fetcher.mock.calls[0]!;
 		expect(path).toBe(`/api/guilds/${guildId}/recruitments/${recruitmentId}`);
 		expect(init).toMatchObject({ method: 'DELETE', credentials: 'same-origin' });
+		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 1 });
 		const headers = new Headers(init?.headers);
 		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
 		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
+	});
+
+	it('restores a cancelled recruitment with optimistic revision protection', async () => {
+		const restoredSnapshot = {
+			...snapshot,
+			recruitment: { ...snapshot.recruitment, revision: 3 }
+		};
+		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return Response.json({ data: restoredSnapshot, meta: { requestId } });
+		});
+		installBrowser(fetcher);
+
+		await expect(restoreRecruitment(guildId, recruitmentId, 2, idempotencyKey)).resolves.toEqual(
+			restoredSnapshot
+		);
+
+		const [path, init] = fetcher.mock.calls[0]!;
+		expect(path).toBe(`/api/guilds/${guildId}/recruitments/${recruitmentId}/restore`);
+		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 2 });
 	});
 
 	it('removes a participant with browser CSRF and returns the fresh recruitment snapshot', async () => {
@@ -180,11 +208,35 @@ describe('recruitment management API client', () => {
 		);
 	});
 
+	it('identifies optimistic revision conflicts so retries can use a new idempotency key', async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json(
+				{
+					error: {
+						code: 'recruitment_revision_conflict',
+						message: '모집 상태가 변경되었습니다.',
+						requestId
+					}
+				},
+				{ status: 409 }
+			)
+		);
+		installBrowser(fetcher);
+
+		const error = await cancelRecruitment(guildId, recruitmentId, 1, idempotencyKey).catch(
+			(cause) => cause
+		);
+
+		expect(isRecruitmentManagementRevisionConflict(error)).toBe(true);
+	});
+
 	it('rejects before mutation when the CSRF cookie is missing', async () => {
 		const fetcher = vi.fn();
 		installBrowser(fetcher, 'other=value');
 
-		await expect(cancelRecruitment(guildId, recruitmentId, idempotencyKey)).rejects.toMatchObject({
+		await expect(
+			cancelRecruitment(guildId, recruitmentId, 1, idempotencyKey)
+		).rejects.toMatchObject({
 			status: 0,
 			code: 'csrf_token_missing'
 		});

@@ -102,7 +102,8 @@ describe('pick-ban page integration', () => {
 		expect(source).toContain('revertSeries(route.guildId, route.seriesId');
 		expect(source).toContain('deleteSeries(route.guildId, route.seriesId');
 		expect(source).toContain('확정된 게임 결과와 해당 게임의 MMR 반영도 함께');
-		expect(source).toContain('확정된 게임 결과와 해당 게임의 MMR 반영이 있으면 함께 되돌려집니다.');
+		expect(source).toContain('확정된 게임 결과와 MMR 반영을 안전하게 역순으로 되돌린 뒤');
+		expect(source).toContain('deleteConfirmationValid');
 	});
 
 	it('offers an operator-only early completion flow without recording the unfinished draft', () => {

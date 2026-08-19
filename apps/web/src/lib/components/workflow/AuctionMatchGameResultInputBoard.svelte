@@ -72,6 +72,10 @@
 		BLUE: toBoardTeam('BLUE', resultTeams[0]),
 		RED: toBoardTeam('RED', resultTeams[1])
 	}));
+	const sidePresetLabels = $derived({
+		DEFAULT: `${resultTeams[0]?.teamName ?? '왼쪽 팀'} BLUE · ${resultTeams[1]?.teamName ?? '오른쪽 팀'} RED`,
+		SWAPPED: `${resultTeams[1]?.teamName ?? '오른쪽 팀'} BLUE · ${resultTeams[0]?.teamName ?? '왼쪽 팀'} RED`
+	});
 	const currentGame = $derived.by((): ScrimPickBanResultInputGame => ({
 		id: `${snapshot.match.id}:set:${nextSetNumber}`,
 		label: `${nextSetNumber}세트`,
@@ -222,9 +226,18 @@
 			이 경기의 승패가 이미 확정되었습니다.
 		</p>
 	{:else}
+		{#if snapshot.match.matchKey === 'FINAL'}
+			<p
+				class="border border-blue-300/20 bg-blue-400/[0.06] px-3 py-2 text-xs leading-5 font-medium text-blue-100"
+			>
+				결승은 각 세트 시작 전에 양 팀의 BLUE/RED 진영을 반드시 선택해야 합니다. 아래 사이드
+				단계에서 실제 진영을 선택한 뒤 픽밴과 결과를 입력해 주세요.
+			</p>
+		{/if}
 		{#key `${snapshot.match.id}:${snapshot.match.revision}:${nextSetNumber}`}
 			<ScrimPickBanResultInputBoard
 				teams={boardTeams}
+				{sidePresetLabels}
 				hardFearless={snapshot.match.hardFearless}
 				{previousPickChampionIds}
 				validateDraft

@@ -691,6 +691,176 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
         i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
     );
 
+    let reopen_path =
+        format!("/api/guilds/{GUILD_ID}/auction-recruitments/{open_auction_recruitment_id}/reopen");
+    let non_operator_reopen = browser_mutation(
+        &app,
+        Method::POST,
+        &reopen_path,
+        CANDIDATE_SESSION,
+        CANDIDATE_CSRF,
+        "auction-recruitment-reopen-non-operator",
+        true,
+        json!({ "expectedRevision": auction_close_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(non_operator_reopen.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(non_operator_reopen).await?["error"]["code"],
+        "operator_required"
+    );
+
+    let stale_reopen = browser_mutation(
+        &app,
+        Method::POST,
+        &reopen_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-reopen-stale",
+        true,
+        json!({ "expectedRevision": auction_close_revision - 1 }),
+        None,
+    )
+    .await?;
+    assert_eq!(stale_reopen.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(stale_reopen).await?["error"]["code"],
+        "recruitment_revision_conflict"
+    );
+
+    let reopened = browser_mutation(
+        &app,
+        Method::POST,
+        &reopen_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-reopen",
+        true,
+        json!({ "expectedRevision": auction_close_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(reopened.status(), StatusCode::OK);
+    let reopened = body_json(reopened).await?;
+    assert_eq!(reopened["data"]["recruitment"]["status"], "OPEN");
+    assert_eq!(
+        reopened["data"]["recruitment"]["revision"],
+        auction_close_revision + 1
+    );
+    assert_eq!(reopened["data"]["links"]["draft"], Value::Null);
+    assert_eq!(reopened["data"]["permissions"]["canManageMembers"], true);
+    assert_eq!(reopened["data"]["permissions"]["canReopen"], false);
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<OffsetDateTime>, i64)>(
+            "SELECT status, closed_at, revision
+             FROM auction_recruitments
+             WHERE guild_id = $1 AND id = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(Uuid::parse_str(&open_auction_recruitment_id)?)
+        .fetch_one(&pool)
+        .await?,
+        ("OPEN".to_owned(), None, auction_close_revision + 1)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM admin_audit_log
+             WHERE guild_id = $1
+               AND action = 'AUCTION_RECRUITMENT_REOPENED'
+               AND target_id = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(&open_auction_recruitment_id)
+        .fetch_one(&pool)
+        .await?,
+        1
+    );
+
+    let closed_again = browser_mutation(
+        &app,
+        Method::POST,
+        &close_auction_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-close-before-safe-cancel",
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(closed_again.status(), StatusCode::OK);
+    let closed_again = body_json(closed_again).await?;
+    assert_eq!(closed_again["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(closed_again["data"]["permissions"]["canCancel"], true);
+    let closed_again_revision = closed_again["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("reclosed auction recruitment response did not contain a revision")?;
+    let auction_recruitment_path =
+        format!("/api/guilds/{GUILD_ID}/auction-recruitments/{open_auction_recruitment_id}");
+    let stale_cancel = browser_mutation(
+        &app,
+        Method::DELETE,
+        &auction_recruitment_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-safe-cancel-stale",
+        true,
+        json!({ "expectedRevision": closed_again_revision - 1 }),
+        None,
+    )
+    .await?;
+    assert_eq!(stale_cancel.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(stale_cancel).await?["error"]["code"],
+        "recruitment_revision_conflict"
+    );
+
+    let cancelled = browser_mutation(
+        &app,
+        Method::DELETE,
+        &auction_recruitment_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-safe-cancel",
+        true,
+        json!({ "expectedRevision": closed_again_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled = body_json(cancelled).await?;
+    assert_eq!(cancelled["data"]["recruitment"]["status"], "CANCELLED");
+    assert_eq!(cancelled["data"]["permissions"]["canRestore"], true);
+    let cancelled_revision = cancelled["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("cancelled auction recruitment response did not contain a revision")?;
+
+    let cancelled_detail = browser_get(&app, &auction_recruitment_path, MEMBER_SESSION).await?;
+    assert_eq!(cancelled_detail.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(cancelled_detail).await?["data"]["recruitment"]["status"],
+        "CANCELLED"
+    );
+
+    let restored = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("{auction_recruitment_path}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-safe-restore",
+        true,
+        json!({ "expectedRevision": cancelled_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored = body_json(restored).await?;
+    assert_eq!(restored["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(restored["data"]["permissions"]["canReopen"], true);
+    assert_eq!(restored["data"]["permissions"]["canCancel"], true);
+
     Ok(())
 }
 
@@ -2670,7 +2840,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(
         body_json(deleted).await?["data"]["nextHref"],
-        format!("/g/{GUILD_ID}/series")
+        format!("/g/{GUILD_ID}/recruitments/{recruitment_id}")
     );
     let deleted_source_state = sqlx::query_as::<_, (String, i64, bool, bool)>(
         "SELECT status, revision, converted_at IS NULL, cancelled_at IS NOT NULL
@@ -2684,6 +2854,24 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(
         deleted_source_state,
         ("CANCELLED".to_owned(), 11, true, true)
+    );
+
+    let restored_source = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_ID}/recruitments/{recruitment_id}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-delete-source-restore",
+        true,
+        json!({ "expectedRevision": 11 }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored_source.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(restored_source).await?["data"]["recruitment"]["status"],
+        "CLOSED"
     );
 
     pool.close().await;
@@ -3144,6 +3332,9 @@ async fn run_flow() -> TestResult {
     assert_eq!(body_json(remove_replay).await?["data"], removed["data"]);
 
     let cancel_path = format!("{path}/{recruitment_id}");
+    let cancel_revision = removed["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("recruitment revision is missing before cancellation")?;
     let non_operator_cancel = browser_mutation(
         &app,
         Method::DELETE,
@@ -3152,7 +3343,7 @@ async fn run_flow() -> TestResult {
         CANDIDATE_CSRF,
         "non-operator-cancel",
         true,
-        json!({}),
+        json!({ "expectedRevision": cancel_revision }),
         None,
     )
     .await?;
@@ -3171,7 +3362,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         cancel_key,
         true,
-        json!({}),
+        json!({ "expectedRevision": cancel_revision }),
         None,
     )
     .await?;
@@ -3199,7 +3390,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         cancel_key,
         true,
-        json!({}),
+        json!({ "expectedRevision": cancel_revision }),
         None,
     )
     .await?;
@@ -3215,14 +3406,43 @@ async fn run_flow() -> TestResult {
     );
 
     let detail_after_cancel = browser_get(&app, &cancel_path, MEMBER_SESSION).await?;
-    assert_eq!(detail_after_cancel.status(), StatusCode::NOT_FOUND);
+    assert_eq!(detail_after_cancel.status(), StatusCode::OK);
     assert_eq!(
-        body_json(detail_after_cancel).await?["error"]["code"],
-        "not_found"
+        body_json(detail_after_cancel).await?["data"]["recruitment"]["status"],
+        "CANCELLED"
     );
     assert_eq!(
         web_mutation_counts(&pool, &recruitment_id).await?,
         (0, 3, 3)
+    );
+
+    let cancelled_revision = cancelled["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("cancelled recruitment revision is missing")?;
+    let restored = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("{cancel_path}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-recruitment-restore-1",
+        true,
+        json!({ "expectedRevision": cancelled_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored = body_json(restored).await?;
+    assert_eq!(restored["data"]["recruitment"]["status"], "OPEN");
+    assert!(restored["data"]["recruitment"]["messageId"].is_null());
+    assert_eq!(
+        pending_notification_types(&pool, &recruitment_id).await?,
+        vec![
+            "RECRUITMENT_MESSAGE_CREATE",
+            "RECRUITMENT_MESSAGE_DELETE",
+            "RECRUITMENT_MESSAGE_UPDATE",
+            "RECRUITMENT_MESSAGE_UPDATE"
+        ]
     );
 
     let full_created = browser_mutation(
@@ -3790,10 +4010,8 @@ async fn run_flow() -> TestResult {
     )
     .await?;
     assert_eq!(closed_again.status(), StatusCode::OK);
-    assert_eq!(
-        body_json(closed_again).await?["data"]["recruitment"]["status"],
-        "CLOSED"
-    );
+    let closed_again = body_json(closed_again).await?;
+    assert_eq!(closed_again["data"]["recruitment"]["status"], "CLOSED");
 
     let closed_entry = browser_get(&app, &entry_path, MEMBER_SESSION).await?;
     assert_eq!(closed_entry.status(), StatusCode::OK);
@@ -3803,6 +4021,9 @@ async fn run_flow() -> TestResult {
     );
 
     let closed_cancel_path = format!("{path}/{full_recruitment_id}");
+    let closed_cancel_revision = closed_again["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("closed recruitment revision is missing before cancellation")?;
     let closed_cancel = browser_mutation(
         &app,
         Method::DELETE,
@@ -3811,7 +4032,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         "web-recruitment-cancel-closed",
         true,
-        json!({}),
+        json!({ "expectedRevision": closed_cancel_revision }),
         None,
     )
     .await?;
@@ -3827,7 +4048,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         "web-recruitment-cancel-closed",
         true,
-        json!({}),
+        json!({ "expectedRevision": closed_cancel_revision }),
         None,
     )
     .await?;
@@ -3842,6 +4063,27 @@ async fn run_flow() -> TestResult {
     assert_eq!(
         body_json(closed_entry_after_cancel).await?["error"]["code"],
         "not_found"
+    );
+
+    let closed_cancelled_revision = closed_cancel["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("cancelled closed recruitment revision is missing")?;
+    let restored_closed = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("{closed_cancel_path}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-recruitment-restore-closed",
+        true,
+        json!({ "expectedRevision": closed_cancelled_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored_closed.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(restored_closed).await?["data"]["recruitment"]["status"],
+        "CLOSED"
     );
 
     let malformed_bearer = browser_create(

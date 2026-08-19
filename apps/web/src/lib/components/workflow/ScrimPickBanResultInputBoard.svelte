@@ -33,6 +33,7 @@
 		champions?: ScrimPickBanResultInputChampion[];
 		patchVersion?: string;
 		teamsAreGameSides?: boolean;
+		sidePresetLabels?: Partial<Record<ScrimPickBanResultInputSidePreset, string>>;
 		hardFearless?: boolean;
 		previousPickChampionIds?: readonly string[];
 		validateDraft?: boolean;
@@ -50,6 +51,7 @@
 		champions = scrimPickBanResultInputChampions,
 		patchVersion = mockScrimPickBanResultInputPatch,
 		teamsAreGameSides = false,
+		sidePresetLabels = {},
 		hardFearless = false,
 		previousPickChampionIds = [],
 		validateDraft = false,
@@ -527,7 +529,8 @@
 								disabled={!canEditDraft}
 								onclick={() => void selectSide(preset)}
 							>
-								{preset === 'DEFAULT' ? '왼쪽 팀 블루' : '오른쪽 팀 블루'}
+								{sidePresetLabels[preset] ??
+									(preset === 'DEFAULT' ? '왼쪽 팀 블루' : '오른쪽 팀 블루')}
 							</button>
 						{/each}
 					</div>

@@ -10,7 +10,7 @@ const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const creatorId = '1525900000000000005';
 const viewerId = '1525900000000000006';
 
-function snapshot(status: 'OPEN' | 'CLOSED', participantCount = 2) {
+function snapshot(status: 'OPEN' | 'CLOSED' | 'CANCELLED', participantCount = 2) {
 	const participants = Array.from({ length: participantCount }, (_, index) => ({
 		id: `15259000000000000${index + 3}`,
 		displayName: index === 0 ? 'Longcat' : index === 1 ? '탐솔' : `참가자 ${index + 1}`,
@@ -38,7 +38,7 @@ function snapshot(status: 'OPEN' | 'CLOSED', participantCount = 2) {
 }
 
 function renderPage(
-	status: 'OPEN' | 'CLOSED',
+	status: 'OPEN' | 'CLOSED' | 'CANCELLED',
 	currentUserRole: 'MEMBER' | 'OPERATOR' = 'MEMBER',
 	discordId = viewerId,
 	participantCount = 2
@@ -79,25 +79,41 @@ describe('recruitment stage page', () => {
 		expect(body).not.toContain('Discord 모집 현황');
 		expect(body).not.toContain('Discord 모집 중');
 		expect(body).not.toContain('참가자 추가');
-		expect(body).not.toContain('모집 삭제');
+		expect(body).not.toContain('모집 취소');
 	});
 
 	it('exposes compact operator recruitment actions without a dummy-specific panel', () => {
 		const { body } = renderPage('OPEN', 'OPERATOR');
 
 		expect(body).toContain('참가자 추가');
-		expect(body).toContain('모집 삭제');
+		expect(body).toContain('모집 취소');
 		expect(body).toContain('Longcat 참가자에서 제거');
 		expect(body).toContain('탐솔 참가자에서 제거');
 		expect(body).not.toContain('더미 참가자');
 	});
 
-	it('lets a non-operator creator delete their open recruitment without member controls', () => {
+	it('lets a non-operator creator cancel their open recruitment without member controls', () => {
 		const { body } = renderPage('OPEN', 'MEMBER', creatorId);
 
-		expect(body).toContain('모집 삭제');
+		expect(body).toContain('모집 취소');
 		expect(body).not.toContain('참가자 추가');
 		expect(body).not.toContain('Longcat 참가자에서 제거');
+	});
+
+	it('keeps cancellation actionable for the creator after entry editing starts', () => {
+		const { body } = renderPage('CLOSED', 'MEMBER', creatorId);
+
+		expect(body).toContain('모집 취소');
+		expect(source).not.toContain('if (!isOpen || !canCancel');
+	});
+
+	it('keeps a cancelled recruitment visible to its creator with an undo action', () => {
+		const { body } = renderPage('CANCELLED', 'MEMBER', creatorId);
+
+		expect(body).toContain('취소 이력으로 보존');
+		expect(body).toContain('취소 되돌리기');
+		expect(source).toContain('restoreRecruitment');
+		expect(source).toContain('cancelConfirmationValid');
 	});
 
 	it('only lets an operator start entry editing when the open roster is exactly full', () => {

@@ -32,6 +32,8 @@ function snapshot(status: 'OPEN' | 'CLOSED') {
 		permissions: {
 			canManageMembers: false,
 			canClose: false,
+			canReopen: true,
+			canRestore: false,
 			canSendParticipantConfirmationDms: true,
 			canCancel: false
 		}
