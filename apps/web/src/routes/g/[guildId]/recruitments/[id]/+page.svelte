@@ -92,7 +92,9 @@
 	const canManageLifecycle = $derived(
 		isOperator || data.user.discordId === recruitment.createdById
 	);
-	const canCancel = $derived(!isCancelled && canManageLifecycle);
+	const canCancel = $derived(
+		(recruitment.status === 'OPEN' || recruitment.status === 'CLOSED') && canManageLifecycle
+	);
 	const canRestore = $derived(isCancelled && canManageLifecycle);
 	const cancelConfirmationText = $derived(`모집 #${recruitment.displayNumber} 취소`);
 	const cancelConfirmationValid = $derived(

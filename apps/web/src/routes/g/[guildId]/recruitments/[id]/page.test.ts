@@ -10,7 +10,7 @@ const recruitmentId = '01900000-0000-7000-8000-000000000101';
 const creatorId = '1525900000000000005';
 const viewerId = '1525900000000000006';
 
-function snapshot(status: 'OPEN' | 'CLOSED' | 'CANCELLED', participantCount = 2) {
+function snapshot(status: 'OPEN' | 'CLOSED' | 'CONVERTED' | 'CANCELLED', participantCount = 2) {
 	const participants = Array.from({ length: participantCount }, (_, index) => ({
 		id: `15259000000000000${index + 3}`,
 		displayName: index === 0 ? 'Longcat' : index === 1 ? '탐솔' : `참가자 ${index + 1}`,
@@ -38,7 +38,7 @@ function snapshot(status: 'OPEN' | 'CLOSED' | 'CANCELLED', participantCount = 2)
 }
 
 function renderPage(
-	status: 'OPEN' | 'CLOSED' | 'CANCELLED',
+	status: 'OPEN' | 'CLOSED' | 'CONVERTED' | 'CANCELLED',
 	currentUserRole: 'MEMBER' | 'OPERATOR' = 'MEMBER',
 	discordId = viewerId,
 	participantCount = 2
@@ -105,6 +105,12 @@ describe('recruitment stage page', () => {
 
 		expect(body).toContain('모집 취소');
 		expect(source).not.toContain('if (!isOpen || !canCancel');
+	});
+
+	it('does not offer direct cancellation after the recruitment was converted', () => {
+		const { body } = renderPage('CONVERTED', 'MEMBER', creatorId);
+
+		expect(body).not.toContain('모집 취소');
 	});
 
 	it('keeps a cancelled recruitment visible to its creator with an undo action', () => {
