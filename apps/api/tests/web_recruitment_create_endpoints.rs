@@ -329,6 +329,25 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     assert_eq!(participants[0]["id"], MEMBER_ID);
     assert_eq!(participants[0]["declaredLane"], Value::Null);
 
+    let setup_path =
+        format!("/api/guilds/{GUILD_ID}/auction-recruitments/{auction_recruitment_id}/setup-draft");
+    let setup = browser_get(&app, &setup_path, MEMBER_SESSION).await?;
+    assert_eq!(setup.status(), StatusCode::OK);
+    let setup = body_json(setup).await?;
+    assert_eq!(
+        setup["data"]["draft"]["recruitmentId"],
+        auction_recruitment_id
+    );
+    assert_eq!(setup["data"]["draft"]["teamCount"], 2);
+    assert_eq!(
+        setup["data"]["draft"]["teams"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(
+        setup["data"]["participants"].as_array().map(Vec::len),
+        Some(10)
+    );
+
     let replay = browser_mutation(
         &app,
         Method::POST,

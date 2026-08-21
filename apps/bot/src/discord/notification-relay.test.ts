@@ -881,7 +881,14 @@ function auctionRecruitmentSnapshot(
 		},
 		participants: [{ id: '100000000000000001', displayName: 'Longcat', declaredLane: 'MID' }],
 		links: { draft: null },
-		permissions: { canManageMembers: false, canClose: true, canCancel: true }
+		permissions: {
+			canManageMembers: false,
+			canClose: true,
+			canReopen: false,
+			canRestore: false,
+			canSendParticipantConfirmationDms: false,
+			canCancel: true
+		}
 	};
 }
 

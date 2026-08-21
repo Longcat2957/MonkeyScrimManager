@@ -321,6 +321,8 @@ const auctionRecruitmentSnapshotFields = {
 		.object({
 			canManageMembers: z.boolean(),
 			canClose: z.boolean(),
+			canReopen: z.boolean().optional(),
+			canRestore: z.boolean().optional(),
 			canSendParticipantConfirmationDms: z.boolean().optional(),
 			canCancel: z.boolean()
 		})

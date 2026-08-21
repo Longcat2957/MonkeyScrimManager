@@ -9580,7 +9580,7 @@ async fn auction_setup_draft_snapshot(
 ) -> Result<AuctionSetupDraftSnapshot, AttemptError> {
     require_active_session_member_read(transaction, guild_id, viewer_id).await?;
     let recruitment = sqlx::query_as::<_, AuctionRecruitmentLockRow>(
-        "SELECT season_id, format, status, target_count, semifinal_best_of, final_best_of,
+        "SELECT season_id, format, status, closed_at, target_count, semifinal_best_of, final_best_of,
                 hard_fearless, revision, created_by
          FROM auction_recruitments
          WHERE guild_id = $1 AND id = $2",
