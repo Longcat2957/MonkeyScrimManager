@@ -15,6 +15,9 @@ export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	if (snapshot.recruitment.status === 'OPEN') {
 		redirect(303, `/g/${params.guildId}/auction/recruitments/${params.id}`);
 	}
+	if (snapshot.recruitment.status === 'CONVERTED') {
+		redirect(303, snapshot.recruitment.href);
+	}
 
 	const setup = await apiGet(
 		fetch,

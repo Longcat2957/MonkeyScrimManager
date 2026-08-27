@@ -6,7 +6,9 @@ const guildId = '1525851181157580861';
 const recruitmentId = '01900000-0000-7000-8000-000000000501';
 const tournamentId = '01900000-0000-7000-8000-000000000601';
 
-function snapshot() {
+function snapshot(
+	status: 'BIDDING' | 'BRACKET_SETUP' | 'IN_GAME' | 'COMPLETED' | 'CANCELLED' = 'BIDDING'
+) {
 	return {
 		tournament: {
 			id: tournamentId,
@@ -15,7 +17,7 @@ function snapshot() {
 			title: '금요 경매 내전',
 			format: 'TEN_PERSON',
 			rules: { hardFearless: false, semifinalBestOf: null, finalBestOf: 3 },
-			status: 'BIDDING',
+			status,
 			revision: 7,
 			href: `/g/${guildId}/auction/tournaments/${tournamentId}`
 		},
@@ -104,4 +106,25 @@ describe('auction tournament draft page server load', () => {
 			}
 		});
 	});
+
+	it.each([
+		['BRACKET_SETUP', `/g/${guildId}/auction/tournaments/${tournamentId}/bracket`],
+		['IN_GAME', `/g/${guildId}/auction/tournaments/${tournamentId}/result`],
+		['COMPLETED', `/g/${guildId}/auction/tournaments/${tournamentId}/result`],
+		['CANCELLED', `/g/${guildId}/auction/tournaments/${tournamentId}/result`]
+	] as const)(
+		'redirects a %s handoff link to its current workflow page',
+		async (status, location) => {
+			await expect(
+				load({
+					fetch: async () => Response.json({ data: snapshot(status), meta: { requestId } }),
+					params: { guildId, id: tournamentId },
+					parent: async () => ({ guildId }),
+					url: new URL(
+						`http://localhost:5173/g/${guildId}/auction/tournaments/${tournamentId}/draft`
+					)
+				} as never)
+			).rejects.toMatchObject({ status: 303, location });
+		}
+	);
 });

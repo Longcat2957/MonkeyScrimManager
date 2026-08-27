@@ -6,6 +6,7 @@ import { renderAuctionRecruitmentMessage } from './auction-recruitment-message.j
 
 const guildId = '200000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000101';
+const tournamentId = '01900000-0000-7000-8000-000000000201';
 const webOrigin = new URL('https://dev.monkeybot.lol');
 const expectedStartLabel = '2026-07-26 20:00 (KST)';
 
@@ -33,7 +34,10 @@ function snapshot(
 			messageId: null,
 			createdById: '100000000000000001',
 			updatedAt: '2026-07-14T10:00:00Z',
-			href: `/g/${guildId}/auction/recruitments/${recruitmentId}`
+			href:
+				status === 'CONVERTED'
+					? `/g/${guildId}/auction/tournaments/${tournamentId}/draft`
+					: `/g/${guildId}/auction/recruitments/${recruitmentId}`
 		},
 		participants: Array.from({ length: participantCount }, (_, index) => ({
 			id: String(100000000000000001n + BigInt(index)),
@@ -90,6 +94,19 @@ describe('renderAuctionRecruitmentMessage', () => {
 		expect(serialized).toContain(
 			`https://dev.monkeybot.lol/g/${guildId}/auction/recruitments/${recruitmentId}/draft`
 		);
+		expect(serialized).not.toContain('auction-recruit:');
+	});
+
+	it('hands a converted recruitment off to the actual auction tournament', () => {
+		const rendered = json(renderAuctionRecruitmentMessage(snapshot('CONVERTED', 10), webOrigin));
+		const serialized = JSON.stringify(rendered);
+
+		expect(serialized).toContain('경매 진행 중');
+		expect(serialized).toContain('경매 내전 열기');
+		expect(serialized).toContain(
+			`https://dev.monkeybot.lol/g/${guildId}/auction/tournaments/${tournamentId}/draft`
+		);
+		expect(serialized).not.toContain(`/auction/recruitments/${recruitmentId}/draft`);
 		expect(serialized).not.toContain('auction-recruit:');
 	});
 

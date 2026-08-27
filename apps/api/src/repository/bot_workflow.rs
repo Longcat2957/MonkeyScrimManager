@@ -2064,7 +2064,10 @@ pub async fn get_auction_recruitment_snapshot(
             .map_err(AttemptError::into_public)?;
     if !matches!(
         snapshot.recruitment.status,
-        RecruitmentStatus::Open | RecruitmentStatus::Closed | RecruitmentStatus::Cancelled
+        RecruitmentStatus::Open
+            | RecruitmentStatus::Closed
+            | RecruitmentStatus::Converted
+            | RecruitmentStatus::Cancelled
     ) {
         return Err(BotWorkflowError::RecruitmentNotFound);
     }
@@ -7797,6 +7800,21 @@ async fn execute_web_auction_tournament_create_attempt(
     let snapshot =
         auction_tournament_draft_snapshot(transaction, guild_id, prepared.tournament_id, actor_id)
             .await?;
+    let converted_recruitment_snapshot = auction_recruitment_snapshot(
+        transaction,
+        guild_id,
+        command.source_recruitment_id,
+        actor_id,
+    )
+    .await?;
+    enqueue_auction_recruitment_message_update(
+        transaction,
+        guild_id,
+        &converted_recruitment_snapshot,
+        prepared.recruitment_message_notification_id,
+        prepared.now,
+    )
+    .await?;
     let source_id = command.source_recruitment_id.to_string();
     let tournament_id = prepared.tournament_id.to_string();
     insert_audit(
@@ -9512,6 +9530,32 @@ async fn auction_recruitment_snapshot(
     let is_operator = is_active_session_operator(transaction, guild_id, viewer_id).await?;
     let status = recruitment.status;
     let created_by = recruitment.created_by.clone();
+    let href = if status == RecruitmentStatus::Converted {
+        let tournament_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id
+             FROM auction_tournaments
+             WHERE guild_id = $1
+               AND source_recruitment_id = $2
+               AND deleted_at IS NULL
+             ORDER BY started_at DESC, id DESC
+             LIMIT 1",
+        )
+        .bind(guild_id)
+        .bind(recruitment_id.as_uuid())
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AttemptError::InvariantViolation)?;
+        format!(
+            "/g/{}/auction/tournaments/{}/draft",
+            guild_id.as_str(),
+            AuctionTournamentId::from_uuid(tournament_id)
+        )
+    } else {
+        format!(
+            "/g/{}/auction/recruitments/{recruitment_id}",
+            guild_id.as_str()
+        )
+    };
     let draft = (status == RecruitmentStatus::Closed).then(|| {
         format!(
             "/g/{}/auction/recruitments/{}/draft",
@@ -9536,10 +9580,7 @@ async fn auction_recruitment_snapshot(
             message_id: recruitment.message_id,
             created_by_id: created_by.clone(),
             updated_at: recruitment.updated_at,
-            href: format!(
-                "/g/{}/auction/recruitments/{recruitment_id}",
-                guild_id.as_str()
-            ),
+            href,
         },
         participants: participant_rows
             .into_iter()
@@ -20768,6 +20809,7 @@ struct WebAuctionTournamentCreatePrepared {
     audit_id: Uuid,
     recruitment_outbox_event_id: OutboxEventId,
     tournament_outbox_event_id: OutboxEventId,
+    recruitment_message_notification_id: NotificationId,
 }
 
 impl WebAuctionTournamentCreatePrepared {
@@ -20782,6 +20824,7 @@ impl WebAuctionTournamentCreatePrepared {
             audit_id: Uuid::now_v7(),
             recruitment_outbox_event_id: OutboxEventId::new(),
             tournament_outbox_event_id: OutboxEventId::new(),
+            recruitment_message_notification_id: NotificationId::new(),
         }
     }
 }

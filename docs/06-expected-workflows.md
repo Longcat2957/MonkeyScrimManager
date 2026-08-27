@@ -275,6 +275,8 @@ Web 현재 active operator의 참가자 관리
 경매 tournament 생성
   -> 저장된 auction_setup_drafts revision을 검증해 auction_tournaments 생성
   -> captain/team/candidate/initial point 원장 생성
+  -> source 경매 모집을 CONVERTED로 전환하고 기존 Discord 모집 카드를 실제 tournament 링크로 갱신
+  -> 기존 모집 상세/마감 명단 URL도 연결된 tournament 작업대로 redirect
   -> 후보 draw / bid / 낙찰 / 수동 배치
   -> 필요한 단계에 revert checkpoint 기록
 

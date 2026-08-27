@@ -45,9 +45,11 @@ export function renderAuctionRecruitmentMessage(
 			? full
 				? BOT_COLORS.success
 				: BOT_COLORS.info
-			: recruitment.status === 'CANCELLED'
-				? BOT_COLORS.error
-				: BOT_COLORS.warning;
+			: recruitment.status === 'CONVERTED'
+				? BOT_COLORS.success
+				: recruitment.status === 'CANCELLED'
+					? BOT_COLORS.error
+					: BOT_COLORS.warning;
 
 	return botReply(
 		botContainer({
@@ -116,8 +118,14 @@ function auctionRecruitmentComponents(
 
 	const target = recruitment.status === 'CLOSED' ? snapshot.links.draft : recruitment.href;
 	if (!target) return [];
+	const label =
+		recruitment.status === 'CLOSED'
+			? '마감 명단 열기'
+			: recruitment.status === 'CONVERTED'
+				? '경매 내전 열기'
+				: '경매 모집 열기';
 	const link = new ButtonBuilder()
-		.setLabel(recruitment.status === 'CLOSED' ? '마감 명단 열기' : '경매 모집 열기')
+		.setLabel(label)
 		.setStyle(ButtonStyle.Link)
 		.setURL(new URL(target, webOrigin).toString());
 

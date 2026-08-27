@@ -103,6 +103,9 @@ action을 요청했을 때만 해당 CLOSED revision의 `JOINED` Discord 참가�
 - `참가`: 실행자를 현재 모집에 추가한다.
 - `참가 취소`: 실행자를 현재 모집에서 뺀다.
 - `참가 라인`: 정확히 한 개의 라인을 선택해 해당 선택으로 참가한다.
+- 모집 마감 뒤에는 `마감 명단 열기`로 setup 화면을 연다.
+- tournament 생성 뒤에는 같은 카드를 `경매 진행 중`으로 갱신하고 실제 tournament UUID의
+  `경매 내전 열기` 링크만 남긴다.
 
 모집 card의 생성·갱신·삭제는 API notification outbox가 Discord relay에 전달한다. 입찰, 브래킷, lineup, match의 상세 조작은 Web workflow에서 수행하며 현재 별도 Discord command가 없다.
 경매 모집도 마감만으로 DM을 보내지 않으며, current active operator가 Web의 마감 명단 화면에서 수동 발송을

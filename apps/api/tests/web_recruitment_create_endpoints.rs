@@ -59,6 +59,7 @@ const RECRUITMENT_CHANNEL_ID: &str = "400000000000000001";
 const ENTRY_CHANNEL_ID: &str = "400000000000000002";
 const RESULT_CHANNEL_ID: &str = "400000000000000003";
 const MESSAGE_ID: &str = "500000000000000001";
+const AUCTION_MESSAGE_ID: &str = "500000000000000002";
 const BOT_INSTANCE_ID: &str = "web-recruitment-test-bot";
 const SEASON_ID: &str = "01900000-0000-7000-8000-000000000001";
 const MEMBER_SESSION: &str = "web-recruitment-member-session";
@@ -879,6 +880,95 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     assert_eq!(restored["data"]["recruitment"]["status"], "CLOSED");
     assert_eq!(restored["data"]["permissions"]["canReopen"], true);
     assert_eq!(restored["data"]["permissions"]["canCancel"], true);
+
+    // The restore notification would bind this ID after Discord recreates the card.
+    sqlx::query(
+        "UPDATE auction_recruitments
+         SET message_id = $3
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&open_auction_recruitment_id)?)
+    .bind(AUCTION_MESSAGE_ID)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "UPDATE auction_setup_teams
+         SET captain_user_id = CASE team_index
+                 WHEN 1 THEN $3
+                 WHEN 2 THEN $4
+             END
+         WHERE guild_id = $1 AND recruitment_id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&open_auction_recruitment_id)?)
+    .bind(FULL_ROSTER_MEMBER_IDS[0])
+    .bind(FULL_ROSTER_MEMBER_IDS[1])
+    .execute(&pool)
+    .await?;
+    let tournament_create = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_ID}/auction-tournaments"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-tournament-create-with-message-handoff",
+        true,
+        json!({
+            "sourceRecruitmentId": open_auction_recruitment_id,
+            "expectedRevision": 0
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(tournament_create.status(), StatusCode::CREATED);
+    let tournament_create = body_json(tournament_create).await?;
+    let tournament_id = tournament_create["data"]["tournament"]["id"]
+        .as_str()
+        .ok_or("created auction tournament response did not contain an ID")?;
+    let tournament_href = format!("/g/{GUILD_ID}/auction/tournaments/{tournament_id}/draft");
+    assert_eq!(
+        tournament_create["data"]["tournament"]["href"],
+        tournament_href
+    );
+
+    let converted_detail = browser_get(&app, &auction_recruitment_path, MEMBER_SESSION).await?;
+    assert_eq!(converted_detail.status(), StatusCode::OK);
+    let converted_detail = body_json(converted_detail).await?;
+    assert_eq!(
+        converted_detail["data"]["recruitment"]["status"],
+        "CONVERTED"
+    );
+    assert_eq!(
+        converted_detail["data"]["recruitment"]["href"],
+        tournament_href
+    );
+    assert_eq!(converted_detail["data"]["links"]["draft"], Value::Null);
+
+    let handoff_notification = sqlx::query_as::<_, (String, String, Value)>(
+        "SELECT notification_type, deduplication_key, payload
+         FROM bot_notification_outbox
+         WHERE guild_id = $1
+           AND notification_type = 'AUCTION_RECRUITMENT_MESSAGE_UPDATE'
+           AND payload ->> 'auctionRecruitmentId' = $2
+           AND payload #>> '{snapshot,recruitment,status}' = 'CONVERTED'",
+    )
+    .bind(GUILD_ID)
+    .bind(&open_auction_recruitment_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(handoff_notification.0, "AUCTION_RECRUITMENT_MESSAGE_UPDATE");
+    assert!(handoff_notification.1.starts_with(&format!(
+        "auction-recruitment:{open_auction_recruitment_id}:message:update:"
+    )));
+    assert_eq!(
+        handoff_notification.2["snapshot"]["recruitment"]["messageId"],
+        AUCTION_MESSAGE_ID
+    );
+    assert_eq!(
+        handoff_notification.2["snapshot"]["recruitment"]["href"],
+        tournament_href
+    );
 
     Ok(())
 }
@@ -4546,7 +4636,7 @@ async fn seed_open_auction_recruitment(pool: &PgPool, display_number: i64) -> Te
          ) VALUES (
              $1, $2, $3, $4, '마감 DM 경매 모집', 'TEN_PERSON', 10,
              NULL, 3, true, 'OPEN', 0,
-             NULL, NULL, $5, $6, $5, $6,
+             $5, $6, $7, $8, $7, $8,
              NULL, NULL, NULL
          )",
     )
@@ -4554,6 +4644,8 @@ async fn seed_open_auction_recruitment(pool: &PgPool, display_number: i64) -> Te
     .bind(recruitment_id)
     .bind(Uuid::parse_str(SEASON_ID)?)
     .bind(display_number)
+    .bind(RECRUITMENT_CHANNEL_ID)
+    .bind(AUCTION_MESSAGE_ID)
     .bind(MEMBER_ID)
     .bind(now)
     .execute(pool)
@@ -4569,6 +4661,19 @@ async fn seed_open_auction_recruitment(pool: &PgPool, display_number: i64) -> Te
     .bind(now)
     .execute(pool)
     .await?;
+    for team_index in 1_i16..=2 {
+        sqlx::query(
+            "INSERT INTO auction_setup_teams (
+                 guild_id, recruitment_id, team_index, team_name, captain_user_id, initial_points
+             ) VALUES ($1, $2, $3, $4, NULL, 1000)",
+        )
+        .bind(GUILD_ID)
+        .bind(recruitment_id)
+        .bind(team_index)
+        .bind(format!("팀 {team_index}"))
+        .execute(pool)
+        .await?;
+    }
     for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().enumerate() {
         sqlx::query(
             "INSERT INTO auction_recruitment_participants (
