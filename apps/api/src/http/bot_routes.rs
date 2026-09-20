@@ -19,10 +19,10 @@ use crate::{
         AuthenticatedSession, BotServicePrincipal, RecruitmentCreatePrincipal, require_csrf,
     },
     repository::bot_workflow::{
-        self, AuctionMatchGameRevertCommand, AuctionMatchGameSubmitCommand,
-        AuctionMatchLineupAssignmentCommand, AuctionMatchLineupLockCommand,
-        AuctionRecruitmentForceCancelCommand, AuctionRecruitmentSeriesRules,
-        AuctionSetupDraftTeamInput, AuctionTournamentBracketCommand,
+        self, AuctionFinalBo1CompleteCommand, AuctionMatchGameRevertCommand,
+        AuctionMatchGameSubmitCommand, AuctionMatchLineupAssignmentCommand,
+        AuctionMatchLineupLockCommand, AuctionRecruitmentForceCancelCommand,
+        AuctionRecruitmentSeriesRules, AuctionSetupDraftTeamInput, AuctionTournamentBracketCommand,
         AuctionTournamentCancelCommand, AuctionTournamentDraftCommand, BotActor,
         BotAuctionRecruitmentParticipationCommand, BotRecruitmentCommand, BotWorkflowError,
         EntryDraftOperation, RecruitmentSeriesRules, RegisterGuildMemberCommand,
@@ -931,6 +931,33 @@ pub async fn revert_last_auction_match_game(
     require_csrf(&headers, &state, &principal, &request_id)?;
     let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
     let snapshot = bot_workflow::revert_last_web_auction_match_game(
+        database(&state, &request_id)?,
+        &guild_id,
+        match_id,
+        &principal.session.user_id,
+        &idempotency_key,
+        &request_id,
+        request,
+    )
+    .await
+    .map_err(|error| web_auction_match_game_error(error, &request_id))?;
+    Ok(error::success(StatusCode::OK, &request_id, snapshot))
+}
+
+pub async fn complete_auction_final_as_bo1(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((guild_id, match_id)): Path<(GuildId, AuctionMatchId)>,
+    headers: HeaderMap,
+    principal: AuthenticatedSession,
+    Json(request): Json<AuctionFinalBo1CompleteCommand>,
+) -> Result<Response, ApiError> {
+    if request.expected_revision < 0 {
+        return Err(invalid_browser_auction_match_game_request(&request_id));
+    }
+    require_csrf(&headers, &state, &principal, &request_id)?;
+    let idempotency_key = browser_idempotency_key(&headers, &request_id)?;
+    let snapshot = bot_workflow::complete_web_auction_final_as_bo1(
         database(&state, &request_id)?,
         &guild_id,
         match_id,
@@ -2687,6 +2714,13 @@ fn command_error(error: BotWorkflowError, request_id: &RequestId) -> ApiError {
             "이후 MMR 변경이 있어 경매 내전 전체를 안전하게 취소할 수 없습니다.",
             None,
         ),
+        BotWorkflowError::AuctionFinalBo1CompletionUnavailable => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_final_bo1_completion_unavailable",
+            "BO3 또는 BO5 경매 결승의 첫 세트가 1:0으로 확정된 경우에만 BO1로 조기 종료할 수 있습니다.",
+            None,
+        ),
         BotWorkflowError::Database(source) => error::database_failure(&source, request_id),
         BotWorkflowError::DatabaseBusy => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3515,6 +3549,13 @@ fn web_auction_match_game_error(error: BotWorkflowError, request_id: &RequestId)
             "대진이 확정된 진행 중 경매 내전에서만 경기 결과를 변경할 수 있습니다.",
             None,
         ),
+        BotWorkflowError::AuctionFinalBo1CompletionUnavailable => ApiError::new(
+            StatusCode::CONFLICT,
+            request_id,
+            "auction_final_bo1_completion_unavailable",
+            "BO3 또는 BO5 경매 결승의 첫 세트가 1:0으로 확정된 경우에만 BO1로 조기 종료할 수 있습니다.",
+            None,
+        ),
         BotWorkflowError::AuctionMatchSemifinalLineupsIncomplete => ApiError::new(
             StatusCode::CONFLICT,
             request_id,
@@ -4056,6 +4097,26 @@ mod tests {
         assert_eq!(
             body["error"]["message"],
             "20인 경매 내전은 두 준결승의 라인업을 모두 확정한 뒤 세트 결과를 입력할 수 있습니다."
+        );
+        assert_eq!(body["error"]["requestId"], "test-request");
+
+        let response = web_auction_match_game_error(
+            BotWorkflowError::AuctionFinalBo1CompletionUnavailable,
+            &request_id,
+        )
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error body should be readable");
+        let body: Value = serde_json::from_slice(&body).expect("error body should be JSON");
+        assert_eq!(
+            body["error"]["code"],
+            "auction_final_bo1_completion_unavailable"
+        );
+        assert_eq!(
+            body["error"]["message"],
+            "BO3 또는 BO5 경매 결승의 첫 세트가 1:0으로 확정된 경우에만 BO1로 조기 종료할 수 있습니다."
         );
         assert_eq!(body["error"]["requestId"], "test-request");
     }

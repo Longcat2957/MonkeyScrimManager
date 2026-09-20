@@ -326,6 +326,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             "/api/guilds/{guild_id}/auction-matches/{match_id}/games/last",
             delete(bot_routes::revert_last_auction_match_game),
         )
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}/complete",
+            post(bot_routes::complete_auction_final_as_bo1),
+        )
 		.route("/api/riot/records", get(riot_routes::records))
 		.route(
 			"/api/riot/records/suggestions",

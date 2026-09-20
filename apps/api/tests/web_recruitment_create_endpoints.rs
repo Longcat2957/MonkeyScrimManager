@@ -1189,6 +1189,159 @@ async fn run_auction_lineup_confirmation_flow() -> TestResult {
         configured.match_id.to_string()
     );
 
+    let mut picks = serde_json::Map::new();
+    for user_id in FULL_ROSTER_MEMBER_IDS {
+        picks.insert(user_id.to_owned(), Value::Null);
+    }
+    let game_path = format!(
+        "/api/guilds/{GUILD_ID}/auction-matches/{}/games",
+        configured.match_id
+    );
+    let first_final_game = browser_mutation(
+        &app,
+        Method::POST,
+        &game_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-final-first-game",
+        true,
+        json!({
+            "expectedRevision": 3,
+            "setNumber": 1,
+            "sidePreset": "DEFAULT",
+            "winner": "BLUE",
+            "picks": picks,
+            "bans": {
+                "BLUE": [null, null, null, null, null],
+                "RED": [null, null, null, null, null]
+            },
+            "patchVersion": "26.17"
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(first_final_game.status(), StatusCode::CREATED);
+    let first_final_game = body_json(first_final_game).await?;
+    assert_eq!(first_final_game["data"]["match"]["status"], "IN_PROGRESS");
+    assert_eq!(first_final_game["data"]["match"]["revision"], 4);
+    assert_eq!(first_final_game["data"]["match"]["leftScore"], 1);
+    assert_eq!(first_final_game["data"]["match"]["rightScore"], 0);
+    assert_eq!(
+        first_final_game["data"]["permissions"]["canCompleteFinalAsBo1"],
+        true
+    );
+    let applied_mmr_entries = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)
+         FROM mmr_ledger_entries
+         WHERE guild_id = $1
+           AND game_id IN (
+               SELECT id FROM games WHERE guild_id = $1 AND auction_match_id = $2
+           )
+           AND source_type = 'GAME_RESULT'",
+    )
+    .bind(GUILD_ID)
+    .bind(configured.match_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(applied_mmr_entries, 10);
+
+    set_result_channel(&pool, Some(RESULT_CHANNEL_ID)).await?;
+    let complete_path = format!(
+        "/api/guilds/{GUILD_ID}/auction-matches/{}/complete",
+        configured.match_id
+    );
+    let completed = browser_mutation(
+        &app,
+        Method::POST,
+        &complete_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-final-complete-as-bo1",
+        true,
+        json!({ "expectedRevision": 4 }),
+        None,
+    )
+    .await?;
+    assert_eq!(completed.status(), StatusCode::OK);
+    let completed = body_json(completed).await?;
+    assert_eq!(completed["data"]["match"]["status"], "COMPLETED");
+    assert_eq!(completed["data"]["match"]["bestOf"], 1);
+    assert_eq!(completed["data"]["match"]["revision"], 5);
+    assert_eq!(
+        completed["data"]["match"]["winnerTeamId"],
+        configured.left_team_id.to_string()
+    );
+    assert_eq!(completed["data"]["games"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        completed["data"]["permissions"]["canCompleteFinalAsBo1"],
+        false
+    );
+    let lifecycle = sqlx::query_as::<_, (String, i16, Option<Uuid>, String, i16)>(
+        "SELECT tournament.status, tournament.final_best_of, tournament.champion_team_id,
+                recruitment.status, recruitment.final_best_of
+         FROM auction_tournaments AS tournament
+         JOIN auction_recruitments AS recruitment
+           ON recruitment.guild_id = tournament.guild_id
+          AND recruitment.id = tournament.source_recruitment_id
+         WHERE tournament.guild_id = $1 AND tournament.id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(configured.tournament_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        lifecycle,
+        (
+            "COMPLETED".to_owned(),
+            1,
+            Some(configured.left_team_id),
+            "CONVERTED".to_owned(),
+            1,
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM mmr_ledger_entries
+             WHERE guild_id = $1
+               AND game_id IN (
+                   SELECT id FROM games WHERE guild_id = $1 AND auction_match_id = $2
+               )",
+        )
+        .bind(GUILD_ID)
+        .bind(configured.match_id)
+        .fetch_one(&pool)
+        .await?,
+        10
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM bot_notification_outbox
+             WHERE guild_id = $1
+               AND notification_type = 'AUCTION_TOURNAMENT_RESULT_CREATE'
+               AND payload ->> 'tournamentId' = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(configured.tournament_id.to_string())
+        .fetch_one(&pool)
+        .await?,
+        1
+    );
+    let replay = browser_mutation(
+        &app,
+        Method::POST,
+        &complete_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-final-complete-as-bo1",
+        true,
+        json!({ "expectedRevision": 4 }),
+        None,
+    )
+    .await?;
+    assert_eq!(replay.status(), StatusCode::OK);
+
     set_entry_channel(&pool, None).await?;
     let unconfigured = seed_complete_auction_match_lineup(&pool, 42).await?;
     let unconfigured_path = format!(

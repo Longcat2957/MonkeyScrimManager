@@ -729,6 +729,8 @@ WebSocket: 사용하지 않는다. authoritative HTTP snapshot, match revision, 
 - 마지막 확정 게임은 capability가 있을 때만 되돌린다. 점수, match 상태, MMR은 client가 계산하지 않고
   response snapshot으로 갱신한다. 완료된 20인 준결승은 final의 후속 라인업·게임·lock이 없을 때만 이
   capability를 받고, 후속 작업이 시작된 경우 control을 노출하지 않는다.
+- BO3/BO5 결승 첫 세트가 1:0으로 확정되면 `canCompleteFinalAsBo1`에 따라 별도 확인 dialog를 노출한다.
+  조기 종료는 첫 세트와 MMR을 유지한 채 BO1 우승을 확정하며, 전체 내전 취소 control과 구분한다.
 
 Backend 데이터:
 
@@ -738,6 +740,7 @@ Backend 데이터:
 - `POST /api/guilds/:guildId/auction-matches/:matchId/lineup/unlock`
 - `POST /api/guilds/:guildId/auction-matches/:matchId/games`
 - `DELETE /api/guilds/:guildId/auction-matches/:matchId/games/last`
+- `POST /api/guilds/:guildId/auction-matches/:matchId/complete`
 
 불변 조건:
 

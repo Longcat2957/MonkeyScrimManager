@@ -68,7 +68,8 @@ export const auctionMatchLineupPermissionsSchema = z
 		canManageLineup: z.boolean(),
 		canEnterResults: z.boolean(),
 		canUnlockLineup: z.boolean(),
-		canRevertLastGame: z.boolean()
+		canRevertLastGame: z.boolean(),
+		canCompleteFinalAsBo1: z.boolean()
 	})
 	.strict();
 

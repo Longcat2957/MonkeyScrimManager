@@ -3586,6 +3586,63 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}/complete:
+    post:
+      operationId: completeGuildAuctionFinalAsBo1
+      summary: Complete a one-game auction final as BO1
+      description: >-
+        Browser-only active-operator command. Available only for an IN_PROGRESS FINAL originally
+        configured as BO3 or BO5 with exactly one confirmed game and a 1:0 score. The confirmed
+        game and its MMR ledger entries remain applied while the source recruitment, match, and
+        tournament finalBestOf values become 1 and the current leader becomes champion.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionFinalBo1CompleteRequest'
+      responses:
+        '200':
+          description: Completed canonical match snapshot or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes auction_final_bo1_completion_unavailable when the match, score, or saved
+            final rule is not eligible for BO1 completion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}/records/suggestions:
     get:
       operationId: suggestGuildRecordMembers
@@ -11607,7 +11664,14 @@ components:
     AuctionMatchSnapshotPermissions:
       type: object
       additionalProperties: false
-      required: [canManageLineup, canEnterResults, canUnlockLineup, canRevertLastGame]
+      required:
+        [
+          canManageLineup,
+          canEnterResults,
+          canUnlockLineup,
+          canRevertLastGame,
+          canCompleteFinalAsBo1
+        ]
       properties:
         canManageLineup:
           type: boolean
@@ -11621,6 +11685,11 @@ components:
             True only when the final confirmed game can be safely reverted. A completed
             TWENTY_PERSON semifinal returns false once downstream final lineup, game, lock, or
             non-LINEUP_PENDING work exists.
+        canCompleteFinalAsBo1:
+          type: boolean
+          description: >-
+            True only for an active operator viewing a BO3 or BO5 FINAL with exactly one
+            confirmed game and a 1:0 score.
     AuctionMatchSnapshot:
       type: object
       additionalProperties: false
@@ -11687,6 +11756,15 @@ components:
             - type: string
             - type: 'null'
     AuctionMatchGameRevertRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    AuctionFinalBo1CompleteRequest:
       type: object
       additionalProperties: false
       required: [expectedRevision]

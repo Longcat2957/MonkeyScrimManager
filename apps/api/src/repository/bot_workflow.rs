@@ -110,6 +110,8 @@ const AUCTION_MATCH_GAME_SUBMIT_ROUTE: &str =
     "/api/guilds/{guildId}/auction-matches/{matchId}/games";
 const AUCTION_MATCH_GAME_REVERT_ROUTE: &str =
     "/api/guilds/{guildId}/auction-matches/{matchId}/games/last";
+const AUCTION_FINAL_BO1_COMPLETE_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-matches/{matchId}/complete";
 const RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE: &str =
     "/api/guilds/{guildId}/recruitments/{id}/participant-confirmation-dms";
 const AUCTION_INITIAL_TEAM_POINTS: i32 = 1_000;
@@ -780,6 +782,7 @@ pub struct AuctionMatchSnapshotPermissions {
     pub can_enter_results: bool,
     pub can_unlock_lineup: bool,
     pub can_revert_last_game: bool,
+    pub can_complete_final_as_bo1: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -822,6 +825,12 @@ pub struct AuctionMatchGameSubmitCommand {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuctionMatchGameRevertCommand {
+    pub expected_revision: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuctionFinalBo1CompleteCommand {
     pub expected_revision: i64,
 }
 
@@ -976,6 +985,7 @@ enum WebAuctionMatchLineupMutation {
 enum WebAuctionMatchGameMutation {
     Submit(AuctionMatchGameSubmitCommand),
     Revert(AuctionMatchGameRevertCommand),
+    CompleteFinalAsBo1(AuctionFinalBo1CompleteCommand),
 }
 
 #[derive(Serialize)]
@@ -1014,6 +1024,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(command) => command.expected_revision,
             Self::Revert(command) => command.expected_revision,
+            Self::CompleteFinalAsBo1(command) => command.expected_revision,
         }
     }
 
@@ -1021,6 +1032,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => "POST",
             Self::Revert(_) => "DELETE",
+            Self::CompleteFinalAsBo1(_) => "POST",
         }
     }
 
@@ -1028,6 +1040,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => AUCTION_MATCH_GAME_SUBMIT_ROUTE,
             Self::Revert(_) => AUCTION_MATCH_GAME_REVERT_ROUTE,
+            Self::CompleteFinalAsBo1(_) => AUCTION_FINAL_BO1_COMPLETE_ROUTE,
         }
     }
 
@@ -1035,6 +1048,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => "AUCTION_MATCH_GAME_CONFIRMED",
             Self::Revert(_) => "AUCTION_MATCH_GAME_REVERTED",
+            Self::CompleteFinalAsBo1(_) => "AUCTION_FINAL_COMPLETED_AS_BO1",
         }
     }
 
@@ -1042,6 +1056,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => "AUCTION_MATCH_GAME_CONFIRMED",
             Self::Revert(_) => "AUCTION_MATCH_GAME_REVERTED",
+            Self::CompleteFinalAsBo1(_) => "AUCTION_FINAL_COMPLETED_AS_BO1",
         }
     }
 }
@@ -2756,6 +2771,32 @@ pub async fn revert_last_web_auction_match_game(
         match_id,
         actor_id,
         WebAuctionMatchGameMutation::Revert(command),
+        idempotency_key,
+        request_id,
+    )
+    .await
+}
+
+pub async fn complete_web_auction_final_as_bo1(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    match_id: AuctionMatchId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &RequestId,
+    command: AuctionFinalBo1CompleteCommand,
+) -> Result<AuctionMatchSnapshot, BotWorkflowError> {
+    if command.expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction match revision must be non-negative",
+        ));
+    }
+    execute_web_auction_match_game_mutation(
+        pool,
+        guild_id,
+        match_id,
+        actor_id,
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(command),
         idempotency_key,
         request_id,
     )
@@ -8976,10 +9017,22 @@ async fn execute_web_auction_match_game_mutation_attempt(
             tournament.status,
             AuctionTournamentStatus::InGame | AuctionTournamentStatus::Completed
         ),
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => {
+            tournament.status == AuctionTournamentStatus::InGame
+        }
     };
     if !tournament_allows_mutation {
         return Err(AttemptError::AuctionMatchTournamentNotReady);
     }
+    let source_recruitment =
+        if matches!(command, WebAuctionMatchGameMutation::CompleteFinalAsBo1(_)) {
+            Some(
+                lock_auction_recruitment(transaction, guild_id, tournament.source_recruitment_id)
+                    .await?,
+            )
+        } else {
+            None
+        };
     let auction_match = lock_auction_match(transaction, guild_id, match_id).await?;
     if auction_match.tournament_id != tournament_id.as_uuid() {
         return Err(AttemptError::InvariantViolation);
@@ -9013,7 +9066,7 @@ async fn execute_web_auction_match_game_mutation_attempt(
     let roster = auction_match_roster_from_lineups(&lineups, left_team_id, right_team_id)?;
     let before = auction_match_snapshot(transaction, guild_id, match_id, actor_id).await?;
 
-    let (revision, completed_tournament_revision) = match command {
+    let (revision, completed_tournament_revision, completed_recruitment_revision) = match command {
         WebAuctionMatchGameMutation::Submit(command) => {
             let confirmed_game_count =
                 confirmed_auction_match_game_count(transaction, guild_id, match_id).await?;
@@ -9170,7 +9223,7 @@ async fn execute_web_auction_match_game_mutation_attempt(
                 }
                 None => None,
             };
-            (revision, completed_tournament_revision)
+            (revision, completed_tournament_revision, None)
         }
         WebAuctionMatchGameMutation::Revert(_) => {
             let was_completed = auction_match.status == "COMPLETED";
@@ -9215,7 +9268,108 @@ async fn execute_web_auction_match_game_mutation_attempt(
                 )
                 .await?;
             }
-            (revision, None)
+            (revision, None, None)
+        }
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => {
+            let source_recruitment = source_recruitment
+                .as_ref()
+                .ok_or(AttemptError::InvariantViolation)?;
+            let confirmed_game_count =
+                confirmed_auction_match_game_count(transaction, guild_id, match_id).await?;
+            let (left_score, right_score) =
+                confirmed_auction_match_score(transaction, guild_id, match_id).await?;
+            if auction_match.match_key != "FINAL"
+                || !matches!(auction_match.best_of, 3 | 5)
+                || confirmed_game_count != 1
+                || !matches!((left_score, right_score), (1, 0) | (0, 1))
+                || tournament.final_best_of != auction_match.best_of
+                || source_recruitment.final_best_of != auction_match.best_of
+                || source_recruitment.status != RecruitmentStatus::Converted
+            {
+                return Err(AttemptError::AuctionFinalBo1CompletionUnavailable);
+            }
+            let winner_team_id = if left_score == 1 {
+                left_team_id
+            } else {
+                right_team_id
+            };
+            let recruitment_revision = sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_recruitments
+                 SET final_best_of = 1,
+                     revision = revision + 1,
+                     updated_by = $1,
+                     updated_at = $2
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND status = 'CONVERTED'
+                   AND final_best_of = $5
+                 RETURNING revision",
+            )
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(tournament.source_recruitment_id.as_uuid())
+            .bind(auction_match.best_of)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AttemptError::AuctionFinalBo1CompletionUnavailable)?;
+            let revision = sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_matches
+                 SET best_of = 1,
+                     status = 'COMPLETED',
+                     winner_team_id = $1,
+                     ended_at = $2,
+                     revision = revision + 1,
+                     updated_by = $3,
+                     updated_at = $2
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND match_key = 'FINAL'
+                   AND status = 'IN_PROGRESS'
+                   AND best_of = $6
+                   AND lineups_locked_at IS NOT NULL
+                   AND deleted_at IS NULL
+                 RETURNING revision",
+            )
+            .bind(winner_team_id)
+            .bind(prepared.now)
+            .bind(actor_id)
+            .bind(guild_id)
+            .bind(match_id.as_uuid())
+            .bind(auction_match.best_of)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AttemptError::AuctionFinalBo1CompletionUnavailable)?;
+            let tournament_revision = sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_tournaments
+                 SET final_best_of = 1,
+                     status = 'COMPLETED',
+                     champion_team_id = $1,
+                     ended_at = $2,
+                     revision = revision + 1,
+                     updated_by = $3,
+                     updated_at = $2
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND status = 'IN_GAME'
+                   AND final_best_of = $6
+                   AND deleted_at IS NULL
+                 RETURNING revision",
+            )
+            .bind(winner_team_id)
+            .bind(prepared.now)
+            .bind(actor_id)
+            .bind(guild_id)
+            .bind(tournament_id.as_uuid())
+            .bind(auction_match.best_of)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AttemptError::AuctionFinalBo1CompletionUnavailable)?;
+            (
+                revision,
+                Some(tournament_revision),
+                Some(recruitment_revision),
+            )
         }
     };
 
@@ -9226,6 +9380,47 @@ async fn execute_web_auction_match_game_mutation_attempt(
             tournament_id,
             tournament_revision,
             prepared.result_notification_id,
+            prepared.now,
+        )
+        .await?;
+    }
+    if let Some(recruitment_revision) = completed_recruitment_revision {
+        let recruitment_snapshot = auction_recruitment_snapshot(
+            transaction,
+            guild_id,
+            tournament.source_recruitment_id,
+            actor_id,
+        )
+        .await?;
+        if recruitment_snapshot.recruitment.revision != recruitment_revision {
+            return Err(AttemptError::InvariantViolation);
+        }
+        enqueue_auction_recruitment_message_update(
+            transaction,
+            guild_id,
+            &recruitment_snapshot,
+            prepared.recruitment_notification_id,
+            prepared.now,
+        )
+        .await?;
+        let recruitment_target_id = tournament.source_recruitment_id.to_string();
+        insert_outbox(
+            transaction,
+            guild_id,
+            prepared.recruitment_outbox_event_id,
+            format!(
+                "guild:{guild_id}:auction-recruitment:{}",
+                tournament.source_recruitment_id
+            ),
+            "AUCTION_RECRUITMENT",
+            &recruitment_target_id,
+            recruitment_revision,
+            command.event_type(),
+            json!({
+                "type":"invalidate",
+                "resourceId":tournament.source_recruitment_id,
+                "revision":recruitment_revision
+            }),
             prepared.now,
         )
         .await?;
@@ -9264,9 +9459,30 @@ async fn execute_web_auction_match_game_mutation_attempt(
         prepared.now,
     )
     .await?;
+    if let Some(tournament_revision) = completed_tournament_revision {
+        let tournament_target_id = tournament_id.to_string();
+        insert_outbox(
+            transaction,
+            guild_id,
+            prepared.tournament_outbox_event_id,
+            format!("guild:{guild_id}:auction-tournament:{tournament_id}"),
+            "AUCTION_TOURNAMENT",
+            &tournament_target_id,
+            tournament_revision,
+            command.event_type(),
+            json!({
+                "type":"invalidate",
+                "resourceId":tournament_id,
+                "revision":tournament_revision
+            }),
+            prepared.now,
+        )
+        .await?;
+    }
     let status = match command {
         WebAuctionMatchGameMutation::Submit(_) => 201,
-        WebAuctionMatchGameMutation::Revert(_) => 200,
+        WebAuctionMatchGameMutation::Revert(_)
+        | WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => 200,
     };
     complete_idempotency(
         transaction,
@@ -10747,6 +10963,15 @@ async fn auction_match_snapshot(
         &auction_match.status,
         downstream_final_blocks_revert,
     );
+    let can_complete_final_as_bo1 = is_operator
+        && auction_match.match_key == "FINAL"
+        && auction_match.status == "IN_PROGRESS"
+        && matches!(auction_match.best_of, 3 | 5)
+        && games.len() == 1
+        && matches!(
+            (auction_match.left_score, auction_match.right_score),
+            (1, 0) | (0, 1)
+        );
     let can_unlock_lineup = is_operator
         && auction_match.status == "READY"
         && auction_match.lineups_locked_at.is_some()
@@ -10785,6 +11010,7 @@ async fn auction_match_snapshot(
             can_enter_results,
             can_unlock_lineup,
             can_revert_last_game,
+            can_complete_final_as_bo1,
         },
     })
 }
@@ -16752,7 +16978,8 @@ async fn lock_auction_tournament(
     tournament_id: AuctionTournamentId,
 ) -> Result<AuctionTournamentLockRow, AttemptError> {
     sqlx::query_as::<_, AuctionTournamentLockRow>(
-        "SELECT display_number, title, format, hard_fearless, status, revision, bracket_locked_at
+        "SELECT source_recruitment_id, display_number, title, format, final_best_of,
+                hard_fearless, status, revision, bracket_locked_at
          FROM auction_tournaments
          WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL
          FOR UPDATE",
@@ -17133,6 +17360,7 @@ fn ensure_auction_match_result_editable(
             auction_match.status.as_str(),
             "READY" | "IN_PROGRESS" | "COMPLETED"
         ),
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => auction_match.status == "IN_PROGRESS",
     };
     if allowed {
         Ok(())
@@ -20959,7 +21187,10 @@ struct WebAuctionMatchGameMutationPrepared {
     input_id: Uuid,
     audit_id: Uuid,
     outbox_event_id: OutboxEventId,
+    tournament_outbox_event_id: OutboxEventId,
+    recruitment_outbox_event_id: OutboxEventId,
     result_notification_id: NotificationId,
+    recruitment_notification_id: NotificationId,
 }
 
 impl WebAuctionMatchGameMutationPrepared {
@@ -20971,7 +21202,10 @@ impl WebAuctionMatchGameMutationPrepared {
             input_id: Uuid::now_v7(),
             audit_id: Uuid::now_v7(),
             outbox_event_id: OutboxEventId::new(),
+            tournament_outbox_event_id: OutboxEventId::new(),
+            recruitment_outbox_event_id: OutboxEventId::new(),
             result_notification_id: NotificationId::new(),
+            recruitment_notification_id: NotificationId::new(),
         }
     }
 }
@@ -21906,9 +22140,11 @@ struct AuctionTournamentDraftRow {
 
 #[derive(Debug, FromRow)]
 struct AuctionTournamentLockRow {
+    source_recruitment_id: AuctionRecruitmentId,
     display_number: i64,
     title: String,
     format: String,
+    final_best_of: i16,
     hard_fearless: bool,
     status: AuctionTournamentStatus,
     revision: i64,
@@ -22827,6 +23063,8 @@ enum AttemptError {
     AuctionMatchTeamsPending,
     #[error("auction match tournament is not in an active bracket state")]
     AuctionMatchTournamentNotReady,
+    #[error("auction final cannot be completed as BO1 from its current state")]
+    AuctionFinalBo1CompletionUnavailable,
     #[error("auction match revision mismatch: expected {expected}, actual {actual}")]
     AuctionMatchRevisionConflict { expected: i64, actual: i64 },
     #[error("auction match lineup cannot be changed while status is {0}")]
@@ -23115,6 +23353,9 @@ impl AttemptError {
             Self::AuctionMatchTournamentNotReady => {
                 BotWorkflowError::AuctionMatchTournamentNotReady
             }
+            Self::AuctionFinalBo1CompletionUnavailable => {
+                BotWorkflowError::AuctionFinalBo1CompletionUnavailable
+            }
             Self::AuctionMatchRevisionConflict { expected, actual } => {
                 BotWorkflowError::AuctionMatchRevisionConflict { expected, actual }
             }
@@ -23398,6 +23639,8 @@ pub enum BotWorkflowError {
     AuctionMatchTeamsPending,
     #[error("auction match tournament is not in an active bracket state")]
     AuctionMatchTournamentNotReady,
+    #[error("auction final cannot be completed as BO1 from its current state")]
+    AuctionFinalBo1CompletionUnavailable,
     #[error("auction match revision mismatch: expected {expected}, actual {actual}")]
     AuctionMatchRevisionConflict { expected: i64, actual: i64 },
     #[error("auction match lineup cannot be changed while status is {0}")]
@@ -23950,6 +24193,12 @@ mod tests {
         });
         assert_eq!(revert.method(), "DELETE");
         assert_eq!(revert.route_template(), AUCTION_MATCH_GAME_REVERT_ROUTE);
+        let complete =
+            WebAuctionMatchGameMutation::CompleteFinalAsBo1(AuctionFinalBo1CompleteCommand {
+                expected_revision: 4,
+            });
+        assert_eq!(complete.method(), "POST");
+        assert_eq!(complete.route_template(), AUCTION_FINAL_BO1_COMPLETE_ROUTE);
     }
 
     #[test]
@@ -24074,12 +24323,15 @@ mod tests {
                 can_enter_results: true,
                 can_unlock_lineup: true,
                 can_revert_last_game: false,
+                can_complete_final_as_bo1: false,
             },
         };
         let tournament = AuctionTournamentLockRow {
+            source_recruitment_id: AuctionRecruitmentId::new(),
             display_number: 42,
             title: "금요 경매 내전".to_owned(),
             format: "TWENTY_PERSON".to_owned(),
+            final_best_of: 3,
             hard_fearless: true,
             status: AuctionTournamentStatus::InGame,
             revision: 8,

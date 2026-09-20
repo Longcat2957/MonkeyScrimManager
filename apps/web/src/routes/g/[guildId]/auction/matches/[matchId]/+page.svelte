@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { LoaderCircle } from 'lucide-svelte';
+	import { Dialog } from 'bits-ui';
+	import { Flag, LoaderCircle, X } from 'lucide-svelte';
 	import {
 		assignAuctionMatchLineup,
 		auctionMatchLineupErrorText,
@@ -10,6 +11,7 @@
 	} from '$lib/api/auctionMatchLineup';
 	import {
 		auctionMatchGameResultErrorText,
+		completeAuctionFinalAsBo1,
 		fetchAuctionMatchGameResult,
 		isAuctionMatchGameResultRevisionConflict,
 		revertLastAuctionMatchGameResult,
@@ -32,7 +34,8 @@
 	} from '$lib/contracts/auctionMatchLineup';
 	import type { PageProps } from './$types';
 
-	type MatchMutation = 'assign' | 'lock' | 'unlock' | 'submit_game' | 'revert_game';
+	type MatchMutation =
+		'assign' | 'lock' | 'unlock' | 'submit_game' | 'revert_game' | 'complete_bo1';
 
 	const invalidSnapshotMessage = '경매 경기 응답 형식이 올바르지 않습니다.';
 
@@ -42,6 +45,7 @@
 	let snapshotOverrideSourceKey = $state<string | null>(null);
 	let mutation = $state<MatchMutation | null>(null);
 	let mutationError = $state('');
+	let completeBo1DialogOpen = $state(false);
 	let idempotencyKeys = createOperationIdempotencyKeys();
 
 	const incomingSnapshotKey = $derived(`${data.snapshot.match.id}:${data.snapshot.match.revision}`);
@@ -53,6 +57,12 @@
 	const match = $derived(snapshot.match);
 	const busy = $derived(mutation !== null);
 	const statusLabel = $derived(matchStatusLabel(match.status));
+	const currentLeaderName = $derived(
+		snapshot.teams.find(
+			(team) =>
+				team.id === (match.leftScore > match.rightScore ? match.leftTeamId : match.rightTeamId)
+		)?.teamName ?? '현재 선두 팀'
+	);
 
 	function parseAuthoritativeSnapshot(value: unknown): AuctionMatchGameResultSnapshot {
 		const parsed = auctionMatchGameResultSnapshotSchema.safeParse(value);
@@ -272,6 +282,37 @@
 		}
 	}
 
+	async function handleCompleteFinalAsBo1(): Promise<void> {
+		if (busy || !snapshot.permissions.canCompleteFinalAsBo1) return;
+
+		const command = { expectedRevision: snapshot.match.revision };
+		const idempotencyKey = idempotencyKeys.keyFor('auction-final-complete-bo1', command);
+		const sourceSnapshotKey = incomingSnapshotKey;
+		mutation = 'complete_bo1';
+		mutationError = '';
+		try {
+			const nextSnapshot = await completeAuctionFinalAsBo1(
+				data.guildId,
+				match.id,
+				command,
+				idempotencyKey
+			);
+			if (incomingSnapshotKey === sourceSnapshotKey) applySnapshot(nextSnapshot);
+			idempotencyKeys.complete('auction-final-complete-bo1');
+			completeBo1DialogOpen = false;
+		} catch (cause) {
+			completeBo1DialogOpen = false;
+			if (isAuctionMatchGameResultRevisionConflict(cause)) {
+				idempotencyKeys.invalidate('auction-final-complete-bo1');
+				await recoverAuthoritativeSnapshot(auctionMatchGameResultErrorText(cause));
+			} else {
+				mutationError = gameMutationErrorText(cause);
+			}
+		} finally {
+			mutation = null;
+		}
+	}
+
 	function matchStatusLabel(status: AuctionMatchGameResultSnapshot['match']['status']): string {
 		if (status === 'LINEUP_PENDING') return '라인업 편성 중';
 		if (status === 'READY') return '시작 준비';
@@ -292,6 +333,16 @@
 		description={`BO${match.bestOf} · ${match.hardFearless ? '하드 피어리스' : '일반'} · ${statusLabel}`}
 	>
 		{#snippet actions()}
+			{#if snapshot.permissions.canCompleteFinalAsBo1}
+				<button
+					type="button"
+					disabled={busy}
+					onclick={() => (completeBo1DialogOpen = true)}
+					class="inline-flex h-9 shrink-0 items-center gap-1.5 justify-center border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 hover:bg-amber-400/15 disabled:opacity-35"
+				>
+					<Flag size={14} aria-hidden="true" /> BO1로 조기 종료
+				</button>
+			{/if}
 			{#if match.status === 'READY' || match.status === 'IN_PROGRESS' || match.status === 'COMPLETED'}
 				<a
 					href={resolve('/g/[guildId]/auction/tournaments/[id]/result', {
@@ -337,7 +388,9 @@
 						? '라인업 확정 해제 중'
 						: mutation === 'submit_game'
 							? '게임 결과 기록 중'
-							: '마지막 게임 결과 되돌리는 중'}
+							: mutation === 'revert_game'
+								? '마지막 게임 결과 되돌리는 중'
+								: 'BO1 조기 종료 처리 중'}
 		</div>
 	{/if}
 
@@ -357,3 +410,58 @@
 		onDeleteLastGame={handleDeleteLastGame}
 	/>
 </div>
+
+<Dialog.Root bind:open={completeBo1DialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+		<Dialog.Content
+			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-hidden border border-[var(--color-app-border)] bg-[var(--color-app-surface)] shadow-2xl shadow-black/50 outline-none"
+		>
+			<header
+				class="flex h-12 items-center justify-between border-b border-[var(--color-app-border)] px-4"
+			>
+				<Dialog.Title class="text-sm font-semibold text-slate-50"
+					>결승을 BO1로 조기 종료</Dialog.Title
+				>
+				<Dialog.Close
+					disabled={busy}
+					class="grid size-8 place-items-center text-slate-400 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:opacity-35"
+					aria-label="BO1 조기 종료 창 닫기"
+				>
+					<X size={16} aria-hidden="true" />
+				</Dialog.Close>
+			</header>
+			<div class="grid gap-3 p-4">
+				<Dialog.Description class="text-xs leading-5 text-slate-400">
+					확정된 첫 세트와 MMR 정산은 그대로 유지하고, 결승 규칙을 BO1로 바꿔
+					<strong class="text-slate-100">{currentLeaderName}</strong>의 우승으로 완료합니다.
+				</Dialog.Description>
+				<p
+					class="border border-amber-300/20 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-100"
+				>
+					전체 내전 취소와는 별개입니다. 준결승 및 결승 기록은 삭제하거나 되돌리지 않습니다.
+				</p>
+			</div>
+			<footer class="flex justify-end gap-2 border-t border-[var(--color-app-border)] px-4 py-3">
+				<Dialog.Close
+					disabled={busy}
+					class="h-9 border border-[var(--color-app-border)] px-3 text-xs font-semibold text-slate-400 disabled:opacity-35"
+				>
+					닫기
+				</Dialog.Close>
+				<button
+					type="button"
+					disabled={busy || !snapshot.permissions.canCompleteFinalAsBo1}
+					onclick={handleCompleteFinalAsBo1}
+					class="inline-flex h-9 items-center gap-1.5 border border-amber-300/35 bg-amber-400/10 px-3 text-xs font-semibold text-amber-100 disabled:opacity-35"
+				>
+					{#if mutation === 'complete_bo1'}
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 처리 중
+					{:else}
+						<Flag size={14} aria-hidden="true" /> BO1 우승 확정
+					{/if}
+				</button>
+			</footer>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
