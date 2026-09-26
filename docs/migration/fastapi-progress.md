@@ -2,6 +2,17 @@
 
 기준 계획: [18-fastapi-migration-plan.md](../18-fastapi-migration-plan.md).
 
+## 추가 이관 예정 — 경매 마무리 (2026-09-26)
+
+사용자 지시에 따라 기록·MMR을 유지하는 경매 마무리는 **Axum + Web에 먼저 구현**한다.
+FastAPI에는 아직 구현하지 않았다. 기존 2026-09-20의 Rust 동결 지침은 이번 기능에 한해 예외이며,
+기존 FastAPI 리팩토링 변경과 동결 baseline은 유지한다.
+
+후속 범위는 finish-preview/finish 2개 operation, SQLx 0026 `ended_early` 제약,
+무승자·미진행 결과 projection/Discord 카드와 종료 후 mutation 차단이다.
+세부 acceptance는 [계획의 추가 이관 예정 항목](../18-fastapi-migration-plan.md#추가-이관-예정--경매-기록-보존-마무리-2026-09-26)을 따른다.
+현재 baseline drift에는 이 Axum 기능 추가가 포함되며, FastAPI 동등성 완료로 처리하지 않는다.
+
 ## 현재 검증 기준
 
 사용자 지시: frontend 연결을 제외하고 백엔드 구현·테스트로 성공 여부를 확인한다. 이에 따라 현재 단계는 격리 PostgreSQL과 테스트 대역을 통한 계약·권한·경쟁·오류 테스트, Ruff/mypy, Docker build/실행 검증을 완료 조건으로 사용한다. frontend check·build, 5173 proxy smoke, 기존 로컬 Axum reload는 실행하지 않으며 이전 proxy 연결 실패는 현재 blocker가 아니다.

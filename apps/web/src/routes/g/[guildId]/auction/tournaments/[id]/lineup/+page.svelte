@@ -11,6 +11,7 @@
 	import { fetchAuctionMatchGameResult } from '$lib/api/auctionMatchGameResult';
 	import { createOperationIdempotencyKeys } from '$lib/api/operationIdempotency';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
+	import AuctionTournamentFinishControl from '$lib/components/workflow/AuctionTournamentFinishControl.svelte';
 	import AuctionMatchStartingLineupInputBoard from '$lib/components/workflow/AuctionMatchStartingLineupInputBoard.svelte';
 	import {
 		auctionMatchGameResultSnapshotSchema,
@@ -237,6 +238,14 @@
 		description={`${tournament.title} · 토너먼트 #${tournament.displayNumber} · ${rulesLabel}`}
 	>
 		{#snippet actions()}
+			<AuctionTournamentFinishControl
+				guildId={data.guildId}
+				tournamentId={tournament.id}
+				canFinish={data.bracket.permissions.canCancel &&
+					tournament.status !== 'COMPLETED' &&
+					tournament.status !== 'CANCELLED'}
+				{busy}
+			/>
 			<a
 				href={resolve('/g/[guildId]/auction/tournaments/[id]/bracket', {
 					guildId: data.guildId,

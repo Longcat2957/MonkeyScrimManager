@@ -19,6 +19,7 @@
 	} from '$lib/api/auctionMatchGameResult';
 	import { createOperationIdempotencyKeys } from '$lib/api/operationIdempotency';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
+	import AuctionTournamentFinishControl from '$lib/components/workflow/AuctionTournamentFinishControl.svelte';
 	import AuctionMatchGameResultInputBoard from '$lib/components/workflow/AuctionMatchGameResultInputBoard.svelte';
 	import AuctionMatchStartingLineupInputBoard from '$lib/components/workflow/AuctionMatchStartingLineupInputBoard.svelte';
 	import {
@@ -317,7 +318,7 @@
 		if (status === 'LINEUP_PENDING') return '라인업 편성 중';
 		if (status === 'READY') return '시작 준비';
 		if (status === 'IN_PROGRESS') return '진행 중';
-		if (status === 'COMPLETED') return '완료';
+		if (status === 'COMPLETED') return match.endedEarly ? '조기 마무리' : '완료';
 		return '취소됨';
 	}
 </script>
@@ -333,6 +334,12 @@
 		description={`BO${match.bestOf} · ${match.hardFearless ? '하드 피어리스' : '일반'} · ${statusLabel}`}
 	>
 		{#snippet actions()}
+			<AuctionTournamentFinishControl
+				guildId={data.guildId}
+				tournamentId={match.tournamentId}
+				canFinish={snapshot.permissions.canFinishTournament ?? false}
+				{busy}
+			/>
 			{#if snapshot.permissions.canCompleteFinalAsBo1}
 				<button
 					type="button"

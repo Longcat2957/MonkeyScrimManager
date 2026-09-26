@@ -3195,6 +3195,83 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/finish-preview:
+    get:
+      operationId: getGuildAuctionTournamentFinishPreview
+      summary: Get the current revision before preserving results and finishing early
+      description: Active guild operator session required. The mutation rechecks permissions and revision.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+      responses:
+        '200':
+          description: Current tournament identity, status and revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentCancelPreviewResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/finish:
+    post:
+      operationId: finishGuildAuctionTournament
+      summary: Finish an active auction tournament while preserving games and MMR
+      description: >-
+        Active guild operator session and CSRF required. Accepts BIDDING, BRACKET_SETUP and IN_GAME
+        for TEN_PERSON and TWENTY_PERSON. Marks the tournament and all unfinished matches COMPLETED
+        with endedEarly=true, without changing the configured best-of, confirmed games, lineups or
+        MMR ledger. The leader of a played FINAL becomes champion; a tied or unplayed FINAL has no
+        champion. The source recruitment stays CONVERTED. Audit, realtime invalidation and configured
+        result notification are committed atomically. Early completion cannot be reverted or resumed.
+        Revision checking and idempotency protect concurrent changes and retries.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionTournamentFinishRequest'
+      responses:
+        '200':
+          description: Early completion outcome or identical request replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentFinishResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Revision conflict, terminal tournament or idempotency conflict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/cancel-preview:
     get:
       operationId: getGuildAuctionTournamentCancelPreview
@@ -10672,6 +10749,47 @@ components:
           $ref: '#/components/schemas/AuctionTournamentCancelPreview'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
+    AuctionTournamentFinishRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, reason]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 240
+    AuctionTournamentFinishResult:
+      type: object
+      additionalProperties: false
+      required: [tournamentId, tournamentStatus, tournamentRevision, championTeamId]
+      properties:
+        tournamentId:
+          type: string
+          format: uuid
+        tournamentStatus:
+          const: COMPLETED
+        tournamentRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        championTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+    AuctionTournamentFinishResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentFinishResult'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     AuctionTournamentCancelRequest:
       type: object
       additionalProperties: false
@@ -11595,6 +11713,7 @@ components:
           label,
           bestOf,
           hardFearless,
+          endedEarly,
           status,
           revision,
           leftTeamId,
@@ -11619,6 +11738,8 @@ components:
         bestOf:
           $ref: '#/components/schemas/AuctionBestOf'
         hardFearless:
+          type: boolean
+        endedEarly:
           type: boolean
         status:
           type: string
@@ -11667,12 +11788,16 @@ components:
       required:
         [
           canManageLineup,
+          canFinishTournament,
           canEnterResults,
           canUnlockLineup,
           canRevertLastGame,
           canCompleteFinalAsBo1
         ]
       properties:
+        canFinishTournament:
+          type: boolean
+          description: Active operator can finish the active parent tournament preserving records and MMR.
         canManageLineup:
           type: boolean
         canEnterResults:
@@ -11834,6 +11959,7 @@ components:
           matchKey,
           bestOf,
           hardFearless,
+          endedEarly,
           status,
           leftTeamId,
           rightTeamId,
@@ -11855,6 +11981,9 @@ components:
           $ref: '#/components/schemas/AuctionBestOf'
         hardFearless:
           type: boolean
+        endedEarly:
+          type: boolean
+          description: Early completion can have no games, lineup lock or winner.
         status:
           type: string
           enum: [LINEUP_PENDING, READY, IN_PROGRESS, COMPLETED, CANCELLED]
@@ -11919,8 +12048,10 @@ components:
     AuctionTournamentResultPermissions:
       type: object
       additionalProperties: false
-      required: [canRevertResults, canRecoverBracket]
+      required: [canRevertResults, canRecoverBracket, canCancel]
       properties:
+        canCancel:
+          type: boolean
         canRevertResults:
           type: boolean
         canRecoverBracket:
@@ -11934,7 +12065,18 @@ components:
           type: object
           additionalProperties: false
           required:
-            [id, title, displayNumber, format, rules, status, revision, championTeamId, href]
+            [
+              id,
+              title,
+              displayNumber,
+              format,
+              rules,
+              status,
+              revision,
+              championTeamId,
+              endedEarly,
+              href
+            ]
           properties:
             id:
               type: string
@@ -11954,6 +12096,9 @@ components:
               type: integer
               format: int64
               minimum: 0
+            endedEarly:
+              type: boolean
+              description: Records and MMR were preserved when the operator finished early.
             championTeamId:
               oneOf:
                 - type: string

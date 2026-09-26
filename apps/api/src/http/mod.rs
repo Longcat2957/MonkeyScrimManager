@@ -290,6 +290,14 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             get(workflow_routes::auction_tournament_result),
         )
         .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/finish-preview",
+            get(bot_routes::auction_tournament_finish_preview),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/finish",
+            post(bot_routes::finish_auction_tournament),
+        )
+        .route(
             "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/cancel-preview",
             get(bot_routes::auction_tournament_cancel_preview),
         )

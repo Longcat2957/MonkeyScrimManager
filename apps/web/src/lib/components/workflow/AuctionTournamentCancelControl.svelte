@@ -27,8 +27,8 @@
 		busy?: boolean;
 	};
 
-	const confirmationText = '조기 종료';
-	const defaultReason = '운영자 요청으로 경매 내전을 조기 종료합니다.';
+	const confirmationText = '취소';
+	const defaultReason = '운영자 요청으로 경매 내전을 취소합니다.';
 
 	let { guildId, tournament, canCancel, busy = false }: Props = $props();
 
@@ -112,9 +112,9 @@
 		class="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-rose-300/35 px-3 text-xs font-semibold text-rose-100 hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-35"
 	>
 		{#if controlBusy}
-			<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 조기 종료
+			<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 취소
 		{:else}
-			<Ban size={14} aria-hidden="true" /> 조기 종료
+			<Ban size={14} aria-hidden="true" /> 취소
 		{/if}
 	</button>
 {/if}
@@ -126,11 +126,11 @@
 			class="fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 border border-[var(--color-app-border)] bg-[var(--color-app-surface)] p-4 shadow-2xl shadow-black/50 outline-none"
 		>
 			<div class="flex items-center justify-between gap-3">
-				<Dialog.Title class="text-sm font-semibold text-slate-50">경매 내전 조기 종료</Dialog.Title>
+				<Dialog.Title class="text-sm font-semibold text-slate-50">경매 내전 취소</Dialog.Title>
 				<Dialog.Close
 					disabled={controlBusy}
 					class="grid size-8 place-items-center text-slate-400 hover:text-slate-100 disabled:opacity-35"
-					aria-label="경매 내전 조기 종료 창 닫기"
+					aria-label="경매 내전 취소 창 닫기"
 				>
 					<X size={16} aria-hidden="true" />
 				</Dialog.Close>
@@ -147,7 +147,7 @@
 					{#if previewing}
 						<div class="flex items-center gap-2 text-xs font-medium text-slate-400">
 							<LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
-							조기 종료 정보 확인 중
+							취소 정보 확인 중
 						</div>
 					{:else if cancelPreview}
 						<div class="grid gap-1 text-xs">
@@ -161,12 +161,12 @@
 							>
 						</div>
 					{:else}
-						<p class="text-xs text-slate-500">조기 종료 정보를 불러오지 못했습니다.</p>
+						<p class="text-xs text-slate-500">취소 정보를 불러오지 못했습니다.</p>
 					{/if}
 				</div>
 
 				<label class="grid gap-1.5 text-xs font-semibold text-slate-300">
-					<span>조기 종료 사유</span>
+					<span>취소 사유</span>
 					<textarea
 						bind:value={cancelReason}
 						disabled={controlBusy}
@@ -213,7 +213,7 @@
 					{#if cancelling}
 						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 종료 중
 					{:else}
-						<Ban size={14} aria-hidden="true" /> 조기 종료
+						<Ban size={14} aria-hidden="true" /> 취소
 					{/if}
 				</button>
 			</div>

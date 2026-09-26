@@ -1211,6 +1211,7 @@ async fn import_archive_rows(
             object.insert("status".to_owned(), Value::String("BIDDING".to_owned()));
             object.insert("champion_team_id".to_owned(), Value::Null);
             object.insert("ended_at".to_owned(), Value::Null);
+            object.insert("ended_early".to_owned(), Value::Bool(false));
             Ok(row)
         })
         .collect::<Result<Vec<_>, GuildFullDataTransferRepositoryError>>()?;
@@ -1236,7 +1237,17 @@ async fn insert_table(
     if rows.is_empty() {
         return Ok(());
     }
-    let payload = Value::Array(rows.to_vec());
+    let mut payload_rows = rows.to_vec();
+    if matches!(table, "auction_tournaments" | "auction_matches") {
+        // Archives predating manual completion have no ended_early column.
+        for row in &mut payload_rows {
+            row.as_object_mut()
+                .ok_or(GuildFullDataTransferRepositoryError::InvalidArchive)?
+                .entry("ended_early")
+                .or_insert(Value::Bool(false));
+        }
+    }
+    let payload = Value::Array(payload_rows);
     let query = match table {
         "users" => String::from(
             "INSERT INTO users SELECT * FROM jsonb_populate_recordset(NULL::users, $1::jsonb)
@@ -1360,7 +1371,8 @@ async fn restore_tournament_terminal_state(
         "UPDATE auction_tournaments AS target
          SET status = source.status,
              champion_team_id = source.champion_team_id,
-             ended_at = source.ended_at
+             ended_at = source.ended_at,
+             ended_early = COALESCE(source.ended_early, false)
          FROM jsonb_populate_recordset(NULL::auction_tournaments, $1::jsonb) AS source
          WHERE target.guild_id = source.guild_id AND target.id = source.id",
     )

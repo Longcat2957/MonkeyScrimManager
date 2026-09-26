@@ -11,6 +11,7 @@
 	import { createOperationIdempotencyKeys } from '$lib/api/operationIdempotency';
 	import WorkspaceHeader from '$lib/components/layout/WorkspaceHeader.svelte';
 	import AuctionTournamentCancelControl from '$lib/components/workflow/AuctionTournamentCancelControl.svelte';
+	import AuctionTournamentFinishControl from '$lib/components/workflow/AuctionTournamentFinishControl.svelte';
 	import AuctionTournamentBracketResultBoard from '$lib/components/workflow/AuctionTournamentBracketResultBoard.svelte';
 	import type {
 		AuctionTournamentResultMatch,
@@ -41,7 +42,7 @@
 		if (status === 'BIDDING') return '입찰 진행 중';
 		if (status === 'BRACKET_SETUP') return '대진 설정 중';
 		if (status === 'IN_GAME') return '경기 진행 중';
-		if (status === 'COMPLETED') return '완료';
+		if (status === 'COMPLETED') return tournament.endedEarly ? '조기 마무리' : '완료';
 		return '취소됨';
 	}
 
@@ -131,6 +132,14 @@
 			>
 				<ArrowLeft size={14} aria-hidden="true" /> 경매 목록
 			</a>
+			<AuctionTournamentFinishControl
+				guildId={data.guildId}
+				tournamentId={tournament.id}
+				canFinish={data.snapshot.permissions.canCancel &&
+					tournament.status !== 'COMPLETED' &&
+					tournament.status !== 'CANCELLED'}
+				busy={recoveringBracket}
+			/>
 			<AuctionTournamentCancelControl
 				guildId={data.guildId}
 				{tournament}

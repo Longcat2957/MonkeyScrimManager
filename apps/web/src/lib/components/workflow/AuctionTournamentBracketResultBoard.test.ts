@@ -121,4 +121,27 @@ describe('AuctionTournamentBracketResultBoard', () => {
 		expect(source).not.toContain('onSubmitResult');
 		expect(source).not.toContain('Dialog.');
 	});
+
+	it('shows a finished tournament without a champion and no action for unplayed matches', () => {
+		const finished: AuctionTournamentResultSnapshot = {
+			...snapshot,
+			tournament: { ...snapshot.tournament, status: 'COMPLETED', endedEarly: true },
+			matches: snapshot.matches.map((match) => ({
+				...match,
+				status: 'COMPLETED',
+				endedEarly: true,
+				winnerTeamId: null,
+				leftScore: 0,
+				rightScore: 0
+			}))
+		};
+		const { body } = render(AuctionTournamentBracketResultBoard, {
+			props: { snapshot: finished, onOpenMatch: vi.fn() }
+		});
+		expect(body).toContain('우승팀 없이 마무리');
+		expect(body).toContain('조기 마무리');
+		expect(body).toContain('미진행');
+		expect(body).not.toContain('승자 대기');
+		expect(body).not.toContain('경기 열기');
+	});
 });

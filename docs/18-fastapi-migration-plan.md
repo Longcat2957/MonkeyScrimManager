@@ -8,6 +8,23 @@
 
 현재 사용자 확정 기준: **동결한 현재 Axum/Rust 구현을 그대로 이관한다.** 문서와 구현이 충돌하면 현재 Rust handler/repository/test의 동작을 따른다. 이관 중 로직 개선·정책 변경을 섞지 않으며, 수정은 동등성 검증 후 별도 작업으로 수행한다.
 
+## 추가 이관 예정 — 경매 기록 보존 마무리 (2026-09-26)
+
+이번 사용자 지시는 경매 마무리 기능에 한해 Axum 백엔드와 Web을 먼저 수정하는 예외다.
+FastAPI 구현 및 기존 동결 baseline 갱신은 이번 범위에 포함하지 않는다.
+
+- [ ] Axum의 `GET /api/guilds/{guildId}/auction-tournaments/{id}/finish-preview`와
+      `POST .../{id}/finish`를 이관한다. session 운영자·CSRF·revision·idempotency·감사/outbox 경계를 보존한다.
+- [ ] SQLx 0026의 tournament/match `ended_early`와 terminal/lineup 제약을 인계한다.
+      정상 완료의 승자 필수 조건은 유지하며 조기 완료만 무승자·미진행을 허용한다.
+- [ ] 10인 Bo3/Bo5 중단, 동점, 경기 전 종료, 20인 준결승/결승 도중 종료를 지원한다.
+      FINAL 스코어 선두만 우승팀으로 기록하고, 동점·결승 미진행은 우승팀 없이 완료한다.
+- [ ] 확정 경기·MMR·라인업·BO 규칙 및 source 모집의 CONVERTED 상태를 보존한다.
+      종료 후 모든 추가 진행/되돌리기를 거부하고 결과 조회·Discord 카드·전적의 무승부 표시를 맞춘다.
+- [ ] 기존 FastAPI 결과 projection과 mutation에 남은 ‘COMPLETED는 반드시 승자가 있다’는 가정을
+      제거한 뒤 신규 Axum 계약을 baseline/consumer matrix에 반영한다. 이 작업 전에는 신규 Web 마무리 흐름을
+      FastAPI로 전환하지 않는다.
+
 ## 1. 목표와 완료 기준
 
 현재 API의 동작과 PostgreSQL 데이터를 유지하면서 주 API, Riot 내부 API, migration 실행기를 Python으로 전환한다. Web과 Discord Bot의 기존 사용자 흐름을 유지하고, 운영·개발·테스트·배포 경로에서 Rust 실행 의존성을 제거한다.
