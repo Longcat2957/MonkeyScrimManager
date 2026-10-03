@@ -29,6 +29,7 @@
 	import type { RealtimeConnectionState } from '$lib/realtime/types';
 	import { formatAuctionRules } from '$lib/workflow/auctionRules';
 	import AuctionTournamentCancelControl from '$lib/components/workflow/AuctionTournamentCancelControl.svelte';
+	import AuctionTournamentFinishControl from '$lib/components/workflow/AuctionTournamentFinishControl.svelte';
 	import type { PageProps } from './$types';
 
 	type AuctionDraftRoute = {
@@ -246,6 +247,14 @@
 		description={`${tournament.title} · 토너먼트 #${tournament.displayNumber} · ${formatLabel} · ${rulesLabel}`}
 	>
 		{#snippet actions()}
+			<AuctionTournamentFinishControl
+				guildId={data.guildId}
+				tournamentId={tournament.id}
+				canFinish={snapshot.permissions.canCancel &&
+					tournament.status !== 'COMPLETED' &&
+					tournament.status !== 'CANCELLED'}
+				busy={submitting}
+			/>
 			<AuctionTournamentCancelControl
 				guildId={data.guildId}
 				{tournament}

@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "baseCommit": "b417ba5de51659be398548bf2818c0114c8ceddd",
+  "baseCommit": "1537d8ff438ede83f5653ff455eaf362923a7b62",
   "basis": "working tree; hashes include uncommitted source changes",
-  "operationCount": 140,
+  "operationCount": 142,
   "notes": [
     "GET implicitly supports HEAD; HEAD is not counted as a separate explicit operation.",
     "Fallback 404/405 and flags must also be covered by contract tests.",
@@ -24,7 +24,7 @@
     "apps/api/src/domain/status.rs": "5ffd45d4fb17a74c94f94cbbebd52eb5c0c19dd8df370c0c290d1c6c75446b1f",
     "apps/api/src/error.rs": "5a0cf708a4136333c7aa8d13adef844e9f6fd8cab64f6b3fb5b86fcc620e3e19",
     "apps/api/src/http/auth_routes.rs": "ee6d114e59e30fc6469b67b77cf4652651b01dd17dd034e5137d2a0eae75cb53",
-    "apps/api/src/http/bot_routes.rs": "32ec3b334e857d1a60da64ae942151c4af0b6e2741ad4171fb828fb51098730b",
+    "apps/api/src/http/bot_routes.rs": "8e6fcd8b23dec5cf203f54fcd987ae656be6c1f81aa50ce910aa54a663dd26fd",
     "apps/api/src/http/champion_preference_routes.rs": "4a07861c1fa6ca7809b18b729092000057385acb15091032bae759e9cb73e3d3",
     "apps/api/src/http/context_routes.rs": "5c26ce9461778f8e9b550ca4f7a480d0a1c531f152cd9619b6feaa4c9eb6fd57",
     "apps/api/src/http/dummy_recruitment_routes.rs": "2dfa9d42cfea6e33acd97a1ed96940c10e017368dd933934d313d3fb2b214d2c",
@@ -40,7 +40,7 @@
     "apps/api/src/http/guild_season_routes.rs": "4565d57baaa3769ea97eccfe29df3af4d3c07137670dbfcd0eac82ebbd80835b",
     "apps/api/src/http/guild_statistics_routes.rs": "b41ccfbce442dab92452c876fe5e5252d680e1f035c6b165c96e2fdbbe5dbd83",
     "apps/api/src/http/middleware.rs": "0fc41a84d977ecf4f4d5e2b2233507ccbfa0ba0d8e0ce51850ec9a4bfc77f175",
-    "apps/api/src/http/mod.rs": "cc5703f1db672e7aa8430b6ea616d9aed6d04375783f99b53ec281ffd158e85e",
+    "apps/api/src/http/mod.rs": "ef4ec586a9052bcec8866574726cd9712ec9f6dea849527580a0f16156652822",
     "apps/api/src/http/notification_routes.rs": "86d1979b6f68d1b5e8fef681d020302f103ff694680e6699d3df4a6d6f35bf03",
     "apps/api/src/http/realtime_routes.rs": "16a10e8b4f719d7142848ebe50c3e3dfd64629994d6bb77df0cf9e9cf3c5b693",
     "apps/api/src/http/riot_routes.rs": "dc24e3678d7fd5a347b30562b0152b527e4e972d12d28ff4772ed2cbbdaca38b",
@@ -60,7 +60,7 @@
     "apps/api/src/main.rs": "decc9b577d6e6076983df1cbfa5d2c36df8f80fb718eba2ed1135b99a8209d48",
     "apps/api/src/realtime/mod.rs": "4f330b139acca3c90168d9b03e2016e811c0e627cac6a038573f407107a4de5b",
     "apps/api/src/repository/auth.rs": "99288f8ee6610216a406e4ff491572525d2eb634edfdbcb33729ded4c28e272b",
-    "apps/api/src/repository/bot_workflow.rs": "cb1e56d151e1b2b5277c3b81fca9776651fd90422f2f9f6bd0877b5c4e8ee6a7",
+    "apps/api/src/repository/bot_workflow.rs": "597237a190aae16b9a2204f6f8573402e7d28aa4a1662d73b8af087c5ca5b05e",
     "apps/api/src/repository/champion_preferences.rs": "ea8c35a36a9d06597b6941040eb587340ac8bf7736edc21a83158cf446c352ee",
     "apps/api/src/repository/context.rs": "26f2d1fd339a517cef291ef3257fa2dd1f81cb7b9f5a3a4ddc5e346b2a185722",
     "apps/api/src/repository/dummy_recruitment.rs": "27e6a428542b44e2ecaccdce72509b1ac95e782c8ad88f9c3ab8b5a36f7c51d7",
@@ -69,9 +69,9 @@
     "apps/api/src/repository/guild_admin_settings.rs": "e86abdc9e15a8672631c10ae69bb046ddf14f9df99d64e364f0cc6d9e9ab6cdc",
     "apps/api/src/repository/guild_audit_logs.rs": "4cbab9b0e3868ffce80aa65599f2e21649fd444876aed2d340ac3050067101c9",
     "apps/api/src/repository/guild_data_transfer.rs": "e7708e0bfc5ebf2b2e6ac02c9a645232d1bd879a4207f43588bc3c50fa218ec9",
-    "apps/api/src/repository/guild_full_data_transfer.rs": "5a32e879ef61e6b0278e59da1ea3be16bdaa7a0ce2d3826b9080dadae02ea346",
+    "apps/api/src/repository/guild_full_data_transfer.rs": "d51b468b1a10214545027b4aad8f99c6719f2c22669dd28074ba1bf6f23fa287",
     "apps/api/src/repository/guild_leaderboard.rs": "1fb6dd76aa8ca3d1f51145c906db0f2f10dbf16e04129c32f10f2b4e07f3bc94",
-    "apps/api/src/repository/guild_record_profiles.rs": "a4615c61aa3a87775365588aa4c7069a786ecb5b60350bd55385da3e4af72650",
+    "apps/api/src/repository/guild_record_profiles.rs": "6562844073a987dc4394c1f3feecdfad0723dd1f09e65ec1e780c36464d19133",
     "apps/api/src/repository/guild_seasons.rs": "23abb36018b7bf36a32c7bb091fbdca38d39d4c8cc8737f6569d2a053b5d7f49",
     "apps/api/src/repository/guild_statistics.rs": "214f422b1c1c1e97939f1c5b76f9c80eeec9824762a46ad0d76c8673866b83ea",
     "apps/api/src/repository/idempotency.rs": "48bde6d6e41e3f9167c0600c423dbe701f6e1b6e1d62e659595086b254f95599",
@@ -95,7 +95,7 @@
     "apps/riot-api/src/lib.rs": "7f6241191a692835e90c5830504aeb77c77e173b755f77a244f0a460b5e321bf",
     "apps/riot-api/src/main.rs": "f0255e14e77e2a5d5740682a976843518d54d0a2bc57ef90f7e24618f8ada597",
     "apps/riot-api/src/service.rs": "70fb4dee05f8a121279c51315bcc48a34af82313fb95ca1112975236ff9bd2c0",
-    "openapi/monkeybot.yaml": "1ba2c7a234b50f3a6f93b87bab6a47140089fec34a8c70398e62c5b73585eb4b"
+    "openapi/monkeybot.yaml": "9caf708b4628c707373a2781c205ea36b0483ac566b9d89fd513f85ea1e77358"
   },
   "operations": [
     {
@@ -959,10 +959,32 @@
     {
       "service": "api",
       "method": "GET",
+      "path": "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/finish-preview",
+      "handler": "bot_routes::auction_tournament_finish_preview",
+      "source": "apps/api/src/http/mod.rs",
+      "line": 292,
+      "condition": "always",
+      "implicitHead": true,
+      "transport": "http"
+    },
+    {
+      "service": "api",
+      "method": "POST",
+      "path": "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/finish",
+      "handler": "bot_routes::finish_auction_tournament",
+      "source": "apps/api/src/http/mod.rs",
+      "line": 296,
+      "condition": "always",
+      "implicitHead": false,
+      "transport": "http"
+    },
+    {
+      "service": "api",
+      "method": "GET",
       "path": "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/cancel-preview",
       "handler": "bot_routes::auction_tournament_cancel_preview",
       "source": "apps/api/src/http/mod.rs",
-      "line": 292,
+      "line": 300,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -973,7 +995,7 @@
       "path": "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/cancel",
       "handler": "bot_routes::cancel_auction_tournament",
       "source": "apps/api/src/http/mod.rs",
-      "line": 296,
+      "line": 304,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -984,7 +1006,7 @@
       "path": "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/bracket/commands",
       "handler": "bot_routes::execute_auction_tournament_bracket_command",
       "source": "apps/api/src/http/mod.rs",
-      "line": 300,
+      "line": 308,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -995,7 +1017,7 @@
       "path": "/api/guilds/{guild_id}/auction-matches/{match_id}",
       "handler": "workflow_routes::auction_match",
       "source": "apps/api/src/http/mod.rs",
-      "line": 305,
+      "line": 313,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1006,7 +1028,7 @@
       "path": "/api/guilds/{guild_id}/auction-matches/{match_id}/lineup",
       "handler": "bot_routes::update_auction_match_lineup",
       "source": "apps/api/src/http/mod.rs",
-      "line": 309,
+      "line": 317,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1017,7 +1039,7 @@
       "path": "/api/guilds/{guild_id}/auction-matches/{match_id}/lineup/lock",
       "handler": "bot_routes::lock_auction_match_lineup",
       "source": "apps/api/src/http/mod.rs",
-      "line": 313,
+      "line": 321,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1028,7 +1050,7 @@
       "path": "/api/guilds/{guild_id}/auction-matches/{match_id}/lineup/unlock",
       "handler": "bot_routes::unlock_auction_match_lineup",
       "source": "apps/api/src/http/mod.rs",
-      "line": 317,
+      "line": 325,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1039,7 +1061,7 @@
       "path": "/api/guilds/{guild_id}/auction-matches/{match_id}/games",
       "handler": "bot_routes::submit_auction_match_game",
       "source": "apps/api/src/http/mod.rs",
-      "line": 321,
+      "line": 329,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1050,7 +1072,7 @@
       "path": "/api/guilds/{guild_id}/auction-matches/{match_id}/games/last",
       "handler": "bot_routes::revert_last_auction_match_game",
       "source": "apps/api/src/http/mod.rs",
-      "line": 325,
+      "line": 333,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1061,7 +1083,7 @@
       "path": "/api/guilds/{guild_id}/auction-matches/{match_id}/complete",
       "handler": "bot_routes::complete_auction_final_as_bo1",
       "source": "apps/api/src/http/mod.rs",
-      "line": 329,
+      "line": 337,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1072,7 +1094,7 @@
       "path": "/api/riot/records",
       "handler": "riot_routes::records",
       "source": "apps/api/src/http/mod.rs",
-      "line": 333,
+      "line": 341,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1083,7 +1105,7 @@
       "path": "/api/riot/records/suggestions",
       "handler": "search_suggestion_routes::public_riot_suggestions",
       "source": "apps/api/src/http/mod.rs",
-      "line": 334,
+      "line": 342,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1094,7 +1116,7 @@
       "path": "/api/riot/records/matches",
       "handler": "riot_routes::recent_matches",
       "source": "apps/api/src/http/mod.rs",
-      "line": 338,
+      "line": 346,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1105,7 +1127,7 @@
       "path": "/api/riot/records/refresh",
       "handler": "riot_routes::refresh_records",
       "source": "apps/api/src/http/mod.rs",
-      "line": 342,
+      "line": 350,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1116,7 +1138,7 @@
       "path": "/api/guilds/{guild_id}/records/suggestions",
       "handler": "search_suggestion_routes::guild_member_suggestions",
       "source": "apps/api/src/http/mod.rs",
-      "line": 343,
+      "line": 351,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1127,7 +1149,7 @@
       "path": "/api/guilds/{guild_id}/records/profile",
       "handler": "guild_record_profile_routes::profile",
       "source": "apps/api/src/http/mod.rs",
-      "line": 347,
+      "line": 355,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1138,7 +1160,7 @@
       "path": "/api/guilds/{guild_id}/records/search",
       "handler": "guild_record_profile_routes::search",
       "source": "apps/api/src/http/mod.rs",
-      "line": 351,
+      "line": 359,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1149,7 +1171,7 @@
       "path": "/api/me/riot-accounts",
       "handler": "riot_routes::list_riot_accounts",
       "source": "apps/api/src/http/mod.rs",
-      "line": 355,
+      "line": 363,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1160,7 +1182,7 @@
       "path": "/api/me/riot-accounts",
       "handler": "riot_routes::create_riot_account",
       "source": "apps/api/src/http/mod.rs",
-      "line": 355,
+      "line": 363,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1171,7 +1193,7 @@
       "path": "/api/me/riot-accounts/{puuid}/main",
       "handler": "riot_routes::set_main_account",
       "source": "apps/api/src/http/mod.rs",
-      "line": 359,
+      "line": 367,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1182,7 +1204,7 @@
       "path": "/api/me/riot-accounts/{puuid}/refresh",
       "handler": "riot_routes::refresh_riot_account",
       "source": "apps/api/src/http/mod.rs",
-      "line": 363,
+      "line": 371,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1193,7 +1215,7 @@
       "path": "/api/me/riot-accounts/{puuid}",
       "handler": "riot_routes::delete_riot_account",
       "source": "apps/api/src/http/mod.rs",
-      "line": 367,
+      "line": 375,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"
@@ -1204,7 +1226,7 @@
       "path": "/api/me/privacy",
       "handler": "riot_routes::privacy",
       "source": "apps/api/src/http/mod.rs",
-      "line": 371,
+      "line": 379,
       "condition": "always",
       "implicitHead": true,
       "transport": "http"
@@ -1215,7 +1237,7 @@
       "path": "/api/me/privacy",
       "handler": "riot_routes::update_privacy",
       "source": "apps/api/src/http/mod.rs",
-      "line": 371,
+      "line": 379,
       "condition": "always",
       "implicitHead": false,
       "transport": "http"

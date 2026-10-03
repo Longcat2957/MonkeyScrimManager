@@ -53,8 +53,12 @@ MONKEYBOT_MIGRATION_DATABASE_URL="$FASTAPI_TEST_OWNER_URL" target/debug/monkeybo
 docker exec --interactive "$test_name" psql --username postgres --dbname monkeybot_fastapi_test --set ON_ERROR_STOP=1 <<'SQL'
 CREATE ROLE fastapi_test_runtime LOGIN PASSWORD 'isolated-runtime-only';
 SQL
-docker exec --interactive "$test_name" psql --username postgres --dbname monkeybot_fastapi_test \
-    --set runtime_role=fastapi_test_runtime < deploy/postgres/runtime-grants.sql
+apply_runtime_grants() {
+    docker exec --interactive "$test_name" psql --username postgres --dbname monkeybot_fastapi_test \
+        --set runtime_role=fastapi_test_runtime --set service_admin_reset_enabled=true \
+        < deploy/postgres/runtime-grants.sql
+}
+apply_runtime_grants
 
 if [[ "${1:-}" != --docker-only ]]; then
     uv run --project apps/api-python --locked pytest apps/api-python/tests
@@ -62,6 +66,17 @@ fi
 
 docker build --file apps/api-python/Dockerfile --tag monkeybot-api-python:test \
     --build-arg "REVISION=$(git rev-parse HEAD)-working-tree" .
+docker run --rm --network "container:$test_name" --read-only --tmpfs /tmp \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    --env 'MONKEYBOT_MIGRATION_DATABASE_URL=postgresql://postgres:isolated-test-only@127.0.0.1:5432/monkeybot_fastapi_test?sslmode=disable' \
+    --entrypoint monkeybot-migrate-python monkeybot-api-python:test \
+    handover --runtime-role fastapi_test_runtime --service-admin-reset-enabled
+apply_runtime_grants
+docker run --rm --network "container:$test_name" --read-only --tmpfs /tmp \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    --env 'MONKEYBOT_MIGRATION_DATABASE_URL=postgresql://postgres:isolated-test-only@127.0.0.1:5432/monkeybot_fastapi_test?sslmode=disable' \
+    --entrypoint monkeybot-migrate-python monkeybot-api-python:test \
+    validate --runtime-role fastapi_test_runtime --service-admin-reset-enabled
 docker run --detach --rm --name "$api_name" --network "container:$test_name" \
     --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
     --env MONKEYBOT_ENV=test --env MONKEYBOT_PUBLIC_ORIGIN=http://localhost:5173 \
@@ -89,7 +104,7 @@ uv run --project apps/api-python --locked python scripts/fastapi-docker-smoke.py
 docker exec "$api_name" python -c 'import os; assert os.getuid() == 10001'
 docker stop --time 25 "$api_name" >/dev/null
 if [[ "${1:-}" == --docker-only ]]; then
-    echo 'FastAPI Docker runtime smoke passed (pytest skipped).'
+    echo 'FastAPI Alembic handover and Docker runtime smoke passed (pytest skipped).'
 else
-    echo 'FastAPI isolated PostgreSQL tests and Docker runtime smoke passed.'
+    echo 'FastAPI isolated PostgreSQL tests, Alembic handover, and Docker runtime smoke passed.'
 fi

@@ -2,11 +2,36 @@
 
 작성일: 2026-09-13
 
-상태: 일반 내전 workflow 이관 진행 중. 현재 완료 범위와 검증 결과는 [실행 기록](migration/fastapi-progress.md)을 따른다.
+상태: SQLx 0026과 새 경매 마무리를 포함해 동결 목록의 142/142개 operation(주 API 137개, Riot 서비스 5개)을 FastAPI에 구현했다. 데이터 전송·운영/개발 API, Riot 서비스, `/ws`와 outbox relay도 포함한다. Alembic 인계·신규 DB bootstrap 후보와 실시간 다중 instance 장애 테스트를 구현했다. Staging 부하·drain·rollback rehearsal, Web/Bot 연결 및 운영 전환은 별도 단계로 남아 있다. 현재 검증 결과는 [실행 기록](migration/fastapi-progress.md)을 따른다.
 
 현재 구현 단계의 검증 범위는 사용자 지시에 따라 백엔드로 한정한다. 격리 PostgreSQL 테스트, 계약/경쟁/오류 테스트, Docker 이미지 build·실행 검증으로 단계 완료를 판단하며, frontend 연결과 5173 proxy smoke 및 기존 로컬 Axum reload를 선행 조건으로 두지 않는다. 아래 Web/Bot 연결·운영 전환 절차는 이후 통합/배포 단계의 계획으로 남긴다.
 
 현재 사용자 확정 기준: **동결한 현재 Axum/Rust 구현을 그대로 이관한다.** 문서와 구현이 충돌하면 현재 Rust handler/repository/test의 동작을 따른다. 이관 중 로직 개선·정책 변경을 섞지 않으며, 수정은 동등성 검증 후 별도 작업으로 수행한다.
+
+2026-09-20 사용자 지시에 따라 **Rust 백엔드의 추가 업데이트를 중단하고 FastAPI 작업만 진행한다.** Rust는 전환 완료 시 대체할 참조 구현으로 유지한다. 기존 migration binary/호환성 도구를 변경 없이 테스트 fixture로 실행하는 것은 허용하되, Rust 기능 개발·검증 코드 확장·Clippy 정비·로컬 Axum reload는 이관 작업에 포함하지 않는다.
+
+## 필수 이관 — 경매 기록 보존 마무리 (2026-10-03)
+
+2026-09-26 Axum·Web 선행 구현에 이어, 2026-10-03 사용자 지시에 따라 **새 경매 마무리를 FastAPI 리팩토링의 필수 범위로 확정**했다. 이 기능을 제외한 채 FastAPI 전환 완료로 판단하지 않는다. 기존의 이번 범위 제외 지침을 대체하며, 신규 API·결과 계약과 SQLx 0026을 baseline에 포함했다.
+
+- [x] Axum의 `GET /api/guilds/{guildId}/auction-tournaments/{id}/finish-preview`와
+      `POST .../{id}/finish`를 이관한다. session 운영자·CSRF·revision·idempotency·감사/outbox 경계를 보존한다.
+- [x] SQLx 0026의 tournament/match `ended_early`와 terminal/lineup 제약을 인계한다.
+      정상 완료의 승자 필수 조건은 유지하며 조기 완료만 무승자·미진행을 허용한다.
+- [x] 10인 Bo3/Bo5 중단, 동점, 경기 전 종료, 20인 준결승/결승 도중 종료를 지원한다.
+      FINAL 스코어 선두만 우승팀으로 기록하고, 동점·결승 미진행은 우승팀 없이 완료한다.
+- [x] 확정 경기·MMR·라인업·BO 규칙 및 source 모집의 CONVERTED 상태를 보존한다.
+      종료 후 모든 추가 진행/되돌리기를 거부하고 결과 조회·Discord 카드·전적의 무승부 표시를 맞춘다.
+- [x] 기존 FastAPI 결과 projection과 mutation에 남은 ‘COMPLETED는 반드시 승자가 있다’는 가정을
+      제거하고 신규 Axum 계약을 baseline과 아래 소비자 계약에 반영한다. Web/Bot 연결 전환은 이후 통합/배포 단계에서 수행한다.
+
+| 소비자                                   | 유지하는 계약                                                               | 백엔드 검증                                             |
+| ---------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Web `auctionTournamentFinish` API client | 운영자 preview, CSRF·revision·idempotency finish, nullable `championTeamId` | 권한·재응답·경쟁 integration, Docker HTTP               |
+| Web 경기·결과 계약                       | `endedEarly`, `canFinishTournament`, 종료 후 변경 권한 false, 전적 `DRAW`   | 경기·결과 및 10인/20인 기록 검색 integration            |
+| Bot `AUCTION_TOURNAMENT_RESULT_CREATE`   | schemaVersion 1, nullable champion/팀 이름, tournament/match `endedEarly`   | 실제 outbox payload와 rollback integration, Docker HTTP |
+
+격리 PostgreSQL의 migration 0001..0026과 실제 runtime grant에서 주 API Python 테스트 718개 및 Docker 이미지의 Alembic 인계·검증·HTTP smoke가 통과했다. 별도 Riot 서비스의 테스트 16개와 Docker health/무인증 smoke도 통과했다. 동결한 142개 operation 이관과 Alembic 후보 구현은 완료했으며 staging 부하·drain·rollback rehearsal, Web/Bot 연결 및 운영 전환은 별도 단계로 남아 있다.
 
 ## 1. 목표와 완료 기준
 
@@ -61,48 +86,60 @@
 
 운영 중단 허용 시간과 목표 트래픽은 아직 확인되지 않았다. P0에서 실제 운영자와 확정한다. 무중단이 필수이면 세션·writer·worker 공존 검증과 트래픽 라우팅을 추가 설계하고 일정을 재산정한다.
 
-## 4. 목표 기술과 코드 구조
+## 4. 적용 기술과 코드 구조
 
-아래는 채택 제안이다. 정확한 Python minor와 패키지 버전은 P1에서 호환성·이미지 빌드를 확인하고 lockfile에 고정한다.
+주 API candidate는 Python 3.14.7과 uv lockfile을 사용한다. 현재 적용 기술과 이후 인계 항목은 다음과 같다.
 
-| 용도        | 제안                                | 적용 원칙                                                     |
-| ----------- | ----------------------------------- | ------------------------------------------------------------- |
-| HTTP/ASGI   | FastAPI + Uvicorn                   | 기존 경로, middleware와 오류 계약 유지                        |
-| DTO·설정    | Pydantic v2 + pydantic-settings     | camelCase alias, strict validation을 기존 입력 규칙에 맞춤    |
-| DB          | SQLAlchemy 2.x async Core + asyncpg | 기존 SQL과 transaction 경계를 먼저 옮기고 ORM 재모델링은 보류 |
-| Migration   | Alembic                             | SQLx baseline 검증 후 인계, runtime 자동 migration 금지       |
-| 외부 HTTP   | HTTPX AsyncClient                   | lifespan에서 생성·종료, pool과 timeout 명시                   |
-| Valkey      | redis-py asyncio client             | 기존 channel namespace와 payload 유지                         |
-| 암호        | 검증된 cryptography 구현            | 기존 AES-GCM envelope와 hash 호환                             |
-| 품질·패키징 | uv, pytest, Ruff, mypy              | 재현 가능한 install, 타입·계약·PostgreSQL 테스트              |
+| 용도        | 기술                                | 적용 원칙                                                |
+| ----------- | ----------------------------------- | -------------------------------------------------------- |
+| HTTP/ASGI   | FastAPI + Uvicorn                   | 기존 경로, middleware와 오류 계약 유지                   |
+| DTO·설정    | Pydantic v2 + pydantic-settings     | field casing과 strict validation을 기존 입력 규칙에 맞춤 |
+| DB          | SQLAlchemy 2.x async Core + asyncpg | 기존 SQL과 transaction 경계 유지, ORM 재모델링은 보류    |
+| Migration   | 현재 SQLx fixture, 이후 Alembic     | SQLx baseline 검증 후 인계, runtime 자동 migration 금지  |
+| 외부 HTTP   | HTTPX AsyncClient                   | lifespan에서 생성·종료, pool과 timeout 명시              |
+| Valkey      | redis-py asyncio client             | 기존 channel namespace와 payload 유지                    |
+| 암호        | cryptography                        | 기존 AES-GCM envelope와 hash 호환                        |
+| 품질·패키징 | uv, pytest, Ruff, mypy              | 재현 가능한 install, 타입·계약·PostgreSQL 테스트         |
 
 SQLAlchemy async는 task별 transaction/connection을 분리한다. ORM을 사용하는 부분이 생기더라도 `AsyncSession`을 concurrent task 사이에서 공유하지 않는다. [SQLAlchemy 공식 문서](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html)
 
-전환 중 경로는 다음을 제안한다. 검증 종료 후 Python 앱을 기존 `apps/api`, `apps/riot-api` 경로로 이동한다.
+2026-09-20 구조 정리 후 주 API의 코드 배치는 다음과 같다. 업무 영역은 `guilds`, `users`, `recruitments`, `series`, `auctions`, `notifications`, `auth`이며 각 계층에서 필요한 모듈만 둔다.
 
 ```text
 apps/api-python/
   pyproject.toml
   src/monkeybot_api/
-    app.py                  # app factory, lifespan
-    config.py
-    http/                   # routers, DTO, dependencies, middleware, errors
-    auth/                   # session, OAuth, CSRF, crypto
-    domain/                 # ELO, enum, ID, 순수 규칙
-    services/               # command orchestration, transaction 소유
-    repositories/           # SQL 및 snapshot 조회
-    infrastructure/         # DB, Valkey, HTTP client
-    realtime/               # hub, subscription, relay
-  migrations/               # Alembic baseline와 이후 revision
+    __main__.py               # Uvicorn 실행
+    app.py                    # app factory, lifespan, router와 오류 처리 등록
+    api/
+      dependencies.py         # Depends 기반 설정·DB·Discord 자원 주입
+      routers/                # 업무 영역별 APIRouter와 HTTP handler
+      authentication.py       # Bot/Browser 인증 선택
+      sessions.py             # HTTP cookie와 세션 처리
+      body.py, requests.py    # JSON·header 파싱
+      middleware.py
+    schemas/                  # Pydantic 계약과 입력 정규화
+    services/                 # 업무 규칙과 transaction 작업 조합
+    repositories/             # SQL, 잠금, 저장·조회, snapshot
+    core/                     # config.py, 오류, 보안과 공통 순수 함수
+    db/                       # pool, transaction/retry, sqlx-manifest.json
+    integrations/             # Discord client, Riot cache
+    domain/                   # 도메인 오류·규칙
   tests/
-apps/riot-api-python/
-  pyproject.toml
-  src/monkeybot_riot_api/
-  tests/
-tests/api-contract/         # base URL을 바꿔 두 구현에 적용
+    conftest.py
+    unit/                     # DB 없는 계약·보안·구조 테스트
+    integration/              # 업무 영역별 PostgreSQL·HTTP 검증
+      conftest.py             # DB/runtime client fixture
+    support/                  # fixture builder와 공통 assertion
 ```
 
-작업 중인 도메인에 필요한 파일만 만든다. 공통 generic repository나 포괄적인 내부 프레임워크를 먼저 만들지 않는다. 공개 응답 DTO와 DB row 모델을 분리하고, 한 command의 transaction은 service가 소유한다.
+`app.py`는 자원 생성·종료와 router 조립을 맡는다. 각 router 모듈은 모듈 수준의 `APIRouter`를 내보내고 handler는 `SettingsDep`, `DatabaseDep`, `DiscordDep`로 현재 앱의 자원을 받는다. 설정이나 DB를 closure에 고정하는 router factory는 사용하지 않는다. 테스트의 dependency override도 같은 경계를 사용한다.
+
+HTTP 계층은 path/query/body 파싱, cookie·Bot 인증·CSRF, status/header/envelope를 담당한다. 서비스는 업무 권한, 상태 전이, revision, 멱등성 재응답 순서와 감사·알림·MMR의 원자적 변경을 조합한다. 저장소는 명명된 SQL 연산과 잠금·snapshot 조회를 제공한다. 서비스 workflow 전체에 같은 transaction connection을 전달하고, 저장소에서 독립 commit을 수행하지 않는다. 공통 deadlock 재시도는 `db/transactions.py`에 둔다. 하위 계층은 `api`를 import하지 않으며 저장소·스키마도 서비스를 역참조하지 않는다.
+
+새 workflow는 해당 영역의 schema → repository 연산 → service 조합 → router 순서로 연결한다. 새 router는 `app.py`에 등록하고, 순수 입력 규칙은 `tests/unit`, 실제 DB 변경·권한·경쟁·rollback은 `tests/integration`에서 검사한다. fixture와 assertion은 `tests/support`에서 재사용한다. 한 파일에 HTTP·Pydantic 모델·업무 흐름·SQL을 함께 추가하지 않는다.
+
+`apps/riot-api-python`은 독립 FastAPI 서비스로 구현했다. Alembic migration 디렉터리와 독립 `tests/api-contract`는 후속 단계의 산출물이다. 전체 전환과 안정화 이후 Python 앱을 기존 `apps/api`, `apps/riot-api` 경로로 옮기는 계획은 유지한다.
 
 ## 5. 반드시 유지할 계약
 
@@ -165,6 +202,8 @@ tests/api-contract/         # base URL을 바꿔 두 구현에 적용
 
 애플리케이션 이관과 business schema 재설계를 분리한다. Alembic 도입 자체로 모든 기존 SQL을 다시 실행하지 않는다.
 
+후보 구현은 `monkeybot-migrate-python`의 `validate`·`handover`·`bootstrap`과 revision `20261003_baseline`이다. 기존 SQLx DB는 catalog·runtime grant·정확한 26개 이력을 확인한 뒤 원장을 보존하며 stamp하고, 빈 DB는 같은 business schema를 Alembic으로 만들되 SQLx 원장을 만들지 않는다. 두 경로의 provenance와 readiness를 구분한다. 격리 PostgreSQL 검증 결과는 [실행 기록](migration/fastapi-progress.md)에 기록하며 운영 DB 인계는 아직 수행하지 않았다.
+
 1. **Baseline 동결:** 전환 기준 SQL 파일 목록·checksum, `_sqlx_migrations`의 version/success/checksum, 실제 schema·index·constraint·function·grant를 manifest로 기록한다. 누락·변조·부분 적용은 인계 실패다.
 2. **공존 기간:** SQLx one-shot migration을 유일한 DDL 소유자로 유지한다. 필요한 schema 변경은 기존 forward migration 한 경로로만 반영하고 두 구현을 갱신한다. Alembic과 SQLx를 동시에 DDL writer로 사용하지 않는다.
 3. **기존 DB 인계:** P0에서 확정한 마지막 SQLx version까지 검증한 뒤 migration role로 Alembic baseline을 stamp한다. `stamp`는 migration을 실행하지 않으므로 schema 검사 없이 실행하지 않는다. 기존 `_sqlx_migrations`와 SQL checksum은 변경하거나 삭제하지 않는다. [Alembic stamp](https://alembic.sqlalchemy.org/en/latest/api/commands.html#alembic.command.stamp)
@@ -204,7 +243,7 @@ P5 import는 일반/전체 데이터 preview→apply, TTL·retention, 중복 적
 
 ### 계약 테스트
 
-`tests/api-contract`에서 base URL과 fixture DB를 바꿔 같은 시나리오를 양쪽에 적용한다. route registry의 모든 operation은 해당 suite 또는 domain별 테스트로 연결되어야 한다. 조건부 개발 route와 내부 route도 포함한다.
+현재 계약 회귀는 `apps/api-python/tests/integration/<업무 영역>/`에서 격리 PostgreSQL과 HTTP client를 사용한다. 순수 계약·보안·구조 검사는 `tests/unit/`, 재사용 데이터 준비와 assertion은 `tests/support/`에 둔다. 이후 독립 `tests/api-contract`를 구성할 때 base URL과 fixture DB를 바꿔 같은 시나리오를 양쪽에 적용한다. route registry의 모든 operation은 계약 suite 또는 업무 영역별 테스트로 연결되어야 하며 조건부 개발 route와 내부 route도 포함한다.
 
 - 같은 초기 DB에서 요청 sequence를 실행하고 status/header/body와 DB 변화·원장·outbox를 비교한다.
 - request ID·생성 시각·랜덤 ID는 위치가 지정된 비교 규칙으로만 정규화한다. ID 참조 관계, timestamp 유효성, revision, MMR·포인트는 임의로 제외하지 않는다.

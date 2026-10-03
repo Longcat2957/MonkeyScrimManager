@@ -17,7 +17,9 @@ export function renderAuctionTournamentResultMessage(
 	const rules = `${semifinalRule}결승 BO${tournament.finalBestOf} · ${
 		tournament.hardFearless ? '하드 피어리스' : '일반'
 	}`;
-	const championName = compactText(payload.champion.teamName, 100);
+	const outcome = payload.champion
+		? `**${escapeMarkdown(compactText(payload.champion.teamName, 100))}** 우승`
+		: '우승팀 없이 종료';
 	const completedAt = new Date(payload.completedAt);
 	const completedTimestamp = Number.isFinite(completedAt.getTime())
 		? `\n완료 <t:${Math.floor(completedAt.getTime() / 1_000)}:R>`
@@ -28,9 +30,7 @@ export function renderAuctionTournamentResultMessage(
 			color: BOT_COLORS.warning,
 			children: [
 				botText(
-					`## 경매 내전 완료 #${tournament.displayNumber}\n**${escapeMarkdown(
-						championName
-					)}** 우승\n${escapeMarkdown(compactText(tournament.title, 200))}`
+					`## 경매 내전 ${tournament.endedEarly ? '조기 종료' : '완료'} #${tournament.displayNumber}\n${outcome}\n${escapeMarkdown(compactText(tournament.title, 200))}`
 				),
 				botSeparator(),
 				botText(`**${format}** · ${rules}${completedTimestamp}`),
@@ -53,17 +53,20 @@ export function renderAuctionTournamentResultMessage(
 }
 
 function matchResults(payload: AuctionTournamentResultNotificationPayload): string {
+	if (payload.matches.length === 0) return '진행한 경기 없음';
 	const value = payload.matches
 		.map((match) => {
 			const label = compactText(match.label, 36);
-			const leftTeamName = compactText(match.leftTeamName, 56);
-			const rightTeamName = compactText(match.rightTeamName, 56);
-			const winnerTeamName = compactText(match.winnerTeamName, 56);
+			const leftTeamName = compactText(match.leftTeamName ?? '미정', 56);
+			const rightTeamName = compactText(match.rightTeamName ?? '미정', 56);
+			const outcome = match.winnerTeamName
+				? `**${escapeMarkdown(compactText(match.winnerTeamName, 56))} 승리**`
+				: match.leftScore + match.rightScore === 0
+					? '미진행 종료'
+					: '무승부 종료';
 			return `**${escapeMarkdown(label)} · BO${match.bestOf}**\n${escapeMarkdown(
 				leftTeamName
-			)} ${match.leftScore} : ${match.rightScore} ${escapeMarkdown(rightTeamName)} · **${escapeMarkdown(
-				winnerTeamName
-			)} 승리**`;
+			)} ${match.leftScore} : ${match.rightScore} ${escapeMarkdown(rightTeamName)} · ${outcome}`;
 		})
 		.join('\n');
 	return value.length <= MATCH_FIELD_VALUE_LIMIT

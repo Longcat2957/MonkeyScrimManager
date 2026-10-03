@@ -107,6 +107,68 @@ describe('renderAuctionTournamentResultMessage', () => {
 		expect(auctionTournamentResultNotificationPayloadSchema.safeParse(current).success).toBe(false);
 	});
 
+	it('renders an early draw with its played score and no champion', () => {
+		const current = payload();
+		current.tournament = {
+			...current.tournament,
+			format: 'TEN_PERSON',
+			semifinalBestOf: null,
+			endedEarly: true
+		};
+		current.champion = null;
+		current.matches = [
+			{
+				...current.matches[2]!,
+				leftScore: 1,
+				rightScore: 1,
+				winnerTeamName: null,
+				endedEarly: true
+			}
+		];
+		const parsed = auctionTournamentResultNotificationPayloadSchema.parse(current);
+		const serialized = JSON.stringify(renderAuctionTournamentResultMessage(parsed, webOrigin));
+		expect(serialized).toContain('경매 내전 조기 종료');
+		expect(serialized).toContain('우승팀 없이 종료');
+		expect(serialized).toContain('1 : 1');
+		expect(serialized).toContain('무승부 종료');
+		current.tournament.endedEarly = false;
+		expect(auctionTournamentResultNotificationPayloadSchema.safeParse(current).success).toBe(false);
+	});
+
+	it('accepts an early score leader without requiring the BO5 win threshold', () => {
+		const current = payload();
+		current.tournament.endedEarly = true;
+		current.tournament.finalBestOf = 5;
+		current.matches[2] = { ...current.matches[2]!, bestOf: 5, endedEarly: true };
+		expect(auctionTournamentResultNotificationPayloadSchema.safeParse(current).success).toBe(true);
+		current.matches[2]!.winnerTeamName = '퍼플팀';
+		expect(auctionTournamentResultNotificationPayloadSchema.safeParse(current).success).toBe(false);
+	});
+
+	it('renders unplayed final and pre-bracket finish without inventing a winner', () => {
+		const current = payload();
+		current.tournament.endedEarly = true;
+		current.champion = null;
+		current.matches[2] = {
+			...current.matches[2]!,
+			leftTeamName: null,
+			rightTeamName: null,
+			leftScore: 0,
+			rightScore: 0,
+			winnerTeamName: null,
+			endedEarly: true
+		};
+		expect(auctionTournamentResultNotificationPayloadSchema.safeParse(current).success).toBe(true);
+		expect(JSON.stringify(renderAuctionTournamentResultMessage(current, webOrigin))).toContain(
+			'미진행 종료'
+		);
+		current.matches = [];
+		expect(auctionTournamentResultNotificationPayloadSchema.safeParse(current).success).toBe(true);
+		expect(JSON.stringify(renderAuctionTournamentResultMessage(current, webOrigin))).toContain(
+			'진행한 경기 없음'
+		);
+	});
+
 	it('uses a required null semifinal rule for a completed ten-person tournament', () => {
 		const current = payload();
 		current.tournament = {

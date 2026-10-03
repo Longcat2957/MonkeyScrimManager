@@ -987,6 +987,11 @@ setup mutation의 APP invariant:
 
 ### `auction_tournaments`
 
+SQLx 0026부터 `ended_early boolean NOT NULL DEFAULT false`를 가진다. 조기 마무리는
+`COMPLETED, ended_early=true, ended_at NOT NULL`로 기록하며 우승팀은 동점/결승 미진행이면 NULL이다.
+정상 완료(`ended_early=false`)의 우승팀 필수 조건과 다른 상태의 불변식은 유지한다.
+기존 경기·MMR·모집 상태를 되돌리지 않으며 재개는 허용하지 않는다.
+
 ```text
 guild_id              text        NOT NULL
 id                    uuid        NOT NULL
@@ -1341,6 +1346,11 @@ FK (guild_id, updated_by) -> guild_members (guild_id, user_id) RESTRICT
   match만 생성한다.
 
 ### `auction_matches`
+
+SQLx 0026의 `ended_early boolean NOT NULL DEFAULT false`는 미완료 대진을 조기 종료할 때만 true다.
+이 경우 `COMPLETED`의 승자/라인업 lock은 미진행 또는 동점이면 없을 수 있고, 존재하는 라인업은 보존한다.
+정상 완료의 승자와 lineup lock 불변식은 그대로 적용한다. 경기를 진행했다면 확정 game 기준 스코어의
+선두 팀을 승자로 기록하며 동점이면 NULL이다.
 
 ```text
 guild_id         text        NOT NULL

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import math
 import os
 import sys
 import uuid
@@ -11,6 +12,359 @@ from urllib.parse import parse_qs, urlsplit
 
 import asyncpg
 import httpx
+
+
+def record_projection_smoke(data: dict, *, public: bool) -> None:
+    assert set(data["member"]) == {
+        "displayName",
+        "avatarUrl",
+        "mainLane",
+        "profileHref",
+    }
+    assert data["member"]["profileHref"] == ("/users/2002" if public else None)
+    assert set(data["championPreferences"]) == {
+        "TOP",
+        "JUNGLE",
+        "MID",
+        "BOTTOM",
+        "SUPPORT",
+    }
+    assert data["riotAccounts"] == (
+        [
+            {
+                "platform": "KR",
+                "gameName": "Docker visible",
+                "tagLine": "KR1",
+                "profileIconId": 123,
+                "isMain": True,
+            }
+        ]
+        if public
+        else []
+    )
+    serialized = json.dumps(data)
+    assert not any(
+        f'"{private}"' in serialized
+        for private in (
+            "userId",
+            "discordId",
+            "puuid",
+            "routingRegion",
+            "normalizedGameName",
+            "normalizedTagLine",
+            "showRiotIds",
+            "publicProfile",
+        )
+    ), serialized
+
+
+async def record_identity_smoke(
+    client: httpx.AsyncClient, headers: dict[str, str], viewer_id: str
+) -> None:
+    base = "/api/guilds/123/records/"
+    for endpoint in ("profile", "search"):
+        for query, public in (
+            ("2001", False),
+            ("2002", True),
+            (" ＤＯＣＫＥＲ visible#kr1 ", True),
+        ):
+            response = await client.get(
+                base + endpoint, params={"q": query}, headers=headers
+            )
+            assert response.status_code == 200, response.text
+            record_projection_smoke(response.json()["data"], public=public)
+        head = await client.head(base + endpoint, params={"q": "2001"}, headers=headers)
+        assert head.status_code == 200 and head.content == b"", endpoint
+    own = await client.get(base + "profile", params={"q": viewer_id}, headers=headers)
+    assert own.status_code == 200, own.text
+    assert own.json()["data"]["championPreferences"]["MID"] == ["Ahri", "Orianna"]
+
+    response = await client.get(
+        base + "suggestions", params={"q": " dOcKeR p ", "limit": 2}, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["suggestions"] == [
+        {
+            "kind": "guildMember",
+            "value": "Docker player",
+            "label": "Docker player",
+            "description": description,
+            "profileIconId": icon,
+        }
+        for description, icon in ((None, None), ("Docker visible#KR1", 123))
+    ]
+    head = await client.head(
+        base + "suggestions", params={"q": "Docker"}, headers=headers
+    )
+    assert head.status_code == 200 and head.content == b""
+    public_path = "/api/riot/records/suggestions"
+    response = await client.get(public_path, params={"q": " ＤＯＣＫＥＲ "})
+    assert response.status_code == 200, response.text
+    # Riot identities are public even when their Discord association is private.
+    assert response.json()["data"]["suggestions"] == [
+        {
+            "kind": "riotAccount",
+            "value": name + "#KR1",
+            "label": name + "#KR1",
+            "description": "KR",
+            "profileIconId": icon,
+        }
+        for name, icon in (("Docker private", 456), ("Docker visible", 123))
+    ]
+    head = await client.head(public_path, params={"q": "Docker"})
+    assert head.status_code == 200 and head.content == b""
+    other_platform = await client.get(
+        public_path, params={"q": "Docker", "platform": "NA1"}
+    )
+    assert other_platform.status_code == 200, other_platform.text
+    assert other_platform.json()["data"] == {"suggestions": []}
+
+    cases = [
+        (endpoint, {"q": query}, status, code, message)
+        for endpoint in (base + "profile", base + "search")
+        for query, status, code, message in (
+            (" ", 400, "invalid_search_query", "검색어가 올바르지 않습니다."),
+            (
+                "Docker player",
+                409,
+                "ambiguous_guild_member",
+                "같은 이름의 길드 멤버가 여러 명입니다.",
+            ),
+            (
+                "Docker private#KR1",
+                404,
+                "not_found",
+                "요청한 길드 멤버를 찾을 수 없습니다.",
+            ),
+        )
+    ]
+    cases.extend(
+        (base + "search", {"q": "2001", field: value}, status, code, message)
+        for field, value, status, code, message in (
+            (
+                "cursor",
+                "invalid",
+                400,
+                "invalid_cursor",
+                "cursor 형식이 올바르지 않습니다.",
+            ),
+            (
+                "limit",
+                "51",
+                400,
+                "invalid_limit",
+                "limit은 1 이상 50 이하이어야 합니다.",
+            ),
+            (
+                "seasonId",
+                "invalid",
+                400,
+                "invalid_season_id",
+                "seasonId 형식이 올바르지 않습니다.",
+            ),
+            (
+                "seasonId",
+                str(uuid.uuid7()),
+                404,
+                "season_not_found",
+                "요청한 시즌을 찾을 수 없습니다.",
+            ),
+        )
+    )
+    cases.extend(
+        (endpoint, params, 400, code, message)
+        for endpoint in (base + "suggestions", public_path)
+        for params, code, message in (
+            (
+                {"q": "D"},
+                "invalid_search_query",
+                "검색어를 두 글자 이상 입력해 주세요.",
+            ),
+            (
+                {"q": "Docker", "limit": "9"},
+                "invalid_search_limit",
+                "검색 결과 개수 설정이 올바르지 않습니다.",
+            ),
+        )
+    )
+    for endpoint, params, status, code, message in cases:
+        response = await client.get(endpoint, params=params, headers=headers)
+        assert response.status_code == status, response.text
+        error = response.json()["error"]
+        assert (error["code"], error["message"]) == (code, message), error
+        assert error["requestId"] == response.headers["x-request-id"]
+
+
+async def records_smoke(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    season_name: str,
+    *,
+    source: str | None = None,
+    identifier: str | None = None,
+    champion: str | None = None,
+    season_id: str | None = None,
+) -> None:
+    params = {"q": "2001", "limit": "1"}
+    if season_id is not None:
+        params["seasonId"] = season_id
+    response = await client.get(
+        "/api/guilds/123/records/search", params=params, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    record_projection_smoke(data, public=False)
+    selected = next(
+        season for season in data["seasons"] if season["id"] == data["selectedSeasonId"]
+    )
+    assert selected["name"] == season_name
+    if season_id is not None:
+        assert selected["id"] == season_id and selected["status"] == "CLOSED"
+        assert data["seasons"][0]["status"] == "ACTIVE"
+    assert [lane["lane"] for lane in data["laneMmr"]] == [
+        "TOP",
+        "JUNGLE",
+        "MID",
+        "BOTTOM",
+        "SUPPORT",
+    ]
+    assert data["nextCursor"] is None
+    if source is None:
+        assert data["summary"] == {"games": 0, "wins": 0, "losses": 0}
+        assert data["records"] == data["championRecords"] == []
+        assert all(
+            lane["mmr"] == 1500 and lane["games"] == lane["wins"] == 0
+            for lane in data["laneMmr"]
+        )
+        return
+    assert len(data["records"]) == 1, data
+    record = data["records"][0]
+    assert (record["kind"], record["source"], record["id"]) == (
+        "SERIES",
+        source,
+        identifier,
+    )
+    assert record["participantCount"] == 10 and len(record["games"]) == 1
+    game = record["games"][0]
+    assert game["gameNumber"] == 1 and game["playedAt"] == record["playedAt"]
+    assert game["winningSide"] == ("BLUE" if source == "REGULAR" else "RED")
+    target = game["target"]
+    wins = int(target["side"] == game["winningSide"])
+    assert data["summary"] == {"games": 1, "wins": wins, "losses": 1 - wins}
+    assert record["wins"] == wins and record["losses"] == 1 - wins
+    assert record["result"] == ("WIN" if wins else "LOSS")
+    assert target["championId"] == champion
+    assert target["mmrBefore"] is not None and target["mmrAfter"] is not None
+    assert record["mmrDelta"] is not None and math.isclose(
+        record["mmrDelta"], target["mmrAfter"] - target["mmrBefore"], abs_tol=1e-9
+    )
+    assert len(game["blueTeam"]) == len(game["redTeam"]) == 5
+    assert sum(player["isTarget"] for player in game["blueTeam"] + game["redTeam"]) == 1
+    assert game["blueBans"] == game["redBans"] == []
+    assert record["stage"] == ("FINAL" if source == "AUCTION" else None)
+    assert data["championRecords"] == (
+        [
+            {
+                "championId": champion,
+                "lane": target["lane"],
+                "games": 1,
+                "wins": wins,
+                "losses": 1 - wins,
+            }
+        ]
+        if champion
+        else []
+    )
+
+
+async def operation_smoke(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    identifier: str,
+    expected: tuple[str, str, str] | None,
+) -> None:
+    response = await client.get("/api/guilds/123/operations", headers=headers)
+    assert response.status_code == 200, response.text
+    matching = [
+        row for row in response.json()["data"]["operations"] if row["id"] == identifier
+    ]
+    if expected is None:
+        assert matching == [], matching
+        return
+    assert len(matching) == 1, response.text
+    row = matching[0]
+    assert (row["kind"], row["status"], row["href"]) == expected, row
+    assert row["priority"] == ("normal" if row["kind"] == "AUCTION" else "urgent")
+    assert row["title"] and row["detail"] and row["updatedAt"]
+
+
+async def statistics_smoke(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    regular_games: int,
+    auction_games: int,
+    completed_tournaments: int = 0,
+    season_id: str | None = None,
+) -> None:
+    for scope, regular, auction in (
+        ("ALL", regular_games, auction_games),
+        ("REGULAR", regular_games, 0),
+        ("AUCTION", 0, auction_games),
+    ):
+        params = {"scope": scope}
+        if season_id is not None:
+            params["seasonId"] = season_id
+        response = await client.get(
+            "/api/guilds/123/statistics", params=params, headers=headers
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["scope"] == scope
+        assert data["selectedSeasonId"] in {season["id"] for season in data["seasons"]}
+        if season_id is not None:
+            assert data["selectedSeasonId"] == season_id
+        overview = data["overview"]
+        assert overview["games"] == regular + auction, data
+        assert (
+            overview["regularGames"] == regular and overview["auctionGames"] == auction
+        )
+        assert overview["uniquePlayers"] == (10 if regular + auction else 0)
+        assert overview["blueWins"] == regular and overview["redWins"] == auction
+        assert overview["averageDurationSeconds"] is None
+        assert overview["coverage"]["durationGames"] == 0
+        assert data["players"]["minimumWinRateGames"] == 3
+        assert data["players"]["bestWinRates"] == []
+        assert data["auction"]["completedTournaments"] == (
+            0 if scope == "REGULAR" else completed_tournaments
+        )
+        if scope == "REGULAR":
+            assert data["auction"]["captains"] == data["auction"]["topBids"] == []
+        assert not any(
+            private in response.text
+            for private in ("puuid", "riotId", "profileIconId", "showRiotIds")
+        )
+
+
+async def leaderboard_smoke(
+    client: httpx.AsyncClient, headers: dict[str, str], season_name: str, played: bool
+) -> None:
+    response = await client.get("/api/guilds/123/leaderboard", headers=headers)
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["season"]["name"] == season_name
+    players = {player["id"]: player for player in data["players"]}
+    assert set(players) == ({str(2000 + i) for i in range(1, 11)} if played else set())
+    for player in players.values():
+        assert len(player["stats"]) == 1 and player["mainRole"] in player["stats"]
+        stat = player["stats"][player["mainRole"]]
+        assert stat["games"] == 1 and stat["wins"] in (0, 1)
+        assert player["compositeMmr"] == stat["mmr"] and not player["isMe"]
+    if played:
+        assert (
+            players["2001"]["tag"] is None and players["2001"]["profileIconId"] is None
+        )
+        assert players["2002"]["tag"] == "Docker visible#KR1"
+        assert players["2002"]["profileIconId"] == 123
 
 
 async def notification_smoke(
@@ -69,7 +423,8 @@ async def notification_smoke(
                 identifier = uuid.uuid7()
                 await connection.execute(
                     """
-                    INSERT INTO bot_notification_outbox (id, guild_id, deduplication_key, discord_nonce,
+                    INSERT INTO bot_notification_outbox
+                        (id, guild_id, deduplication_key, discord_nonce,
                         channel_id, notification_type, payload, created_at, available_at)
                     VALUES ($1, '123', $2, $3, '789', $2, $4::jsonb, now(), now())
                 """,
@@ -259,6 +614,12 @@ async def auction_smoke(
 
     # Continue the recruitment into the auction tournament and all nine draft commands.
     closed = await command("POST", path + "/close", {}, "tournament-close")
+    await operation_smoke(
+        client,
+        headers,
+        "auction-recruitment:" + identifier,
+        ("AUCTION", "팀장 설정", f"/g/123/auction/recruitments/{identifier}/draft"),
+    )
     draft = await client.get(base + path + "/setup-draft", headers=headers)
     connection = await asyncpg.connect(database_url)
     try:
@@ -279,6 +640,15 @@ async def auction_smoke(
     assert response.status_code == 201, response.text
     state = response.json()["data"]
     tournament_path = tournaments + "/" + state["tournament"]["id"]
+    operation_id = "auction-tournament:" + state["tournament"]["id"]
+    web_tournament = "/g/123/auction/tournaments/" + state["tournament"]["id"]
+    await operation_smoke(client, headers, "auction-recruitment:" + identifier, None)
+    await operation_smoke(
+        client,
+        headers,
+        operation_id,
+        ("AUCTION", "입찰 진행", web_tournament + "/draft"),
+    )
 
     async def draft_command(kind, **extra):
         nonlocal state
@@ -334,6 +704,513 @@ async def auction_smoke(
     )
     assert (await client.get(tournament_path, headers=headers)).json()["data"] == state
 
+    while state["tournament"]["status"] == "BIDDING":
+        await draft_command("DRAW_NEXT")
+        team = next(t for t in state["teams"] if len(t["members"]) < 5)
+        await draft_command(
+            "ASSIGN_CURRENT",
+            memberId=state["draft"]["currentTarget"]["userId"],
+            teamId=team["id"],
+        )
+    bracket_path = tournament_path + "/bracket"
+    response = await client.get(bracket_path, headers=headers)
+    assert response.status_code == 200, response.text
+    state = response.json()["data"]
+
+    async def bracket_command(kind, **extra):
+        nonlocal state
+        body = {
+            "kind": kind,
+            "expectedRevision": state["tournament"]["revision"],
+            **extra,
+        }
+        command_headers = {
+            **headers,
+            "idempotency-key": "docker-bracket-" + str(body["expectedRevision"]),
+        }
+        response = await client.post(
+            bracket_path + "/commands", json=body, headers=command_headers
+        )
+        assert response.status_code == 200, response.text
+        state = response.json()["data"]
+        replay = await client.post(
+            bracket_path + "/commands", json=body, headers=command_headers
+        )
+        assert replay.status_code == 200 and replay.json()["data"] == state
+        current = await client.get(bracket_path, headers=headers)
+        assert current.status_code == 200 and current.json()["data"] == state
+
+    await operation_smoke(
+        client,
+        headers,
+        operation_id,
+        ("AUCTION", "대진 설정", web_tournament + "/bracket"),
+    )
+    for slot, team in zip(("A_0", "A_1"), state["teams"], strict=True):
+        await bracket_command("ASSIGN_TEAM", slotKey=slot, teamId=team["id"])
+    await bracket_command("CLEAR_SLOT", slotKey="A_0")
+    await bracket_command("ASSIGN_TEAM", slotKey="A_0", teamId=state["teams"][0]["id"])
+    await bracket_command("LOCK_BRACKET")
+    old_match = state["bracket"]["matches"][0]["id"]
+    assert state["bracket"]["locked"]
+    assert [m["matchKey"] for m in state["bracket"]["matches"]] == ["FINAL"]
+    await bracket_command("UNLOCK_BRACKET")
+    assert not state["bracket"]["locked"] and state["bracket"]["matches"] == []
+    await bracket_command("LOCK_BRACKET")
+    assert state["bracket"]["matches"][0]["id"] != old_match
+    match_path = (
+        "/api/guilds/123/auction-matches/" + state["bracket"]["matches"][0]["id"]
+    )
+    response = await client.get(match_path, headers=headers)
+    assert response.status_code == 200, response.text
+    match = response.json()["data"]
+
+    async def match_command(method, suffix, **extra):
+        nonlocal match
+        body = {"expectedRevision": match["match"]["revision"], **extra}
+        command_headers = {
+            **headers,
+            "idempotency-key": "docker-match-" + str(body["expectedRevision"]) + suffix,
+        }
+        response = await client.request(
+            method, match_path + suffix, json=body, headers=command_headers
+        )
+        assert response.status_code == (201 if suffix == "/games" else 200), (
+            response.text
+        )
+        match = response.json()["data"]
+        replay = await client.request(
+            method, match_path + suffix, json=body, headers=command_headers
+        )
+        assert (
+            replay.status_code == response.status_code
+            and replay.json()["data"] == match
+        )
+
+    for team in match["teams"]:
+        for lane, member in zip(
+            ("TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"), team["members"], strict=True
+        ):
+            await match_command(
+                "PATCH",
+                "/lineup",
+                teamId=team["id"],
+                lane=lane,
+                teamMemberId=member["teamMemberId"],
+            )
+    await match_command("POST", "/lineup/lock")
+    assert (
+        match["match"]["status"] == "READY" and match["permissions"]["canEnterResults"]
+    )
+    await operation_smoke(
+        client,
+        headers,
+        operation_id,
+        ("AUCTION", "결과 입력", "/g/123/auction/matches/" + match["match"]["id"]),
+    )
+    await match_command("POST", "/lineup/unlock")
+    assert not match["match"]["lineupsLocked"]
+    await match_command("POST", "/lineup/lock")
+    picks = {
+        member["userId"]: champion
+        for member, champion in zip(
+            match["lineups"],
+            (
+                "Aatrox",
+                "Ahri",
+                "Akali",
+                "Alistar",
+                "Amumu",
+                "Anivia",
+                "Annie",
+                "Ashe",
+                "Azir",
+                "Bard",
+            ),
+            strict=True,
+        )
+    }
+    await match_command(
+        "POST",
+        "/games",
+        setNumber=1,
+        sidePreset="SWAPPED",
+        winner="RED",
+        picks=picks,
+        bans={"BLUE": [None] * 5, "RED": [None] * 5},
+        patchVersion=None,
+    )
+    assert match["match"]["leftScore"] == 1 and len(match["games"]) == 1
+    await match_command("POST", "/complete")
+    assert match["match"]["status"] == "COMPLETED" and match["match"]["bestOf"] == 1
+    result = await client.get(tournament_path + "/result", headers=headers)
+    assert result.status_code == 200, result.text
+    result = result.json()["data"]
+    assert result["tournament"]["status"] == "COMPLETED"
+    assert result["tournament"]["championTeamId"] == match["match"]["leftTeamId"]
+    assert len(result["players"]) == 10 and all(
+        p["games"] == 1 for p in result["players"]
+    )
+    await operation_smoke(client, headers, operation_id, None)
+    await statistics_smoke(client, headers, 0, 1, completed_tournaments=1)
+    await leaderboard_smoke(client, headers, "Docker next season", played=True)
+    await records_smoke(
+        client,
+        headers,
+        "Docker next season",
+        source="AUCTION",
+        identifier=match["match"]["id"],
+        champion=picks["2001"],
+    )
+    await match_command("DELETE", "/games/last")
+    assert match["match"]["status"] == "READY" and match["games"] == []
+    preview = await client.get(tournament_path + "/cancel-preview", headers=headers)
+    assert preview.status_code == 200, preview.text
+    body = {
+        "expectedRevision": preview.json()["data"]["tournament"]["revision"],
+        "reason": "Docker cancellation smoke",
+    }
+    cancel_headers = {**headers, "idempotency-key": "docker-tournament-cancel"}
+    cancelled = await client.post(
+        tournament_path + "/cancel", json=body, headers=cancel_headers
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["data"]["tournamentStatus"] == "CANCELLED"
+    replay = await client.post(
+        tournament_path + "/cancel", json=body, headers=cancel_headers
+    )
+    assert (
+        replay.status_code == 200 and replay.json()["data"] == cancelled.json()["data"]
+    )
+    archived = await client.get(tournament_path + "/result", headers=headers)
+    assert archived.status_code == 200, archived.text
+    assert len(archived.json()["data"]["matches"]) == 2
+    await operation_smoke(client, headers, operation_id, None)
+    await statistics_smoke(client, headers, 0, 0)
+    await leaderboard_smoke(client, headers, "Docker next season", played=False)
+    await records_smoke(client, headers, "Docker next season")
+
+
+async def guild_admin_smoke(
+    client: httpx.AsyncClient, headers: dict[str, str], operator_id: str
+) -> None:
+    base = "/api/guilds/123"
+    members_path = base + "/members"
+    target_path = members_path + "/2001"
+    response = await client.get(members_path, headers=headers)
+    assert response.status_code == 200, response.text
+    original = response.json()["data"]
+    members = {member["id"]: member for member in original["members"]}
+    assert members[operator_id]["role"] == "OPERATOR"
+    member = members["2001"]
+    assert member["identityKind"] == "DISCORD" and member["role"] == "MEMBER"
+    assert member["status"] == "ACTIVE"
+    assert set(member["laneMmr"]) == {"TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"}
+
+    adjustment = {
+        "lane": "TOP",
+        "delta": 25,
+        "note": "  Docker manual adjustment  ",
+        "expectedRevision": original["revision"],
+    }
+    adjustment_headers = {**headers, "idempotency-key": "docker-member-mmr"}
+    adjusted = await client.patch(
+        target_path + "/mmr", json=adjustment, headers=adjustment_headers
+    )
+    assert adjusted.status_code == 200, adjusted.text
+    snapshot = adjusted.json()["data"]
+    assert snapshot["revision"] == original["revision"] + 1
+    assert snapshot["updatedBy"] == operator_id
+    updated_member = next(row for row in snapshot["members"] if row["id"] == "2001")
+    assert updated_member["laneMmr"] == {
+        **member["laneMmr"],
+        "TOP": member["laneMmr"]["TOP"] + 25,
+    }
+    replay = await client.patch(
+        target_path + "/mmr", json=adjustment, headers=adjustment_headers
+    )
+    assert replay.status_code == 200 and replay.json()["data"] == snapshot, replay.text
+
+    status_request_ids = []
+    for status in ("INACTIVE", "ACTIVE"):
+        response = await client.patch(
+            target_path + "/status",
+            json={"status": status, "expectedRevision": snapshot["revision"]},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        current = response.json()["data"]
+        assert current["revision"] == snapshot["revision"] + 1
+        assert current["updatedBy"] == operator_id
+        current_member = next(row for row in current["members"] if row["id"] == "2001")
+        assert current_member == {**updated_member, "status": status}
+        status_request_ids.append(response.headers["x-request-id"])
+        snapshot = current
+
+    denied = await client.patch(
+        members_path + f"/{operator_id}/status",
+        json={"status": "INACTIVE", "expectedRevision": snapshot["revision"]},
+        headers=headers,
+    )
+    assert denied.status_code == 409, denied.text
+    assert denied.json()["error"] == {
+        "code": "self_deactivation_forbidden",
+        "message": "자기 자신은 비활성화할 수 없습니다.",
+        "requestId": denied.headers["x-request-id"],
+    }
+    refreshed = await client.get(members_path, headers=headers)
+    assert refreshed.status_code == 200 and refreshed.json()["data"] == snapshot
+
+    audit_path = base + "/audit-logs"
+    response = await client.get(audit_path, params={"limit": 2}, headers=headers)
+    assert response.status_code == 200, response.text
+    first = response.json()["data"]
+    assert len(first["entries"]) == 2 and first["nextCursor"]
+    for entry, before, after, request_id in zip(
+        first["entries"],
+        ("INACTIVE", "ACTIVE"),
+        ("ACTIVE", "INACTIVE"),
+        reversed(status_request_ids),
+        strict=True,
+    ):
+        assert entry["action"] == "MEMBER_STATUS_CHANGED"
+        assert entry["targetType"] == "GUILD_MEMBER"
+        assert entry["beforeSummary"] == {"status": before}
+        assert entry["afterSummary"] == {"status": after}
+        assert entry["requestId"] == request_id
+    response = await client.get(
+        audit_path,
+        params={"limit": 1, "cursor": first["nextCursor"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    second = response.json()["data"]
+    assert len(second["entries"]) == 1
+    entry = second["entries"][0]
+    assert entry["id"] not in {row["id"] for row in first["entries"]}
+    assert entry["action"] == "MEMBER_MMR_ADJUSTED"
+    assert entry["targetType"] == "GUILD_MEMBER_MMR"
+    assert entry["note"] == "Docker manual adjustment"
+    assert entry["requestId"] == adjusted.headers["x-request-id"]
+    assert entry["beforeSummary"]["lane"] == entry["afterSummary"]["lane"] == "TOP"
+    assert entry["beforeSummary"]["mmr"] == member["laneMmr"]["TOP"]
+    assert entry["afterSummary"]["mmr"] == updated_member["laneMmr"]["TOP"]
+    assert entry["afterSummary"]["delta"] == 25
+    assert (
+        entry["afterSummary"]["laneRevision"]
+        == entry["beforeSummary"]["laneRevision"] + 1
+    )
+    for entry in first["entries"] + second["entries"]:
+        assert entry["principalType"] == "USER" and entry["principalId"] == operator_id
+        assert entry["principalDisplayName"] == members[operator_id]["discordName"]
+        assert entry["targetId"] == "2001"
+        assert entry["targetDisplayName"] == member["discordName"]
+        assert entry["checkpointId"] is None and entry["result"] == "APPLIED"
+        assert entry["createdAt"]
+    invalid = await client.get(
+        audit_path, params={"cursor": "invalid"}, headers=headers
+    )
+    assert invalid.status_code == 400, invalid.text
+    assert invalid.json()["error"] == {
+        "code": "invalid_cursor",
+        "message": "cursor 형식이 올바르지 않습니다.",
+        "requestId": invalid.headers["x-request-id"],
+    }
+
+
+async def full_data_export_smoke(
+    client: httpx.AsyncClient, headers: dict[str, str]
+) -> None:
+    path = "/api/guilds/123/full-data-export"
+    for response, status, code, message in (
+        (
+            await client.post(path),
+            401,
+            "unauthorized",
+            "인증이 필요합니다.",
+        ),
+        (
+            await client.post(path, headers={"cookie": headers["cookie"]}),
+            403,
+            "csrf_validation_failed",
+            "요청 출처를 확인할 수 없습니다.",
+        ),
+    ):
+        assert response.status_code == status, response.text
+        assert response.json()["error"] == {
+            "code": code,
+            "message": message,
+            "requestId": response.headers["x-request-id"],
+        }
+    response = await client.post(path, headers=headers)
+    assert response.status_code == 200, response.text
+    request_id = response.headers["x-request-id"]
+    assert response.json()["meta"]["requestId"] == request_id
+    data = response.json()["data"]
+    archive = data["archive"]
+    assert archive["format"] == "MONKEYBOT_DATA_TRANSFER"
+    assert archive["kind"] == "GUILD_FULL_SNAPSHOT" and archive["schemaVersion"] == 1
+    assert archive["source"]["guildId"] == "123" and archive["source"]["guildName"]
+    assert archive["exportedAt"]
+    assert data["fileName"] == "monkeybot-full-123-v1.json"
+    tables = archive["tables"]
+    assert len(tables) == 41
+    assert not {
+        "user_sessions",
+        "oauth_login_attempts",
+        "guild_config",
+        "guild_discord_roles",
+        "guild_member_discord_roles",
+        "bot_notification_outbox",
+        "idempotency_records",
+    }.intersection(tables)
+    assert data["summary"]["totalRows"] == sum(len(rows) for rows in tables.values())
+    for table in (
+        "guild_members",
+        "seasons",
+        "recruitments",
+        "series",
+        "auction_tournaments",
+    ):
+        assert tables[table], table
+        assert all(row["guild_id"] == "123" for row in tables[table]), table
+    assert all(row["checkpoint_id"] is None for row in tables["admin_audit_log"])
+    assert not any(row["request_id"] == request_id for row in tables["admin_audit_log"])
+    audit = await client.get("/api/guilds/123/audit-logs?limit=1", headers=headers)
+    assert audit.status_code == 200, audit.text
+    entry = audit.json()["data"]["entries"][0]
+    assert entry["action"] == "FULL_DATA_TRANSFER_EXPORTED"
+    assert entry["requestId"] == request_id and entry["afterSummary"] == data["summary"]
+
+
+async def tournament_finish_smoke(
+    client: httpx.AsyncClient, database_url: str, headers: dict[str, str]
+) -> None:
+    async def command(method: str, path: str, body: dict) -> dict:
+        response = await client.request(
+            method,
+            path,
+            json=body,
+            headers={
+                **headers,
+                "idempotency-key": "docker-finish-" + str(uuid.uuid7()),
+            },
+        )
+        assert response.status_code in (200, 201), response.text
+        return response.json()["data"]
+
+    base = "/api/guilds/123/auction-recruitments"
+    source = await command("POST", base, {"format": "TEN_PERSON"})
+    source_path = base + "/" + source["recruitment"]["id"]
+    for i in range(1, 11):
+        await command(
+            "POST",
+            source_path + "/members",
+            {
+                "memberId": str(2000 + i),
+                "declaredLane": ["TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"][
+                    (i - 1) % 5
+                ],
+            },
+        )
+    await command("POST", source_path + "/close", {})
+    response = await client.get(source_path + "/setup-draft", headers=headers)
+    assert response.status_code == 200, response.text
+    setup = await command(
+        "PATCH",
+        source_path + "/setup-draft",
+        {
+            "expectedRevision": response.json()["data"]["draft"]["revision"],
+            "teams": [
+                {
+                    "teamIndex": i,
+                    "teamName": f"Finish team {i}",
+                    "captainUserId": str(2000 + i),
+                    "initialPoints": 1000,
+                }
+                for i in (1, 2)
+            ],
+        },
+    )
+    tournament = await command(
+        "POST",
+        "/api/guilds/123/auction-tournaments",
+        {
+            "sourceRecruitmentId": source["recruitment"]["id"],
+            "expectedRevision": setup["draft"]["revision"],
+        },
+    )
+    identifier = tournament["tournament"]["id"]
+    path = "/api/guilds/123/auction-tournaments/" + identifier
+    anonymous = await client.get(path + "/finish-preview")
+    assert anonymous.status_code == 401, anonymous.text
+    assert anonymous.json()["error"] == {
+        "code": "unauthorized",
+        "message": "인증이 필요합니다.",
+        "requestId": anonymous.headers["x-request-id"],
+    }
+    preview = await client.get(path + "/finish-preview", headers=headers)
+    assert preview.status_code == 200, preview.text
+    record = preview.json()["data"]["tournament"]
+    assert record["status"] == "BIDDING"
+    head = await client.head(path + "/finish-preview", headers=headers)
+    assert head.status_code == 200 and not head.content
+    connection = await asyncpg.connect(database_url)
+    try:
+        await connection.execute(
+            "UPDATE guild_config SET result_channel_id='789' WHERE guild_id='123'"
+        )
+        body = {
+            "expectedRevision": record["revision"],
+            "reason": "Docker manual completion",
+        }
+        finish_headers = {**headers, "idempotency-key": "docker-finish-completion"}
+        response = await client.post(
+            path + "/finish", json=body, headers=finish_headers
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()["data"]
+        assert result == {
+            "tournamentId": identifier,
+            "tournamentStatus": "COMPLETED",
+            "tournamentRevision": record["revision"] + 1,
+            "championTeamId": None,
+        }
+        replay = await client.post(path + "/finish", json=body, headers=finish_headers)
+        assert replay.status_code == 200 and replay.json()["data"] == result, (
+            replay.text
+        )
+        response = await client.get(path + "/result", headers=headers)
+        assert response.status_code == 200, response.text
+        snapshot = response.json()["data"]
+        assert (
+            snapshot["tournament"]["endedEarly"]
+            and snapshot["tournament"]["championTeamId"] is None
+        )
+        assert snapshot["matches"] == [] and not any(snapshot["permissions"].values())
+        source = await client.get(source_path, headers=headers)
+        assert source.json()["data"]["recruitment"]["status"] == "CONVERTED"
+        payload = json.loads(
+            await connection.fetchval(
+                "SELECT payload FROM bot_notification_outbox WHERE guild_id='123' "
+                "AND notification_type='AUCTION_TOURNAMENT_RESULT_CREATE' "
+                "AND payload->>'tournamentId'=$1",
+                identifier,
+            )
+        )
+        assert payload["tournament"]["endedEarly"] is True
+        assert payload["champion"] is None and payload["matches"] == []
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM admin_audit_log WHERE guild_id='123' "
+                "AND target_id=$1 AND action='AUCTION_TOURNAMENT_FINISHED'",
+                identifier,
+            )
+            == 1
+        )
+    finally:
+        await connection.close()
+
 
 async def main() -> None:
     database_url = os.environ["FASTAPI_TEST_OWNER_URL"]
@@ -382,6 +1259,33 @@ async def main() -> None:
         assert anonymous.status_code == 401
         assert anonymous.json()["error"]["code"] == "unauthorized"
         assert anonymous.json()["error"]["message"] == "인증이 필요합니다."
+        imported_id = str(uuid.uuid7())
+        migrated_routes = (
+            ("POST", "/api/guilds/123/full-data-imports/preview", 401, "unauthorized"),
+            (
+                "POST",
+                f"/api/guilds/123/full-data-imports/{imported_id}/apply",
+                401,
+                "unauthorized",
+            ),
+            ("POST", "/api/guilds/123/data-export", 401, "unauthorized"),
+            ("POST", "/api/guilds/123/data-imports/preview", 401, "unauthorized"),
+            ("POST", f"/api/guilds/123/data-imports/{imported_id}/apply", 401, "unauthorized"),
+            ("POST", "/internal/guilds/123/setup", 401, "unauthorized"),
+            ("GET", "/api/admin/status", 401, "unauthorized"),
+            ("GET", "/api/me/riot-accounts", 401, "unauthorized"),
+            (
+                "GET",
+                "/api/riot/records?gameName=Longcat&tagLine=KR1&platform=KR",
+                503,
+                "riot_unavailable",
+            ),
+            ("GET", "/api/dev/dummy-users", 404, "not_found"),
+        )
+        for method, path, status, code in migrated_routes:
+            response = await client.request(method, path)
+            assert response.status_code == status, (path, response.text)
+            assert response.json()["error"]["code"] == code, (path, response.text)
         recruitment_auth = await client.get(
             "/api/guilds/123/recruitments?state=actionable"
         )
@@ -413,6 +1317,44 @@ async def main() -> None:
             )
         ).content == b""
         auth_headers = {"cookie": f"monkeybot_session={token}; monkeybot_csrf={token}"}
+        for endpoint in ("operations", "leaderboard", "statistics"):
+            path = "/api/guilds/123/" + endpoint
+            anonymous = await client.get(path)
+            assert anonymous.status_code == 401, anonymous.text
+            assert anonymous.json()["error"] == {
+                "code": "unauthorized",
+                "message": "인증이 필요합니다.",
+                "requestId": anonymous.headers["x-request-id"],
+            }
+            hidden_read = await client.get(path, headers=auth_headers)
+            assert hidden_read.status_code == 404, hidden_read.text
+            assert hidden_read.json()["error"] == {
+                "code": "not_found",
+                "message": "요청한 길드를 찾을 수 없습니다.",
+                "requestId": hidden_read.headers["x-request-id"],
+            }
+        for endpoint in ("profile", "search", "suggestions"):
+            path = "/api/guilds/123/records/" + endpoint
+            anonymous = await client.get(path, params={"q": "Docker"})
+            assert anonymous.status_code == 401, anonymous.text
+            assert anonymous.json()["error"] == {
+                "code": "unauthorized",
+                "message": "인증이 필요합니다.",
+                "requestId": anonymous.headers["x-request-id"],
+            }
+            hidden_read = await client.get(
+                path, params={"q": "Docker"}, headers=auth_headers
+            )
+            assert hidden_read.status_code == 404, hidden_read.text
+            assert hidden_read.json()["error"] == {
+                "code": "not_found",
+                "message": (
+                    "요청한 길드를 찾을 수 없습니다."
+                    if endpoint == "suggestions"
+                    else "요청한 길드 멤버를 찾을 수 없습니다."
+                ),
+                "requestId": hidden_read.headers["x-request-id"],
+            }
         guilds = await client.get("/api/me/guilds", headers=auth_headers)
         assert guilds.status_code == 200 and guilds.json()["data"] == {"guilds": []}
         hidden = await client.get("/api/guilds/123", headers=auth_headers)
@@ -493,6 +1435,42 @@ async def main() -> None:
                 )
         finally:
             await connection.close()
+        for endpoint in ("operations", "leaderboard", "statistics"):
+            head = await client.head(
+                "/api/guilds/123/" + endpoint, headers=auth_headers
+            )
+            assert head.status_code == 200 and head.content == b"", endpoint
+        await leaderboard_smoke(client, auth_headers, "Docker season", played=False)
+        await statistics_smoke(client, auth_headers, 0, 0)
+        for params, status, code, message in (
+            (
+                {"scope": "invalid"},
+                400,
+                "invalid_scope",
+                "scope은 ALL, REGULAR, AUCTION 중 하나여야 합니다.",
+            ),
+            (
+                {"seasonId": "invalid"},
+                400,
+                "invalid_season_id",
+                "seasonId 형식이 올바르지 않습니다.",
+            ),
+            (
+                {"seasonId": str(uuid.uuid7())},
+                404,
+                "season_not_found",
+                "요청한 시즌을 찾을 수 없습니다.",
+            ),
+        ):
+            invalid = await client.get(
+                "/api/guilds/123/statistics", params=params, headers=auth_headers
+            )
+            assert invalid.status_code == status, invalid.text
+            error = invalid.json()["error"]
+            assert (error["code"], error["message"]) == (code, message)
+            assert error["requestId"] == invalid.headers["x-request-id"]
+            if code == "invalid_scope":
+                assert error["details"] == {"allowed": ["ALL", "REGULAR", "AUCTION"]}
         create_headers = {**csrf_headers, "idempotency-key": "docker-create-1"}
         body = {
             "bestOf": 3,
@@ -567,7 +1545,8 @@ async def main() -> None:
         try:
             async with connection.transaction():
                 await connection.execute(
-                    "INSERT INTO users (user_id, identity_kind, display_name, created_at, updated_at) "
+                    "INSERT INTO users "
+                    "(user_id, identity_kind, display_name, created_at, updated_at) "
                     "SELECT (2000+n)::text, 'DISCORD', 'Docker player', now(), now() "
                     "FROM generate_series(1,10) n"
                 )
@@ -578,6 +1557,22 @@ async def main() -> None:
                     "FROM generate_series(1,10) n"
                 )
                 await connection.execute(
+                    "INSERT INTO user_privacy_settings "
+                    "(user_id, public_profile_enabled, show_riot_ids, "
+                    "allow_external_record_search, updated_at) "
+                    "VALUES ('2001', false, false, false, now()), "
+                    "('2002', true, true, false, now())"
+                )
+                await connection.execute(
+                    "INSERT INTO riot_accounts (puuid, user_id, platform, routing_region, "
+                    "game_name, tag_line, normalized_game_name, normalized_tag_line, "
+                    "profile_icon_id, is_main, created_at, updated_at) "
+                    "VALUES ('docker-private-puuid', '2001', 'KR', 'ASIA', "
+                    "'Docker private', 'KR1', 'docker private', 'kr1', 456, true, now(), now()), "
+                    "('docker-visible-puuid', '2002', 'KR', 'ASIA', "
+                    "'Docker visible', 'KR1', 'docker visible', 'kr1', 123, true, now(), now())"
+                )
+                await connection.execute(
                     "INSERT INTO recruitment_participants "
                     "(guild_id, recruitment_id, user_id, status, joined_at) "
                     "SELECT '123', $1, (2000+n)::text, 'JOINED', now() "
@@ -586,6 +1581,8 @@ async def main() -> None:
                 )
         finally:
             await connection.close()
+        await record_identity_smoke(client, auth_headers, user_id)
+        await records_smoke(client, auth_headers, "Docker season")
         closed = await client.post(
             recruitment_path + "/close",
             json={},
@@ -593,6 +1590,12 @@ async def main() -> None:
         )
         assert closed.status_code == 200, closed.text
         assert closed.json()["data"]["recruitment"]["status"] == "CLOSED"
+        await operation_smoke(
+            client,
+            auth_headers,
+            "entry:" + recruitment_id,
+            ("ENTRY", "편성 필요", f"/g/123/recruitments/{recruitment_id}/entry"),
+        )
         edited = await client.patch(
             recruitment_path + "/entry-draft",
             json={
@@ -727,6 +1730,14 @@ async def main() -> None:
         ).status_code == 404
 
         series_path = "/api/guilds/123/series/" + series.json()["data"]["series"]["id"]
+        series_id = series.json()["data"]["series"]["id"]
+        await operation_smoke(client, auth_headers, "entry:" + recruitment_id, None)
+        await operation_smoke(
+            client,
+            auth_headers,
+            "series:" + series_id,
+            ("PICK_BAN", "픽밴/결과 입력", f"/g/123/series/{series_id}/pick-ban"),
+        )
         listed = await client.get(
             "/api/guilds/123/series?state=active", headers=auth_headers
         )
@@ -767,6 +1778,16 @@ async def main() -> None:
             "team1": 1,
             "team2": 0,
         }
+        await operation_smoke(client, auth_headers, "series:" + series_id, None)
+        await statistics_smoke(client, auth_headers, 1, 0)
+        await leaderboard_smoke(client, auth_headers, "Docker season", played=True)
+        await records_smoke(
+            client,
+            auth_headers,
+            "Docker season",
+            source="REGULAR",
+            identifier=series_id,
+        )
         undone = await client.request(
             "DELETE",
             series_path + "/games/last",
@@ -801,6 +1822,15 @@ async def main() -> None:
             headers={**csrf_headers, "idempotency-key": "docker-series-delete"},
         )
         assert cancelled.status_code == 200, cancelled.text
+        await operation_smoke(
+            client,
+            auth_headers,
+            "series:" + second.json()["data"]["series"]["id"],
+            None,
+        )
+        await statistics_smoke(client, auth_headers, 0, 0)
+        await leaderboard_smoke(client, auth_headers, "Docker season", played=False)
+        await records_smoke(client, auth_headers, "Docker season")
 
         # Exercise operator settings and season rotation after completing the game workflow.
         catalog = await client.put(
@@ -850,6 +1880,19 @@ async def main() -> None:
         assert (
             replay.status_code == 200
             and replay.json()["data"] == rotated.json()["data"]
+        )
+        await leaderboard_smoke(
+            client, auth_headers, "Docker next season", played=False
+        )
+        await statistics_smoke(
+            client, auth_headers, 0, 0, season_id=season_body["expectedCurrentSeasonId"]
+        )
+        await records_smoke(client, auth_headers, "Docker next season")
+        await records_smoke(
+            client,
+            auth_headers,
+            "Docker season",
+            season_id=season_body["expectedCurrentSeasonId"],
         )
 
         await notification_smoke(client, database_url, recruitment_id)
@@ -908,6 +1951,36 @@ async def main() -> None:
         finally:
             await connection.close()
 
+        force_url = (
+            "/api/guilds/123/auction-recruitments/"
+            + data["recruitment"]["id"]
+            + "/force-cancel"
+        )
+        force_body = {
+            "actor": {
+                "id": user_id,
+                "displayName": "Docker member",
+                "globalDisplayName": "Docker member",
+                "roleIds": ["456"],
+            }
+        }
+        force_headers = {
+            "authorization": "Bearer isolated-bot-service-token-32-characters",
+            "idempotency-key": "2000003",
+        }
+        forced = await client.post(force_url, json=force_body, headers=force_headers)
+        assert forced.status_code == 200, forced.text
+        assert forced.json()["data"]["recruitmentStatus"] == "CANCELLED"
+        replay = await client.post(force_url, json=force_body, headers=force_headers)
+        assert (
+            replay.status_code == 200 and replay.json()["data"] == forced.json()["data"]
+        )
+
+        # Administrative changes run after all game workflows and restore membership status.
+        await guild_admin_smoke(client, csrf_headers, user_id)
+        await tournament_finish_smoke(client, database_url, csrf_headers)
+        await full_data_export_smoke(client, csrf_headers)
+
         # Stop before any provider exchange: test authorization denial and one-shot consumption.
         start = await client.get("/oauth/discord/start", params={"next": "/me"})
         assert start.status_code == 302
@@ -926,8 +1999,22 @@ async def main() -> None:
         assert (await client.get("/api/me", headers=auth_headers)).status_code == 401
     print(
         "Docker HTTP: health/readiness, session, guild authorization, "
-        "profile/privacy, champion preferences, recruitment create/replay/detail/join/leave/"
-        "cancel/restore/close/reopen/entry/edit/reset/preferred-lanes/bind/DM/series/list/detail/pickban/games/result/revert/complete/delete, notification claim/ack/typed-ack/nack/heartbeat, catalog/settings/seasons/rotation/replay, auction recruitment 12 operations/typed ACK/replay, entry-to-auction conversion/replay, tournament creation/list/detail/9 draft commands/Rust reset grant failure, OAuth denial/replay, CSRF/logout passed."
+        "profile/privacy, champion preferences, members/MMR/replay/status/audit cursor/denial, "
+        "operations queue lifecycle/href/HEAD, leaderboard played lanes/privacy/current season, "
+        "statistics ALL/REGULAR/AUCTION/reversals/closed season/validation, "
+        "records profile/search/HEAD/privacy/Riot normalization/ambiguity/game detail/reversal/season, "
+        "guild/public Riot suggestions/privacy/limits/HEAD, "
+        "full-data export/archive/tenant isolation/secret exclusions/audit/CSRF, "
+        "manual tournament finish/preview/HEAD/replay/no champion/nullable notification, "
+        "recruitment create/replay/detail/join/leave/"
+        "cancel/restore/close/reopen/entry/edit/reset/preferred-lanes/bind/DM/series/list/detail/"
+        "pickban/games/result/revert/complete/delete, notification claim/ack/typed-ack/nack/"
+        "heartbeat, catalog/settings/seasons/rotation/replay, "
+        "auction recruitment 12 operations/typed ACK/replay, "
+        "entry-to-auction conversion/replay, tournament creation/list/detail/9 draft commands/"
+        "Rust reset grant failure, bracket/lineup/game/MMR/result/early-complete/revert/cancel/"
+        "force-cancel/replay, new route registration/flag denial, OAuth denial/replay, "
+        "CSRF/logout passed."
     )
 
 

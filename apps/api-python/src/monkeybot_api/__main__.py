@@ -6,7 +6,7 @@ import uvicorn
 from pydantic import ValidationError
 
 from monkeybot_api.app import create_app
-from monkeybot_api.config import Settings
+from monkeybot_api.core.config import Settings
 
 
 class JsonFormatter(logging.Formatter):
@@ -51,6 +51,9 @@ def main() -> None:
         proxy_headers=False,
         access_log=False,
         log_config=None,
+        ws_max_size=8 * 1024,
+        ws_ping_interval=25.0,
+        ws_ping_timeout=75.0,
         timeout_graceful_shutdown=math.ceil(settings.shutdown_timeout_ms / 1000),
     )
 

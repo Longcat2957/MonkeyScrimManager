@@ -74,6 +74,9 @@ const OAUTH_KEY_BASE64URL: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 type TestResult<T = ()> = Result<T, Box<dyn Error + Send + Sync>>;
 
+#[path = "support/auction_finish.rs"]
+mod auction_finish;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn active_member_can_create_a_real_recruitment_from_the_web() -> TestResult {
     tokio::time::timeout(Duration::from_secs(120), run_flow())
@@ -981,47 +984,7 @@ async fn run_auction_lineup_confirmation_flow() -> TestResult {
         .await?;
     MIGRATOR.run(&pool).await?;
 
-    let config = test_config(server.database_url())?;
-    let auth_config = config.auth().cloned().expect("auth config");
-    let auth_service = Arc::new(AuthService::new(
-        auth_config.oauth_encryption_key(),
-        CookiePolicy::new(auth_config.secure_cookies(), auth_config.session_ttl()),
-    )?);
-    let auth_repository = Arc::new(AuthRepository::new(pool.clone()));
-    create_login(
-        &auth_repository,
-        MEMBER_ID,
-        "Active Member",
-        MEMBER_SESSION,
-        MEMBER_CSRF,
-    )
-    .await?;
-    for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().skip(1).enumerate() {
-        create_login(
-            &auth_repository,
-            user_id,
-            &format!("Auction Lineup Member {}", index + 2),
-            &format!("auction-lineup-{index}-session"),
-            &format!("auction-lineup-{index}-csrf"),
-        )
-        .await?;
-    }
-    seed_guild(&pool).await?;
-
-    let state = AppState::with_postgres(
-        config,
-        pool.clone(),
-        Arc::new(PostgresReadinessProbe::new(
-            pool.clone(),
-            Duration::from_secs(1),
-        )),
-    )
-    .with_auth(AuthRuntime::new(
-        auth_service,
-        auth_repository,
-        Arc::new(FakeDiscordClient),
-    ));
-    let app = build_router(state);
+    let app = auction_lineup_test_app(&pool, test_config(server.database_url())?).await?;
 
     let configured = seed_complete_auction_match_lineup(&pool, 41).await?;
     let configured_path = format!(
@@ -1369,6 +1332,49 @@ async fn run_auction_lineup_confirmation_flow() -> TestResult {
     pool.close().await;
     drop(server);
     Ok(())
+}
+
+async fn auction_lineup_test_app(pool: &PgPool, config: Config) -> TestResult<Router> {
+    let auth_config = config.auth().cloned().expect("auth config");
+    let auth_service = Arc::new(AuthService::new(
+        auth_config.oauth_encryption_key(),
+        CookiePolicy::new(auth_config.secure_cookies(), auth_config.session_ttl()),
+    )?);
+    let auth_repository = Arc::new(AuthRepository::new(pool.clone()));
+    for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().enumerate() {
+        let (session, csrf) = match *user_id {
+            MEMBER_ID => (MEMBER_SESSION.to_owned(), MEMBER_CSRF.to_owned()),
+            CANDIDATE_ID => (CANDIDATE_SESSION.to_owned(), CANDIDATE_CSRF.to_owned()),
+            _ => (
+                format!("auction-lineup-{index}-session"),
+                format!("auction-lineup-{index}-csrf"),
+            ),
+        };
+        create_login(
+            &auth_repository,
+            user_id,
+            &format!("Auction Lineup Member {}", index + 1),
+            &session,
+            &csrf,
+        )
+        .await?;
+    }
+    seed_guild(pool).await?;
+    Ok(build_router(
+        AppState::with_postgres(
+            config,
+            pool.clone(),
+            Arc::new(PostgresReadinessProbe::new(
+                pool.clone(),
+                Duration::from_secs(1),
+            )),
+        )
+        .with_auth(AuthRuntime::new(
+            auth_service,
+            auth_repository,
+            Arc::new(FakeDiscordClient),
+        )),
+    ))
 }
 
 async fn run_series_conversion_flow() -> TestResult {
@@ -4903,8 +4909,6 @@ async fn seed_complete_auction_match_lineup(
     pool: &PgPool,
     display_number: i64,
 ) -> TestResult<AuctionMatchLineupFixture> {
-    const LANES: [&str; 5] = ["TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"];
-
     let now = OffsetDateTime::now_utc();
     let recruitment_id = Uuid::now_v7();
     let tournament_id = Uuid::now_v7();
@@ -4994,102 +4998,15 @@ async fn seed_complete_auction_match_lineup(
         (0_i64, left_team_id, &FULL_ROSTER_MEMBER_IDS[..5]),
         (1_i64, right_team_id, &FULL_ROSTER_MEMBER_IDS[5..]),
     ] {
-        for (index, (user_id, lane)) in member_ids.iter().zip(LANES).enumerate() {
-            let user_id = *user_id;
-            let sequence = team_index * 5 + i64::try_from(index)? + 1;
-            let lot_id = Uuid::now_v7();
-            let action_id = Uuid::now_v7();
-            let member_id = Uuid::now_v7();
-
-            sqlx::query(
-                "INSERT INTO auction_bid_candidates (
-                     guild_id, tournament_id, user_id, declared_lane, mmr_at_start,
-                     snapshot_origin, queue_position, state, draw_count, updated_at
-                 ) VALUES ($1, $2, $3, $4, 1500, 'CAPTURED', $5, 'ASSIGNED', 1, $6)",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(user_id)
-            .bind(lane)
-            .bind(sequence - 1)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_lots (
-                     guild_id, tournament_id, id, draw_sequence, target_user_id, status,
-                     opened_by_type, opened_by_id, opened_at, closed_by_type, closed_by_id, closed_at
-                 ) VALUES (
-                     $1, $2, $3, $4, $5, 'ASSIGNED',
-                     'USER', $6, $7, 'USER', $6, $7
-                 )",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(lot_id)
-            .bind(sequence)
-            .bind(user_id)
-            .bind(MEMBER_ID)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_actions (
-                     guild_id, tournament_id, id, sequence, kind, target_user_id, team_id, lot_id,
-                     points, reverses_action_id, reversed_action_kind, actor_type, actor_id, created_at
-                 ) VALUES (
-                     $1, $2, $3, $4, 'ASSIGN_UNSOLD', $5, $6, $7,
-                     NULL, NULL, NULL, 'USER', $8, $9
-                 )",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(action_id)
-            .bind(sequence)
-            .bind(user_id)
-            .bind(team_id)
-            .bind(lot_id)
-            .bind(MEMBER_ID)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_team_members (
-                     guild_id, tournament_id, team_id, id, user_id, roster_slot,
-                     acquired_via, declared_lane, mmr_at_acquisition, snapshot_origin,
-                     acquisition_action_id, acquisition_action_kind, joined_at, released_at
-                 ) VALUES (
-                     $1, $2, $3, $4, $5, $6,
-                     'MANUAL', $7, 1500, 'CAPTURED',
-                     $8, 'ASSIGN_UNSOLD', $9, NULL
-                 )",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(team_id)
-            .bind(member_id)
-            .bind(user_id)
-            .bind(i16::try_from(index + 1)?)
-            .bind(lane)
-            .bind(action_id)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_match_lineups (
-                     guild_id, tournament_id, match_id, team_id, lane, team_member_id, user_id
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(match_id)
-            .bind(team_id)
-            .bind(lane)
-            .bind(member_id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
-        }
+        seed_auction_team_lineup(
+            pool,
+            tournament_id,
+            match_id,
+            team_id,
+            team_index,
+            member_ids,
+        )
+        .await?;
     }
 
     Ok(AuctionMatchLineupFixture {
@@ -5098,6 +5015,115 @@ async fn seed_complete_auction_match_lineup(
         left_team_id,
         right_team_id,
     })
+}
+
+async fn seed_auction_team_lineup(
+    pool: &PgPool,
+    tournament_id: Uuid,
+    match_id: Uuid,
+    team_id: Uuid,
+    team_index: i64,
+    member_ids: &[&str],
+) -> TestResult {
+    const LANES: [&str; 5] = ["TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"];
+    let now = OffsetDateTime::now_utc();
+    for (index, (user_id, lane)) in member_ids.iter().zip(LANES).enumerate() {
+        let user_id = *user_id;
+        let sequence = team_index * 5 + i64::try_from(index)? + 1;
+        let lot_id = Uuid::now_v7();
+        let action_id = Uuid::now_v7();
+        let member_id = Uuid::now_v7();
+
+        sqlx::query(
+            "INSERT INTO auction_bid_candidates (
+                 guild_id, tournament_id, user_id, declared_lane, mmr_at_start,
+                 snapshot_origin, queue_position, state, draw_count, updated_at
+             ) VALUES ($1, $2, $3, $4, 1500, 'CAPTURED', $5, 'ASSIGNED', 1, $6)",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(user_id)
+        .bind(lane)
+        .bind(sequence - 1)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_lots (
+                 guild_id, tournament_id, id, draw_sequence, target_user_id, status,
+                 opened_by_type, opened_by_id, opened_at, closed_by_type, closed_by_id, closed_at
+             ) VALUES (
+                 $1, $2, $3, $4, $5, 'ASSIGNED',
+                 'USER', $6, $7, 'USER', $6, $7
+             )",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(lot_id)
+        .bind(sequence)
+        .bind(user_id)
+        .bind(MEMBER_ID)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_actions (
+                 guild_id, tournament_id, id, sequence, kind, target_user_id, team_id, lot_id,
+                 points, reverses_action_id, reversed_action_kind, actor_type, actor_id, created_at
+             ) VALUES (
+                 $1, $2, $3, $4, 'ASSIGN_UNSOLD', $5, $6, $7,
+                 NULL, NULL, NULL, 'USER', $8, $9
+             )",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(action_id)
+        .bind(sequence)
+        .bind(user_id)
+        .bind(team_id)
+        .bind(lot_id)
+        .bind(MEMBER_ID)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_team_members (
+                 guild_id, tournament_id, team_id, id, user_id, roster_slot,
+                 acquired_via, declared_lane, mmr_at_acquisition, snapshot_origin,
+                 acquisition_action_id, acquisition_action_kind, joined_at, released_at
+             ) VALUES (
+                 $1, $2, $3, $4, $5, $6,
+                 'MANUAL', $7, 1500, 'CAPTURED',
+                 $8, 'ASSIGN_UNSOLD', $9, NULL
+             )",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(team_id)
+        .bind(member_id)
+        .bind(user_id)
+        .bind(i16::try_from(index + 1)?)
+        .bind(lane)
+        .bind(action_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_match_lineups (
+                 guild_id, tournament_id, match_id, team_id, lane, team_member_id, user_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(match_id)
+        .bind(team_id)
+        .bind(lane)
+        .bind(member_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn auction_lineup_confirmation_notification(

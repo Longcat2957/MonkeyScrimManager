@@ -68,15 +68,15 @@ function mutationHeaders(idempotencyKey: string): Record<string, string> {
 }
 
 function fallbackErrorMessage(status: number, action: AuctionTournamentCancelAction): string {
-	if (status === 400 || status === 422) return '경매 내전 조기 종료 요청 값이 올바르지 않습니다.';
+	if (status === 400 || status === 422) return '경매 내전 취소 요청 값이 올바르지 않습니다.';
 	if (status === 401) return '로그인이 만료되었습니다. 다시 로그인해 주세요.';
-	if (status === 403) return '경매 내전을 조기 종료하려면 길드 운영자 권한이 필요합니다.';
+	if (status === 403) return '경매 내전을 취소하려면 길드 운영자 권한이 필요합니다.';
 	if (status === 404) return '요청한 경매 내전을 찾을 수 없습니다.';
 	if (status === 409) return '경매 내전 상태가 변경되었습니다. 최신 상태를 확인해 주세요.';
-	if (status === 503) return '경매 내전 조기 종료 서비스를 일시적으로 사용할 수 없습니다.';
+	if (status === 503) return '경매 내전 취소 서비스를 일시적으로 사용할 수 없습니다.';
 	return action === 'preview'
-		? '경매 내전 조기 종료 정보를 불러오지 못했습니다.'
-		: '경매 내전 조기 종료를 처리하지 못했습니다.';
+		? '경매 내전 취소 정보를 불러오지 못했습니다.'
+		: '경매 내전 취소를 처리하지 못했습니다.';
 }
 
 async function responsePayload(response: Response): Promise<unknown> {
@@ -127,7 +127,7 @@ async function requestCancelPreview(
 	const parsed = previewEnvelopeSchema.safeParse(payload);
 	if (!parsed.success) {
 		throw new AuctionTournamentCancelApiError(
-			'경매 내전 조기 종료 정보 응답 형식이 올바르지 않습니다.',
+			'경매 내전 취소 정보 응답 형식이 올바르지 않습니다.',
 			response.status,
 			'invalid_response',
 			null
@@ -158,7 +158,7 @@ async function requestCancelResult(
 	const parsed = resultEnvelopeSchema.safeParse(payload);
 	if (!parsed.success) {
 		throw new AuctionTournamentCancelApiError(
-			'경매 내전 조기 종료 응답 형식이 올바르지 않습니다.',
+			'경매 내전 취소 응답 형식이 올바르지 않습니다.',
 			response.status,
 			'invalid_response',
 			null
@@ -186,7 +186,7 @@ export async function cancelAuctionTournament(
 	const parsedCommand = auctionTournamentCancelCommandSchema.safeParse(command);
 	if (!parsedCommand.success) {
 		throw new AuctionTournamentCancelApiError(
-			'경매 내전 조기 종료 입력 값이 올바르지 않습니다.',
+			'경매 내전 취소 입력 값이 올바르지 않습니다.',
 			0,
 			'invalid_cancel_command',
 			null
@@ -213,7 +213,7 @@ export function isAuctionTournamentCancelRevisionConflict(
 
 export function auctionTournamentCancelErrorText(cause: unknown): string {
 	if (!(cause instanceof AuctionTournamentCancelApiError)) {
-		return '경매 내전 조기 종료 요청을 처리하지 못했습니다.';
+		return '경매 내전 취소 요청을 처리하지 못했습니다.';
 	}
 	return cause.requestId ? `${cause.message} (요청 ID: ${cause.requestId})` : cause.message;
 }

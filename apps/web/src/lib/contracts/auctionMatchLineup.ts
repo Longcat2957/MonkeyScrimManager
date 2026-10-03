@@ -59,6 +59,7 @@ export const auctionMatchLineupMatchSchema = z
 		leftScore: nonnegativeIntegerSchema,
 		rightScore: nonnegativeIntegerSchema,
 		winnerTeamId: z.uuid().nullable(),
+		endedEarly: z.boolean().optional(),
 		lineupsLocked: z.boolean()
 	})
 	.strict();
@@ -69,7 +70,8 @@ export const auctionMatchLineupPermissionsSchema = z
 		canEnterResults: z.boolean(),
 		canUnlockLineup: z.boolean(),
 		canRevertLastGame: z.boolean(),
-		canCompleteFinalAsBo1: z.boolean()
+		canCompleteFinalAsBo1: z.boolean(),
+		canFinishTournament: z.boolean().optional()
 	})
 	.strict();
 

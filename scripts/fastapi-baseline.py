@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "apps/api-python/src/monkeybot_api/sqlx-manifest.json"
+MANIFEST = ROOT / "apps/api-python/src/monkeybot_api/db/sqlx-manifest.json"
 INVENTORY = ROOT / "docs/migration/fastapi-baseline.json"
 ROUTERS = {
     "apps/api/src/http/mod.rs": ("api", "always"),

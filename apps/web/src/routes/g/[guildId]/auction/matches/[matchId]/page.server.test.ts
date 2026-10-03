@@ -234,4 +234,31 @@ describe('auction match result page server load', () => {
 			location: `/g/${guildId}/auction/tournaments/${tournamentId}/lineup`
 		});
 	});
+
+	it('keeps an early-finished semifinal readable without redirecting to lineup setup', async () => {
+		const finished = snapshot();
+		finished.match = { ...finished.match, matchKey: 'SEMIFINAL_A', status: 'COMPLETED' };
+		const bracket = twentyPersonBracketWithPendingSemifinal();
+		bracket.tournament.status = 'COMPLETED';
+		const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+			const path = String(input);
+			if (path === `/api/guilds/${guildId}/auction-matches/${matchId}`) {
+				return Response.json({
+					data: { ...finished, match: { ...finished.match, endedEarly: true } },
+					meta: { requestId }
+				});
+			}
+			if (path.endsWith('/bracket')) return Response.json({ data: bracket, meta: { requestId } });
+			if (path.endsWith('champion-ko_KR.fixture.json'))
+				return Response.json(championCatalogResponse);
+			return new Response('unavailable', { status: 503 });
+		});
+		await expect(
+			load({
+				fetch: fetcher,
+				params: { guildId, matchId },
+				url: new URL(`http://localhost:5173/g/${guildId}/auction/matches/${matchId}`)
+			} as never)
+		).resolves.toMatchObject({ snapshot: { match: { endedEarly: true, status: 'COMPLETED' } } });
+	});
 });

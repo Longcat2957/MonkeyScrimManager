@@ -318,6 +318,16 @@ Web 현재 active operator의 참가자 관리
 원칙:
 
 - 경매 내전도 결과 입력 시 guild MMR에 반영한다.
+- 운영자는 10인·20인 경매의 입찰/브래킷 준비/경기 진행 중 언제든 **마무리**할 수 있다.
+  `GET .../auction-tournaments/{id}/finish-preview`로 현재 revision을 확인하고
+  `POST .../auction-tournaments/{id}/finish`에 `expectedRevision`, `reason`을 보낸다.
+- 마무리는 이미 확정한 경기, 라인업, MMR과 BO 규칙을 보존하고 tournament 및 미완료 match를
+  `COMPLETED + endedEarly=true`로 기록한다. 10인 단일 FINAL과 20인 FINAL의 현재 스코어가 앞선 팀이
+  우승팀이다. 동점·0경기·결승 미진행은 우승팀 없이 종료한다. 미제출 결과는 경기 기록에 포함하지 않는다.
+- 마무리한 내전은 추가 결과 입력·라인업 변경·결과 되돌리기·브래킷 복구로 재개할 수 없다.
+  source 모집은 `CONVERTED`를 유지하고 결과 페이지와 설정된 Discord 결과 카드에서 종료 결과를 확인한다.
+- 기존 **취소(경기·MMR 되돌리기)**는 별도 기능이다. 마무리는 MMR을 되돌리지 않으므로
+  이후 다른 경기의 MMR이 반영되어 있어도 종료할 수 있다.
 - 경매 match는 게임 시작 전에 양 팀 라인업을 반드시 확정해야 한다.
 - 라인업이 비어 있거나 중복 role이 있으면 결과 입력으로 넘어갈 수 없다.
 - 경매 진행 상태는 UI local state가 아니라 DB 원장을 기준으로 복구 가능해야 한다.
