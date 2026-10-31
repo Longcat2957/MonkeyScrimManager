@@ -214,6 +214,10 @@ export const auctionMatchGameResultRevertCommandSchema = z
 	.object({ expectedRevision: nonnegativeIntegerSchema })
 	.strict();
 
+export const auctionFinalBo1CompleteCommandSchema = z
+	.object({ expectedRevision: nonnegativeIntegerSchema })
+	.strict();
+
 export type AuctionMatchConfirmedGame = z.infer<typeof auctionMatchConfirmedGameSchema>;
 export type AuctionMatchGameBans = z.infer<typeof auctionMatchGameBansSchema>;
 export type AuctionMatchGameResultPermissions = z.infer<
@@ -222,6 +226,7 @@ export type AuctionMatchGameResultPermissions = z.infer<
 export type AuctionMatchGameResultRevertCommand = z.infer<
 	typeof auctionMatchGameResultRevertCommandSchema
 >;
+export type AuctionFinalBo1CompleteCommand = z.infer<typeof auctionFinalBo1CompleteCommandSchema>;
 export type AuctionMatchGameResultSnapshot = z.infer<typeof auctionMatchGameResultSnapshotSchema>;
 export type AuctionMatchGameResultSubmitCommand = z.infer<
 	typeof auctionMatchGameResultSubmitCommandSchema

@@ -166,7 +166,8 @@ function gameSnapshot(
 			canManageLineup: true,
 			canEnterResults: false,
 			canUnlockLineup: false,
-			canRevertLastGame: false
+			canRevertLastGame: false,
+			canCompleteFinalAsBo1: false
 		}
 	};
 }

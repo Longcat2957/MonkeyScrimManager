@@ -362,6 +362,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -1388,7 +1390,9 @@ paths:
       description: >-
         Returns the authoritative recruitment roster for the entry recruitment stage. OPEN
         recruitments remain in Discord participant collection; CLOSED recruitments expose the
-        entry composition link in the returned snapshot.
+        entry composition link in the returned snapshot. CANCELLED recruitments remain available
+        by exact ID so an eligible creator or operator can restore retained participants and entry
+        assignments; they stay absent from the actionable list.
       security:
         - SessionCookie: []
       parameters:
@@ -1416,12 +1420,11 @@ paths:
       operationId: cancelGuildRecruitment
       summary: Soft-cancel an open or closed general recruitment
       description: >-
-        Browser-only, bodyless command. The creator or a current active operator can transition an
-        OPEN or CLOSED recruitment to CANCELLED. Participants, entry assignments, and entry-draft
-        history are retained, while the cancelled recruitment is removed from normal detail,
-        actionable-list, and entry-draft reads. The EntryDraftSnapshot canCancel capability is true
-        for an eligible creator or current active operator in either source state. An identical
-        browser idempotency key replays the resulting CANCELLED snapshot. A bound Discord
+        Browser-only optimistic soft-cancel command. The creator or a current active operator can
+        transition an OPEN or CLOSED recruitment to CANCELLED when expectedRevision is current.
+        Participants, entry assignments, and entry-draft history are retained. The exact detail
+        remains readable for recovery while actionable-list and entry-draft reads hide the row. An
+        identical browser idempotency key replays the resulting CANCELLED snapshot. A bound Discord
         recruitment message queues RECRUITMENT_MESSAGE_DELETE in the same transaction.
       security:
         - SessionCookie: []
@@ -1430,6 +1433,12 @@ paths:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/RecruitmentId'
         - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
       responses:
         '200':
           description: Recruitment cancelled or an identical browser command replayed.
@@ -1450,6 +1459,57 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/recruitments/{recruitmentId}/restore:
+    post:
+      operationId: restoreGuildRecruitment
+      summary: Restore a soft-cancelled general recruitment
+      description: >-
+        Browser-only recovery command for the creator or a current active operator. The recruitment
+        must be CANCELLED and expectedRevision must be current. The server restores CLOSED when the
+        recruitment had reached entry editing before cancellation, otherwise OPEN. Participant and
+        entry data are preserved, cancellation/conversion markers are cleared, and a replacement
+        Discord recruitment message is queued without reapplying any cancelled game or MMR result.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/RecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
+      responses:
+        '200':
+          description: Recruitment restored to its safe prior stage or replayed idempotently.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -2373,8 +2433,10 @@ paths:
       operationId: getGuildAuctionRecruitment
       summary: Get an auction recruitment snapshot
       description: >-
-        Returns the authoritative roster and viewer capabilities for an OPEN or CLOSED auction
-        recruitment. CANCELLED and CONVERTED rows are hidden. The draft link is null until a full
+        Returns the authoritative roster and viewer capabilities for an OPEN, CLOSED, or CANCELLED
+        auction recruitment. CANCELLED recruitments remain available by exact ID so an eligible
+        creator or operator can restore the retained roster and captain setup; they stay absent
+        from the actionable list. CONVERTED rows are hidden. The draft link is null until a full
         recruitment is closed by an operator, then points to the closed roster stage-gate.
       security:
         - SessionCookie: []
@@ -2401,11 +2463,13 @@ paths:
           $ref: '#/components/responses/InternalError'
     delete:
       operationId: cancelGuildAuctionRecruitment
-      summary: Cancel an open auction recruitment
+      summary: Soft-cancel an open or closed auction recruitment
       description: >-
-        Browser-only soft-cancel command. The creator or a current active operator can cancel an
-        OPEN recruitment. Participants and setup rows remain retained history; the
-        resource is hidden from subsequent reads.
+        Browser-only optimistic soft-cancel command. The creator or a current active operator can
+        transition an OPEN or CLOSED recruitment to CANCELLED when expectedRevision is current.
+        Participants and captain setup rows remain retained. The exact detail remains readable for
+        recovery while actionable-list and setup-draft reads hide the row. A bound Discord
+        recruitment message queues AUCTION_RECRUITMENT_MESSAGE_DELETE in the same transaction.
       security:
         - SessionCookie: []
           CsrfHeader: []
@@ -2413,6 +2477,12 @@ paths:
         - $ref: '#/components/parameters/GuildId'
         - $ref: '#/components/parameters/AuctionRecruitmentId'
         - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
       responses:
         '200':
           description: Cancelled auction recruitment snapshot or an idempotent replay.
@@ -2433,6 +2503,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -2537,6 +2609,104 @@ paths:
       responses:
         '200':
           description: Closed auction recruitment snapshot.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/reopen:
+    post:
+      operationId: reopenGuildAuctionRecruitment
+      summary: Return a closed auction recruitment to recruiting
+      description: >-
+        Browser-only operator command for both ten-person and twenty-person auctions. The
+        recruitment must be CLOSED and expectedRevision must be current. Success restores OPEN,
+        clears closedAt, and keeps the joined roster and captain setup draft so recruitment can
+        continue safely. A bound Discord recruitment message is updated in the same transaction.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
+      responses:
+        '200':
+          description: Auction recruitment returned to OPEN or replayed idempotently.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionRecruitmentSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-recruitments/{auctionRecruitmentId}/restore:
+    post:
+      operationId: restoreGuildAuctionRecruitment
+      summary: Restore a soft-cancelled auction recruitment
+      description: >-
+        Browser-only recovery command for the creator or a current active operator. The recruitment
+        must be CANCELLED and expectedRevision must be current. The server restores CLOSED when the
+        recruitment had reached captain selection before cancellation, otherwise OPEN. The roster
+        and captain setup are preserved, cancellation/conversion markers are cleared, and a
+        replacement Discord recruitment message is queued without resurrecting cancelled
+        tournaments, games, or MMR results.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionRecruitmentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecruitmentLifecycleRevisionRequest'
+      responses:
+        '200':
+          description: Auction recruitment restored to its safe prior stage or replayed idempotently.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/RequestId'
@@ -3025,6 +3195,85 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/finish-preview:
+    get:
+      operationId: getGuildAuctionTournamentFinishPreview
+      summary: Get the current revision before preserving results and finishing early
+      description: Active guild operator session required. The mutation rechecks permissions and revision.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+      responses:
+        '200':
+          description: Current tournament identity, status and revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentCancelPreviewResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/finish:
+    post:
+      operationId: finishGuildAuctionTournament
+      summary: Finish an active auction tournament while preserving games and MMR
+      description: >-
+        Active guild operator session and CSRF required. Accepts BIDDING, BRACKET_SETUP and IN_GAME
+        for TEN_PERSON and TWENTY_PERSON. Marks the tournament and all unfinished matches COMPLETED
+        with endedEarly=true, without changing the configured best-of, confirmed games, lineups or
+        MMR ledger. The leader of a played FINAL becomes champion; a tied or unplayed FINAL has no
+        champion. The source recruitment stays CONVERTED. Audit, realtime invalidation and configured
+        result notification are committed atomically. Early completion cannot be reverted or resumed.
+        Revision checking and idempotency protect concurrent changes and retries.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - $ref: '#/components/parameters/AuctionTournamentId'
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionTournamentFinishRequest'
+      responses:
+        '200':
+          description: Early completion outcome or identical request replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionTournamentFinishResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Revision conflict, terminal tournament or idempotency conflict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/guilds/{guildId}/auction-tournaments/{auctionTournamentId}/cancel-preview:
     get:
       operationId: getGuildAuctionTournamentCancelPreview
@@ -3412,6 +3661,63 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/guilds/{guildId}/auction-matches/{auctionMatchId}/complete:
+    post:
+      operationId: completeGuildAuctionFinalAsBo1
+      summary: Complete a one-game auction final as BO1
+      description: >-
+        Browser-only active-operator command. Available only for an IN_PROGRESS FINAL originally
+        configured as BO3 or BO5 with exactly one confirmed game and a 1:0 score. The confirmed
+        game and its MMR ledger entries remain applied while the source recruitment, match, and
+        tournament finalBestOf values become 1 and the current leader becomes champion.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/GuildId'
+        - name: auctionMatchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/BrowserIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuctionFinalBo1CompleteRequest'
+      responses:
+        '200':
+          description: Completed canonical match snapshot or an identical idempotent replay.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuctionMatchSnapshotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Includes auction_final_bo1_completion_unavailable when the match, score, or saved
+            final rule is not eligible for BO1 completion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -6728,6 +7034,18 @@ components:
       type: object
       additionalProperties: false
       required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+    RecruitmentLifecycleRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      description: >-
+        Optimistic lifecycle guard used by cancellation, restoration, and recruitment-stage
+        rollback commands. The client must send the latest visible recruitment revision.
       properties:
         expectedRevision:
           type: integer
@@ -10433,6 +10751,47 @@ components:
           $ref: '#/components/schemas/AuctionTournamentCancelPreview'
         meta:
           $ref: '#/components/schemas/ResponseMeta'
+    AuctionTournamentFinishRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, reason]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 240
+    AuctionTournamentFinishResult:
+      type: object
+      additionalProperties: false
+      required: [tournamentId, tournamentStatus, tournamentRevision, championTeamId]
+      properties:
+        tournamentId:
+          type: string
+          format: uuid
+        tournamentStatus:
+          const: COMPLETED
+        tournamentRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        championTeamId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+    AuctionTournamentFinishResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/AuctionTournamentFinishResult'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     AuctionTournamentCancelRequest:
       type: object
       additionalProperties: false
@@ -11356,6 +11715,7 @@ components:
           label,
           bestOf,
           hardFearless,
+          endedEarly,
           status,
           revision,
           leftTeamId,
@@ -11380,6 +11740,8 @@ components:
         bestOf:
           $ref: '#/components/schemas/AuctionBestOf'
         hardFearless:
+          type: boolean
+        endedEarly:
           type: boolean
         status:
           type: string
@@ -11425,8 +11787,19 @@ components:
     AuctionMatchSnapshotPermissions:
       type: object
       additionalProperties: false
-      required: [canManageLineup, canEnterResults, canUnlockLineup, canRevertLastGame]
+      required:
+        [
+          canManageLineup,
+          canFinishTournament,
+          canEnterResults,
+          canUnlockLineup,
+          canRevertLastGame,
+          canCompleteFinalAsBo1
+        ]
       properties:
+        canFinishTournament:
+          type: boolean
+          description: Active operator can finish the active parent tournament preserving records and MMR.
         canManageLineup:
           type: boolean
         canEnterResults:
@@ -11439,6 +11812,11 @@ components:
             True only when the final confirmed game can be safely reverted. A completed
             TWENTY_PERSON semifinal returns false once downstream final lineup, game, lock, or
             non-LINEUP_PENDING work exists.
+        canCompleteFinalAsBo1:
+          type: boolean
+          description: >-
+            True only for an active operator viewing a BO3 or BO5 FINAL with exactly one
+            confirmed game and a 1:0 score.
     AuctionMatchSnapshot:
       type: object
       additionalProperties: false
@@ -11513,6 +11891,15 @@ components:
           type: integer
           format: int64
           minimum: 0
+    AuctionFinalBo1CompleteRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
     AuctionTournamentResultTeamMember:
       type: object
       additionalProperties: false
@@ -11574,6 +11961,7 @@ components:
           matchKey,
           bestOf,
           hardFearless,
+          endedEarly,
           status,
           leftTeamId,
           rightTeamId,
@@ -11595,6 +11983,9 @@ components:
           $ref: '#/components/schemas/AuctionBestOf'
         hardFearless:
           type: boolean
+        endedEarly:
+          type: boolean
+          description: Early completion can have no games, lineup lock or winner.
         status:
           type: string
           enum: [LINEUP_PENDING, READY, IN_PROGRESS, COMPLETED, CANCELLED]
@@ -11659,8 +12050,10 @@ components:
     AuctionTournamentResultPermissions:
       type: object
       additionalProperties: false
-      required: [canRevertResults, canRecoverBracket]
+      required: [canRevertResults, canRecoverBracket, canCancel]
       properties:
+        canCancel:
+          type: boolean
         canRevertResults:
           type: boolean
         canRecoverBracket:
@@ -11674,7 +12067,18 @@ components:
           type: object
           additionalProperties: false
           required:
-            [id, title, displayNumber, format, rules, status, revision, championTeamId, href]
+            [
+              id,
+              title,
+              displayNumber,
+              format,
+              rules,
+              status,
+              revision,
+              championTeamId,
+              endedEarly,
+              href
+            ]
           properties:
             id:
               type: string
@@ -11694,6 +12098,9 @@ components:
               type: integer
               format: int64
               minimum: 0
+            endedEarly:
+              type: boolean
+              description: Records and MMR were preserved when the operator finished early.
             championTeamId:
               oneOf:
                 - type: string
@@ -11828,12 +12235,27 @@ components:
     AuctionRecruitmentPermissions:
       type: object
       additionalProperties: false
-      required: [canManageMembers, canClose, canCancel]
+      required:
+        - canManageMembers
+        - canClose
+        - canReopen
+        - canRestore
+        - canSendParticipantConfirmationDms
+        - canCancel
       properties:
         canManageMembers:
           type: boolean
         canClose:
           type: boolean
+        canReopen:
+          type: boolean
+          description: True for an active operator while the recruitment is CLOSED.
+        canRestore:
+          type: boolean
+          description: True for an eligible creator or active operator while it is CANCELLED.
+        canSendParticipantConfirmationDms:
+          type: boolean
+          description: True for an active operator while the recruitment is CLOSED.
         canCancel:
           type: boolean
     AuctionRecruitmentSnapshot:

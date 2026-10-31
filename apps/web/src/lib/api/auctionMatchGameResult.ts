@@ -1,7 +1,9 @@
 import {
+	auctionFinalBo1CompleteCommandSchema,
 	auctionMatchGameResultRevertCommandSchema,
 	auctionMatchGameResultSnapshotSchema,
 	auctionMatchGameResultSubmitCommandSchema,
+	type AuctionFinalBo1CompleteCommand,
 	type AuctionMatchGameResultRevertCommand,
 	type AuctionMatchGameResultSnapshot,
 	type AuctionMatchGameResultSubmitCommand
@@ -17,7 +19,8 @@ const snapshotEnvelopeSchema = z
 	.strict();
 const responseMetaEnvelopeSchema = z.object({ meta: responseMetaSchema }).passthrough();
 
-type AuctionMatchGameResultAction = 'load' | 'submit' | 'revert_last_game';
+type AuctionMatchGameResultAction =
+	'load' | 'submit' | 'revert_last_game' | 'complete_final_as_bo1';
 
 export class AuctionMatchGameResultApiError extends Error {
 	constructor(
@@ -78,6 +81,7 @@ function idempotentMutationHeaders(idempotencyKey: string): Record<string, strin
 function actionLabel(action: AuctionMatchGameResultAction): string {
 	if (action === 'load') return '경매 경기 정보 조회';
 	if (action === 'submit') return '경매 게임 결과 기록';
+	if (action === 'complete_final_as_bo1') return '경매 결승 BO1 조기 종료';
 	return '마지막 경매 게임 결과 되돌리기';
 }
 
@@ -230,6 +234,33 @@ export async function revertLastAuctionMatchGameResult(
 			body: JSON.stringify(parsedCommand.data)
 		},
 		'revert_last_game'
+	);
+}
+
+export async function completeAuctionFinalAsBo1(
+	guildId: string,
+	matchId: string,
+	command: AuctionFinalBo1CompleteCommand,
+	idempotencyKey: string
+): Promise<AuctionMatchGameResultSnapshot> {
+	assertMatchId(matchId);
+	const parsedCommand = auctionFinalBo1CompleteCommandSchema.safeParse(command);
+	if (!parsedCommand.success) {
+		throw new AuctionMatchGameResultApiError(
+			'경매 결승 BO1 조기 종료 값이 올바르지 않습니다.',
+			0,
+			'invalid_final_bo1_completion',
+			null
+		);
+	}
+	return await requestSnapshot(
+		apiRoute(['guilds', guildId, 'auction-matches', matchId, 'complete']),
+		{
+			method: 'POST',
+			headers: idempotentMutationHeaders(idempotencyKey),
+			body: JSON.stringify(parsedCommand.data)
+		},
+		'complete_final_as_bo1'
 	);
 }
 

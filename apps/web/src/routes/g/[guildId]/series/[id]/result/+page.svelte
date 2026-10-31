@@ -35,11 +35,18 @@
 	let revertLastGameError = $state('');
 	let deleteDialogOpen = $state(false);
 	let deleteError = $state('');
+	let deleteConfirmationInput = $state('');
 	let activeRouteKey = $state<string | null>(null);
 	const idempotencyKeys = createOperationIdempotencyKeys();
 	const isMutating = $derived(mutation !== null);
 	const canRevertLastGame = $derived(Boolean(snapshot?.capabilities.canRevertLastGame));
 	const canDelete = $derived(Boolean(snapshot?.capabilities.canDelete));
+	const deleteConfirmationText = $derived(
+		snapshot ? `시리즈 #${snapshot.series.displayNumber} 취소` : ''
+	);
+	const deleteConfirmationValid = $derived(
+		deleteConfirmationInput.trim() === deleteConfirmationText
+	);
 	const resultDescription = $derived(
 		snapshot
 			? `${snapshot.series.title} · ${formatSeriesRules(snapshot.series.bestOf, snapshot.series.hardFearless)} · #${snapshot.series.displayNumber} · ${resultStatusLabel(snapshot.series.terminalReason)}${snapshot.series.endedAt ? ` · ${snapshot.series.endedAt.slice(0, 10)} 종료` : ''}`
@@ -148,6 +155,7 @@
 		mutationError = '';
 		mutationNotice = '';
 		deleteError = '';
+		deleteConfirmationInput = '';
 		deleteDialogOpen = true;
 	}
 
@@ -187,7 +195,14 @@
 	async function confirmDelete() {
 		const route = currentResultRoute();
 		const currentSnapshot = snapshot;
-		if (!isCurrentRoute(route) || !currentSnapshot || !canDelete || isMutating) return;
+		if (
+			!isCurrentRoute(route) ||
+			!currentSnapshot ||
+			!canDelete ||
+			!deleteConfirmationValid ||
+			isMutating
+		)
+			return;
 
 		const operation = { expectedRevision: currentSnapshot.series.revision };
 		const idempotencyKey = idempotencyKeys.keyFor('series-result-delete', operation);
@@ -252,8 +267,8 @@
 						disabled={isMutating}
 						onclick={openDeleteDialog}
 						class="grid size-10 place-items-center border border-rose-300/25 text-rose-200 enabled:hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-45"
-						aria-label="시리즈 삭제"
-						title="시리즈 삭제"
+						aria-label="시리즈 취소"
+						title="시리즈 취소"
 					>
 						{#if mutation === 'delete'}
 							<LoaderCircle size={15} class="animate-spin" aria-hidden="true" />
@@ -378,19 +393,29 @@
 			<header
 				class="flex h-12 items-center justify-between border-b border-[var(--color-app-border)] px-4"
 			>
-				<Dialog.Title class="text-sm font-semibold text-slate-50">시리즈 삭제</Dialog.Title>
+				<Dialog.Title class="text-sm font-semibold text-slate-50">시리즈 취소</Dialog.Title>
 				<Dialog.Close
 					disabled={isMutating}
 					class="grid size-8 place-items-center text-slate-400 hover:bg-[var(--color-app-hover)] hover:text-slate-100 disabled:opacity-35"
-					aria-label="시리즈 삭제 창 닫기"
+					aria-label="시리즈 취소 창 닫기"
 				>
 					<X size={16} aria-hidden="true" />
 				</Dialog.Close>
 			</header>
 			<div class="grid gap-3 p-4">
 				<Dialog.Description class="text-xs leading-5 text-slate-400">
-					확정된 모든 세트와 MMR 정산을 되돌린 뒤 시리즈를 취소 처리합니다. 계속하시겠습니까?
+					확정된 모든 세트와 MMR 정산을 안전하게 역순으로 되돌린 뒤 시리즈를 취소합니다. 원본 모집과
+					엔트리는 보존되며 취소 후 복구 화면으로 이동합니다.
 				</Dialog.Description>
+				<label class="grid gap-1.5 text-xs font-semibold text-slate-300">
+					<span>확인 문구</span>
+					<input
+						bind:value={deleteConfirmationInput}
+						disabled={isMutating}
+						placeholder={deleteConfirmationText}
+						class="h-9 border border-[var(--color-app-border)] bg-[var(--color-app-control)] px-3 text-xs font-medium text-slate-100 outline-none focus:border-rose-300/50 disabled:opacity-35"
+					/>
+				</label>
 				{#if deleteError}
 					<p
 						class="border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs leading-5 text-rose-300"
@@ -409,14 +434,14 @@
 				</Dialog.Close>
 				<button
 					type="button"
-					disabled={isMutating}
+					disabled={isMutating || !deleteConfirmationValid}
 					onclick={confirmDelete}
 					class="inline-flex h-9 items-center gap-1.5 border border-rose-300/35 bg-rose-400/10 px-3 text-xs font-semibold text-rose-100 disabled:opacity-35"
 				>
 					{#if mutation === 'delete'}
-						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 삭제하는 중
+						<LoaderCircle size={14} class="animate-spin" aria-hidden="true" /> 취소 중
 					{:else}
-						<Trash2 size={14} aria-hidden="true" /> 시리즈 삭제
+						<Trash2 size={14} aria-hidden="true" /> 시리즈 취소
 					{/if}
 				</button>
 			</footer>

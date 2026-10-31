@@ -59,6 +59,7 @@ const RECRUITMENT_CHANNEL_ID: &str = "400000000000000001";
 const ENTRY_CHANNEL_ID: &str = "400000000000000002";
 const RESULT_CHANNEL_ID: &str = "400000000000000003";
 const MESSAGE_ID: &str = "500000000000000001";
+const AUCTION_MESSAGE_ID: &str = "500000000000000002";
 const BOT_INSTANCE_ID: &str = "web-recruitment-test-bot";
 const SEASON_ID: &str = "01900000-0000-7000-8000-000000000001";
 const MEMBER_SESSION: &str = "web-recruitment-member-session";
@@ -72,6 +73,9 @@ const PUBLIC_ORIGIN: &str = "http://localhost:5173";
 const OAUTH_KEY_BASE64URL: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 type TestResult<T = ()> = Result<T, Box<dyn Error + Send + Sync>>;
+
+#[path = "support/auction_finish.rs"]
+mod auction_finish;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn active_member_can_create_a_real_recruitment_from_the_web() -> TestResult {
@@ -328,6 +332,25 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
     assert_eq!(participants.len(), 10);
     assert_eq!(participants[0]["id"], MEMBER_ID);
     assert_eq!(participants[0]["declaredLane"], Value::Null);
+
+    let setup_path =
+        format!("/api/guilds/{GUILD_ID}/auction-recruitments/{auction_recruitment_id}/setup-draft");
+    let setup = browser_get(&app, &setup_path, MEMBER_SESSION).await?;
+    assert_eq!(setup.status(), StatusCode::OK);
+    let setup = body_json(setup).await?;
+    assert_eq!(
+        setup["data"]["draft"]["recruitmentId"],
+        auction_recruitment_id
+    );
+    assert_eq!(setup["data"]["draft"]["teamCount"], 2);
+    assert_eq!(
+        setup["data"]["draft"]["teams"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(
+        setup["data"]["participants"].as_array().map(Vec::len),
+        Some(10)
+    );
 
     let replay = browser_mutation(
         &app,
@@ -691,6 +714,265 @@ async fn run_entry_to_auction_conversion_flow() -> TestResult {
         i64::try_from(FULL_ROSTER_MEMBER_IDS.len())?
     );
 
+    let reopen_path =
+        format!("/api/guilds/{GUILD_ID}/auction-recruitments/{open_auction_recruitment_id}/reopen");
+    let non_operator_reopen = browser_mutation(
+        &app,
+        Method::POST,
+        &reopen_path,
+        CANDIDATE_SESSION,
+        CANDIDATE_CSRF,
+        "auction-recruitment-reopen-non-operator",
+        true,
+        json!({ "expectedRevision": auction_close_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(non_operator_reopen.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(non_operator_reopen).await?["error"]["code"],
+        "operator_required"
+    );
+
+    let stale_reopen = browser_mutation(
+        &app,
+        Method::POST,
+        &reopen_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-reopen-stale",
+        true,
+        json!({ "expectedRevision": auction_close_revision - 1 }),
+        None,
+    )
+    .await?;
+    assert_eq!(stale_reopen.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(stale_reopen).await?["error"]["code"],
+        "recruitment_revision_conflict"
+    );
+
+    let reopened = browser_mutation(
+        &app,
+        Method::POST,
+        &reopen_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-reopen",
+        true,
+        json!({ "expectedRevision": auction_close_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(reopened.status(), StatusCode::OK);
+    let reopened = body_json(reopened).await?;
+    assert_eq!(reopened["data"]["recruitment"]["status"], "OPEN");
+    assert_eq!(
+        reopened["data"]["recruitment"]["revision"],
+        auction_close_revision + 1
+    );
+    assert_eq!(reopened["data"]["links"]["draft"], Value::Null);
+    assert_eq!(reopened["data"]["permissions"]["canManageMembers"], true);
+    assert_eq!(reopened["data"]["permissions"]["canReopen"], false);
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<OffsetDateTime>, i64)>(
+            "SELECT status, closed_at, revision
+             FROM auction_recruitments
+             WHERE guild_id = $1 AND id = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(Uuid::parse_str(&open_auction_recruitment_id)?)
+        .fetch_one(&pool)
+        .await?,
+        ("OPEN".to_owned(), None, auction_close_revision + 1)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM admin_audit_log
+             WHERE guild_id = $1
+               AND action = 'AUCTION_RECRUITMENT_REOPENED'
+               AND target_id = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(&open_auction_recruitment_id)
+        .fetch_one(&pool)
+        .await?,
+        1
+    );
+
+    let closed_again = browser_mutation(
+        &app,
+        Method::POST,
+        &close_auction_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-close-before-safe-cancel",
+        true,
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(closed_again.status(), StatusCode::OK);
+    let closed_again = body_json(closed_again).await?;
+    assert_eq!(closed_again["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(closed_again["data"]["permissions"]["canCancel"], true);
+    let closed_again_revision = closed_again["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("reclosed auction recruitment response did not contain a revision")?;
+    let auction_recruitment_path =
+        format!("/api/guilds/{GUILD_ID}/auction-recruitments/{open_auction_recruitment_id}");
+    let stale_cancel = browser_mutation(
+        &app,
+        Method::DELETE,
+        &auction_recruitment_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-safe-cancel-stale",
+        true,
+        json!({ "expectedRevision": closed_again_revision - 1 }),
+        None,
+    )
+    .await?;
+    assert_eq!(stale_cancel.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(stale_cancel).await?["error"]["code"],
+        "recruitment_revision_conflict"
+    );
+
+    let cancelled = browser_mutation(
+        &app,
+        Method::DELETE,
+        &auction_recruitment_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-safe-cancel",
+        true,
+        json!({ "expectedRevision": closed_again_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled = body_json(cancelled).await?;
+    assert_eq!(cancelled["data"]["recruitment"]["status"], "CANCELLED");
+    assert_eq!(cancelled["data"]["permissions"]["canRestore"], true);
+    let cancelled_revision = cancelled["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("cancelled auction recruitment response did not contain a revision")?;
+
+    let cancelled_detail = browser_get(&app, &auction_recruitment_path, MEMBER_SESSION).await?;
+    assert_eq!(cancelled_detail.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(cancelled_detail).await?["data"]["recruitment"]["status"],
+        "CANCELLED"
+    );
+
+    let restored = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("{auction_recruitment_path}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-recruitment-safe-restore",
+        true,
+        json!({ "expectedRevision": cancelled_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored = body_json(restored).await?;
+    assert_eq!(restored["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(restored["data"]["permissions"]["canReopen"], true);
+    assert_eq!(restored["data"]["permissions"]["canCancel"], true);
+
+    // The restore notification would bind this ID after Discord recreates the card.
+    sqlx::query(
+        "UPDATE auction_recruitments
+         SET message_id = $3
+         WHERE guild_id = $1 AND id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&open_auction_recruitment_id)?)
+    .bind(AUCTION_MESSAGE_ID)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "UPDATE auction_setup_teams
+         SET captain_user_id = CASE team_index
+                 WHEN 1 THEN $3
+                 WHEN 2 THEN $4
+             END
+         WHERE guild_id = $1 AND recruitment_id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(Uuid::parse_str(&open_auction_recruitment_id)?)
+    .bind(FULL_ROSTER_MEMBER_IDS[0])
+    .bind(FULL_ROSTER_MEMBER_IDS[1])
+    .execute(&pool)
+    .await?;
+    let tournament_create = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_ID}/auction-tournaments"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-tournament-create-with-message-handoff",
+        true,
+        json!({
+            "sourceRecruitmentId": open_auction_recruitment_id,
+            "expectedRevision": 0
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(tournament_create.status(), StatusCode::CREATED);
+    let tournament_create = body_json(tournament_create).await?;
+    let tournament_id = tournament_create["data"]["tournament"]["id"]
+        .as_str()
+        .ok_or("created auction tournament response did not contain an ID")?;
+    let tournament_href = format!("/g/{GUILD_ID}/auction/tournaments/{tournament_id}/draft");
+    assert_eq!(
+        tournament_create["data"]["tournament"]["href"],
+        tournament_href
+    );
+
+    let converted_detail = browser_get(&app, &auction_recruitment_path, MEMBER_SESSION).await?;
+    assert_eq!(converted_detail.status(), StatusCode::OK);
+    let converted_detail = body_json(converted_detail).await?;
+    assert_eq!(
+        converted_detail["data"]["recruitment"]["status"],
+        "CONVERTED"
+    );
+    assert_eq!(
+        converted_detail["data"]["recruitment"]["href"],
+        tournament_href
+    );
+    assert_eq!(converted_detail["data"]["links"]["draft"], Value::Null);
+
+    let handoff_notification = sqlx::query_as::<_, (String, String, Value)>(
+        "SELECT notification_type, deduplication_key, payload
+         FROM bot_notification_outbox
+         WHERE guild_id = $1
+           AND notification_type = 'AUCTION_RECRUITMENT_MESSAGE_UPDATE'
+           AND payload ->> 'auctionRecruitmentId' = $2
+           AND payload #>> '{snapshot,recruitment,status}' = 'CONVERTED'",
+    )
+    .bind(GUILD_ID)
+    .bind(&open_auction_recruitment_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(handoff_notification.0, "AUCTION_RECRUITMENT_MESSAGE_UPDATE");
+    assert!(handoff_notification.1.starts_with(&format!(
+        "auction-recruitment:{open_auction_recruitment_id}:message:update:"
+    )));
+    assert_eq!(
+        handoff_notification.2["snapshot"]["recruitment"]["messageId"],
+        AUCTION_MESSAGE_ID
+    );
+    assert_eq!(
+        handoff_notification.2["snapshot"]["recruitment"]["href"],
+        tournament_href
+    );
+
     Ok(())
 }
 
@@ -702,47 +984,7 @@ async fn run_auction_lineup_confirmation_flow() -> TestResult {
         .await?;
     MIGRATOR.run(&pool).await?;
 
-    let config = test_config(server.database_url())?;
-    let auth_config = config.auth().cloned().expect("auth config");
-    let auth_service = Arc::new(AuthService::new(
-        auth_config.oauth_encryption_key(),
-        CookiePolicy::new(auth_config.secure_cookies(), auth_config.session_ttl()),
-    )?);
-    let auth_repository = Arc::new(AuthRepository::new(pool.clone()));
-    create_login(
-        &auth_repository,
-        MEMBER_ID,
-        "Active Member",
-        MEMBER_SESSION,
-        MEMBER_CSRF,
-    )
-    .await?;
-    for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().skip(1).enumerate() {
-        create_login(
-            &auth_repository,
-            user_id,
-            &format!("Auction Lineup Member {}", index + 2),
-            &format!("auction-lineup-{index}-session"),
-            &format!("auction-lineup-{index}-csrf"),
-        )
-        .await?;
-    }
-    seed_guild(&pool).await?;
-
-    let state = AppState::with_postgres(
-        config,
-        pool.clone(),
-        Arc::new(PostgresReadinessProbe::new(
-            pool.clone(),
-            Duration::from_secs(1),
-        )),
-    )
-    .with_auth(AuthRuntime::new(
-        auth_service,
-        auth_repository,
-        Arc::new(FakeDiscordClient),
-    ));
-    let app = build_router(state);
+    let app = auction_lineup_test_app(&pool, test_config(server.database_url())?).await?;
 
     let configured = seed_complete_auction_match_lineup(&pool, 41).await?;
     let configured_path = format!(
@@ -910,6 +1152,159 @@ async fn run_auction_lineup_confirmation_flow() -> TestResult {
         configured.match_id.to_string()
     );
 
+    let mut picks = serde_json::Map::new();
+    for user_id in FULL_ROSTER_MEMBER_IDS {
+        picks.insert(user_id.to_owned(), Value::Null);
+    }
+    let game_path = format!(
+        "/api/guilds/{GUILD_ID}/auction-matches/{}/games",
+        configured.match_id
+    );
+    let first_final_game = browser_mutation(
+        &app,
+        Method::POST,
+        &game_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-final-first-game",
+        true,
+        json!({
+            "expectedRevision": 3,
+            "setNumber": 1,
+            "sidePreset": "DEFAULT",
+            "winner": "BLUE",
+            "picks": picks,
+            "bans": {
+                "BLUE": [null, null, null, null, null],
+                "RED": [null, null, null, null, null]
+            },
+            "patchVersion": "26.17"
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(first_final_game.status(), StatusCode::CREATED);
+    let first_final_game = body_json(first_final_game).await?;
+    assert_eq!(first_final_game["data"]["match"]["status"], "IN_PROGRESS");
+    assert_eq!(first_final_game["data"]["match"]["revision"], 4);
+    assert_eq!(first_final_game["data"]["match"]["leftScore"], 1);
+    assert_eq!(first_final_game["data"]["match"]["rightScore"], 0);
+    assert_eq!(
+        first_final_game["data"]["permissions"]["canCompleteFinalAsBo1"],
+        true
+    );
+    let applied_mmr_entries = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)
+         FROM mmr_ledger_entries
+         WHERE guild_id = $1
+           AND game_id IN (
+               SELECT id FROM games WHERE guild_id = $1 AND auction_match_id = $2
+           )
+           AND source_type = 'GAME_RESULT'",
+    )
+    .bind(GUILD_ID)
+    .bind(configured.match_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(applied_mmr_entries, 10);
+
+    set_result_channel(&pool, Some(RESULT_CHANNEL_ID)).await?;
+    let complete_path = format!(
+        "/api/guilds/{GUILD_ID}/auction-matches/{}/complete",
+        configured.match_id
+    );
+    let completed = browser_mutation(
+        &app,
+        Method::POST,
+        &complete_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-final-complete-as-bo1",
+        true,
+        json!({ "expectedRevision": 4 }),
+        None,
+    )
+    .await?;
+    assert_eq!(completed.status(), StatusCode::OK);
+    let completed = body_json(completed).await?;
+    assert_eq!(completed["data"]["match"]["status"], "COMPLETED");
+    assert_eq!(completed["data"]["match"]["bestOf"], 1);
+    assert_eq!(completed["data"]["match"]["revision"], 5);
+    assert_eq!(
+        completed["data"]["match"]["winnerTeamId"],
+        configured.left_team_id.to_string()
+    );
+    assert_eq!(completed["data"]["games"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        completed["data"]["permissions"]["canCompleteFinalAsBo1"],
+        false
+    );
+    let lifecycle = sqlx::query_as::<_, (String, i16, Option<Uuid>, String, i16)>(
+        "SELECT tournament.status, tournament.final_best_of, tournament.champion_team_id,
+                recruitment.status, recruitment.final_best_of
+         FROM auction_tournaments AS tournament
+         JOIN auction_recruitments AS recruitment
+           ON recruitment.guild_id = tournament.guild_id
+          AND recruitment.id = tournament.source_recruitment_id
+         WHERE tournament.guild_id = $1 AND tournament.id = $2",
+    )
+    .bind(GUILD_ID)
+    .bind(configured.tournament_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        lifecycle,
+        (
+            "COMPLETED".to_owned(),
+            1,
+            Some(configured.left_team_id),
+            "CONVERTED".to_owned(),
+            1,
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM mmr_ledger_entries
+             WHERE guild_id = $1
+               AND game_id IN (
+                   SELECT id FROM games WHERE guild_id = $1 AND auction_match_id = $2
+               )",
+        )
+        .bind(GUILD_ID)
+        .bind(configured.match_id)
+        .fetch_one(&pool)
+        .await?,
+        10
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*)
+             FROM bot_notification_outbox
+             WHERE guild_id = $1
+               AND notification_type = 'AUCTION_TOURNAMENT_RESULT_CREATE'
+               AND payload ->> 'tournamentId' = $2",
+        )
+        .bind(GUILD_ID)
+        .bind(configured.tournament_id.to_string())
+        .fetch_one(&pool)
+        .await?,
+        1
+    );
+    let replay = browser_mutation(
+        &app,
+        Method::POST,
+        &complete_path,
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "auction-final-complete-as-bo1",
+        true,
+        json!({ "expectedRevision": 4 }),
+        None,
+    )
+    .await?;
+    assert_eq!(replay.status(), StatusCode::OK);
+
     set_entry_channel(&pool, None).await?;
     let unconfigured = seed_complete_auction_match_lineup(&pool, 42).await?;
     let unconfigured_path = format!(
@@ -937,6 +1332,49 @@ async fn run_auction_lineup_confirmation_flow() -> TestResult {
     pool.close().await;
     drop(server);
     Ok(())
+}
+
+async fn auction_lineup_test_app(pool: &PgPool, config: Config) -> TestResult<Router> {
+    let auth_config = config.auth().cloned().expect("auth config");
+    let auth_service = Arc::new(AuthService::new(
+        auth_config.oauth_encryption_key(),
+        CookiePolicy::new(auth_config.secure_cookies(), auth_config.session_ttl()),
+    )?);
+    let auth_repository = Arc::new(AuthRepository::new(pool.clone()));
+    for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().enumerate() {
+        let (session, csrf) = match *user_id {
+            MEMBER_ID => (MEMBER_SESSION.to_owned(), MEMBER_CSRF.to_owned()),
+            CANDIDATE_ID => (CANDIDATE_SESSION.to_owned(), CANDIDATE_CSRF.to_owned()),
+            _ => (
+                format!("auction-lineup-{index}-session"),
+                format!("auction-lineup-{index}-csrf"),
+            ),
+        };
+        create_login(
+            &auth_repository,
+            user_id,
+            &format!("Auction Lineup Member {}", index + 1),
+            &session,
+            &csrf,
+        )
+        .await?;
+    }
+    seed_guild(pool).await?;
+    Ok(build_router(
+        AppState::with_postgres(
+            config,
+            pool.clone(),
+            Arc::new(PostgresReadinessProbe::new(
+                pool.clone(),
+                Duration::from_secs(1),
+            )),
+        )
+        .with_auth(AuthRuntime::new(
+            auth_service,
+            auth_repository,
+            Arc::new(FakeDiscordClient),
+        )),
+    ))
 }
 
 async fn run_series_conversion_flow() -> TestResult {
@@ -2670,7 +3108,7 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(
         body_json(deleted).await?["data"]["nextHref"],
-        format!("/g/{GUILD_ID}/series")
+        format!("/g/{GUILD_ID}/recruitments/{recruitment_id}")
     );
     let deleted_source_state = sqlx::query_as::<_, (String, i64, bool, bool)>(
         "SELECT status, revision, converted_at IS NULL, cancelled_at IS NOT NULL
@@ -2684,6 +3122,24 @@ async fn run_series_conversion_flow() -> TestResult {
     assert_eq!(
         deleted_source_state,
         ("CANCELLED".to_owned(), 11, true, true)
+    );
+
+    let restored_source = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("/api/guilds/{GUILD_ID}/recruitments/{recruitment_id}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-series-delete-source-restore",
+        true,
+        json!({ "expectedRevision": 11 }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored_source.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(restored_source).await?["data"]["recruitment"]["status"],
+        "CLOSED"
     );
 
     pool.close().await;
@@ -3144,6 +3600,9 @@ async fn run_flow() -> TestResult {
     assert_eq!(body_json(remove_replay).await?["data"], removed["data"]);
 
     let cancel_path = format!("{path}/{recruitment_id}");
+    let cancel_revision = removed["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("recruitment revision is missing before cancellation")?;
     let non_operator_cancel = browser_mutation(
         &app,
         Method::DELETE,
@@ -3152,7 +3611,7 @@ async fn run_flow() -> TestResult {
         CANDIDATE_CSRF,
         "non-operator-cancel",
         true,
-        json!({}),
+        json!({ "expectedRevision": cancel_revision }),
         None,
     )
     .await?;
@@ -3171,7 +3630,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         cancel_key,
         true,
-        json!({}),
+        json!({ "expectedRevision": cancel_revision }),
         None,
     )
     .await?;
@@ -3199,7 +3658,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         cancel_key,
         true,
-        json!({}),
+        json!({ "expectedRevision": cancel_revision }),
         None,
     )
     .await?;
@@ -3215,14 +3674,43 @@ async fn run_flow() -> TestResult {
     );
 
     let detail_after_cancel = browser_get(&app, &cancel_path, MEMBER_SESSION).await?;
-    assert_eq!(detail_after_cancel.status(), StatusCode::NOT_FOUND);
+    assert_eq!(detail_after_cancel.status(), StatusCode::OK);
     assert_eq!(
-        body_json(detail_after_cancel).await?["error"]["code"],
-        "not_found"
+        body_json(detail_after_cancel).await?["data"]["recruitment"]["status"],
+        "CANCELLED"
     );
     assert_eq!(
         web_mutation_counts(&pool, &recruitment_id).await?,
         (0, 3, 3)
+    );
+
+    let cancelled_revision = cancelled["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("cancelled recruitment revision is missing")?;
+    let restored = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("{cancel_path}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-recruitment-restore-1",
+        true,
+        json!({ "expectedRevision": cancelled_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored = body_json(restored).await?;
+    assert_eq!(restored["data"]["recruitment"]["status"], "OPEN");
+    assert!(restored["data"]["recruitment"]["messageId"].is_null());
+    assert_eq!(
+        pending_notification_types(&pool, &recruitment_id).await?,
+        vec![
+            "RECRUITMENT_MESSAGE_CREATE",
+            "RECRUITMENT_MESSAGE_DELETE",
+            "RECRUITMENT_MESSAGE_UPDATE",
+            "RECRUITMENT_MESSAGE_UPDATE"
+        ]
     );
 
     let full_created = browser_mutation(
@@ -3790,10 +4278,8 @@ async fn run_flow() -> TestResult {
     )
     .await?;
     assert_eq!(closed_again.status(), StatusCode::OK);
-    assert_eq!(
-        body_json(closed_again).await?["data"]["recruitment"]["status"],
-        "CLOSED"
-    );
+    let closed_again = body_json(closed_again).await?;
+    assert_eq!(closed_again["data"]["recruitment"]["status"], "CLOSED");
 
     let closed_entry = browser_get(&app, &entry_path, MEMBER_SESSION).await?;
     assert_eq!(closed_entry.status(), StatusCode::OK);
@@ -3803,6 +4289,9 @@ async fn run_flow() -> TestResult {
     );
 
     let closed_cancel_path = format!("{path}/{full_recruitment_id}");
+    let closed_cancel_revision = closed_again["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("closed recruitment revision is missing before cancellation")?;
     let closed_cancel = browser_mutation(
         &app,
         Method::DELETE,
@@ -3811,7 +4300,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         "web-recruitment-cancel-closed",
         true,
-        json!({}),
+        json!({ "expectedRevision": closed_cancel_revision }),
         None,
     )
     .await?;
@@ -3827,7 +4316,7 @@ async fn run_flow() -> TestResult {
         MEMBER_CSRF,
         "web-recruitment-cancel-closed",
         true,
-        json!({}),
+        json!({ "expectedRevision": closed_cancel_revision }),
         None,
     )
     .await?;
@@ -3842,6 +4331,27 @@ async fn run_flow() -> TestResult {
     assert_eq!(
         body_json(closed_entry_after_cancel).await?["error"]["code"],
         "not_found"
+    );
+
+    let closed_cancelled_revision = closed_cancel["data"]["recruitment"]["revision"]
+        .as_i64()
+        .ok_or("cancelled closed recruitment revision is missing")?;
+    let restored_closed = browser_mutation(
+        &app,
+        Method::POST,
+        &format!("{closed_cancel_path}/restore"),
+        MEMBER_SESSION,
+        MEMBER_CSRF,
+        "web-recruitment-restore-closed",
+        true,
+        json!({ "expectedRevision": closed_cancelled_revision }),
+        None,
+    )
+    .await?;
+    assert_eq!(restored_closed.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(restored_closed).await?["data"]["recruitment"]["status"],
+        "CLOSED"
     );
 
     let malformed_bearer = browser_create(
@@ -4285,7 +4795,7 @@ async fn seed_open_auction_recruitment(pool: &PgPool, display_number: i64) -> Te
          ) VALUES (
              $1, $2, $3, $4, '마감 DM 경매 모집', 'TEN_PERSON', 10,
              NULL, 3, true, 'OPEN', 0,
-             NULL, NULL, $5, $6, $5, $6,
+             $5, $6, $7, $8, $7, $8,
              NULL, NULL, NULL
          )",
     )
@@ -4293,6 +4803,8 @@ async fn seed_open_auction_recruitment(pool: &PgPool, display_number: i64) -> Te
     .bind(recruitment_id)
     .bind(Uuid::parse_str(SEASON_ID)?)
     .bind(display_number)
+    .bind(RECRUITMENT_CHANNEL_ID)
+    .bind(AUCTION_MESSAGE_ID)
     .bind(MEMBER_ID)
     .bind(now)
     .execute(pool)
@@ -4308,6 +4820,19 @@ async fn seed_open_auction_recruitment(pool: &PgPool, display_number: i64) -> Te
     .bind(now)
     .execute(pool)
     .await?;
+    for team_index in 1_i16..=2 {
+        sqlx::query(
+            "INSERT INTO auction_setup_teams (
+                 guild_id, recruitment_id, team_index, team_name, captain_user_id, initial_points
+             ) VALUES ($1, $2, $3, $4, NULL, 1000)",
+        )
+        .bind(GUILD_ID)
+        .bind(recruitment_id)
+        .bind(team_index)
+        .bind(format!("팀 {team_index}"))
+        .execute(pool)
+        .await?;
+    }
     for (index, user_id) in FULL_ROSTER_MEMBER_IDS.iter().enumerate() {
         sqlx::query(
             "INSERT INTO auction_recruitment_participants (
@@ -4384,8 +4909,6 @@ async fn seed_complete_auction_match_lineup(
     pool: &PgPool,
     display_number: i64,
 ) -> TestResult<AuctionMatchLineupFixture> {
-    const LANES: [&str; 5] = ["TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"];
-
     let now = OffsetDateTime::now_utc();
     let recruitment_id = Uuid::now_v7();
     let tournament_id = Uuid::now_v7();
@@ -4475,102 +4998,15 @@ async fn seed_complete_auction_match_lineup(
         (0_i64, left_team_id, &FULL_ROSTER_MEMBER_IDS[..5]),
         (1_i64, right_team_id, &FULL_ROSTER_MEMBER_IDS[5..]),
     ] {
-        for (index, (user_id, lane)) in member_ids.iter().zip(LANES).enumerate() {
-            let user_id = *user_id;
-            let sequence = team_index * 5 + i64::try_from(index)? + 1;
-            let lot_id = Uuid::now_v7();
-            let action_id = Uuid::now_v7();
-            let member_id = Uuid::now_v7();
-
-            sqlx::query(
-                "INSERT INTO auction_bid_candidates (
-                     guild_id, tournament_id, user_id, declared_lane, mmr_at_start,
-                     snapshot_origin, queue_position, state, draw_count, updated_at
-                 ) VALUES ($1, $2, $3, $4, 1500, 'CAPTURED', $5, 'ASSIGNED', 1, $6)",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(user_id)
-            .bind(lane)
-            .bind(sequence - 1)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_lots (
-                     guild_id, tournament_id, id, draw_sequence, target_user_id, status,
-                     opened_by_type, opened_by_id, opened_at, closed_by_type, closed_by_id, closed_at
-                 ) VALUES (
-                     $1, $2, $3, $4, $5, 'ASSIGNED',
-                     'USER', $6, $7, 'USER', $6, $7
-                 )",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(lot_id)
-            .bind(sequence)
-            .bind(user_id)
-            .bind(MEMBER_ID)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_actions (
-                     guild_id, tournament_id, id, sequence, kind, target_user_id, team_id, lot_id,
-                     points, reverses_action_id, reversed_action_kind, actor_type, actor_id, created_at
-                 ) VALUES (
-                     $1, $2, $3, $4, 'ASSIGN_UNSOLD', $5, $6, $7,
-                     NULL, NULL, NULL, 'USER', $8, $9
-                 )",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(action_id)
-            .bind(sequence)
-            .bind(user_id)
-            .bind(team_id)
-            .bind(lot_id)
-            .bind(MEMBER_ID)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_team_members (
-                     guild_id, tournament_id, team_id, id, user_id, roster_slot,
-                     acquired_via, declared_lane, mmr_at_acquisition, snapshot_origin,
-                     acquisition_action_id, acquisition_action_kind, joined_at, released_at
-                 ) VALUES (
-                     $1, $2, $3, $4, $5, $6,
-                     'MANUAL', $7, 1500, 'CAPTURED',
-                     $8, 'ASSIGN_UNSOLD', $9, NULL
-                 )",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(team_id)
-            .bind(member_id)
-            .bind(user_id)
-            .bind(i16::try_from(index + 1)?)
-            .bind(lane)
-            .bind(action_id)
-            .bind(now)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO auction_match_lineups (
-                     guild_id, tournament_id, match_id, team_id, lane, team_member_id, user_id
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            )
-            .bind(GUILD_ID)
-            .bind(tournament_id)
-            .bind(match_id)
-            .bind(team_id)
-            .bind(lane)
-            .bind(member_id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
-        }
+        seed_auction_team_lineup(
+            pool,
+            tournament_id,
+            match_id,
+            team_id,
+            team_index,
+            member_ids,
+        )
+        .await?;
     }
 
     Ok(AuctionMatchLineupFixture {
@@ -4579,6 +5015,115 @@ async fn seed_complete_auction_match_lineup(
         left_team_id,
         right_team_id,
     })
+}
+
+async fn seed_auction_team_lineup(
+    pool: &PgPool,
+    tournament_id: Uuid,
+    match_id: Uuid,
+    team_id: Uuid,
+    team_index: i64,
+    member_ids: &[&str],
+) -> TestResult {
+    const LANES: [&str; 5] = ["TOP", "JUNGLE", "MID", "BOTTOM", "SUPPORT"];
+    let now = OffsetDateTime::now_utc();
+    for (index, (user_id, lane)) in member_ids.iter().zip(LANES).enumerate() {
+        let user_id = *user_id;
+        let sequence = team_index * 5 + i64::try_from(index)? + 1;
+        let lot_id = Uuid::now_v7();
+        let action_id = Uuid::now_v7();
+        let member_id = Uuid::now_v7();
+
+        sqlx::query(
+            "INSERT INTO auction_bid_candidates (
+                 guild_id, tournament_id, user_id, declared_lane, mmr_at_start,
+                 snapshot_origin, queue_position, state, draw_count, updated_at
+             ) VALUES ($1, $2, $3, $4, 1500, 'CAPTURED', $5, 'ASSIGNED', 1, $6)",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(user_id)
+        .bind(lane)
+        .bind(sequence - 1)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_lots (
+                 guild_id, tournament_id, id, draw_sequence, target_user_id, status,
+                 opened_by_type, opened_by_id, opened_at, closed_by_type, closed_by_id, closed_at
+             ) VALUES (
+                 $1, $2, $3, $4, $5, 'ASSIGNED',
+                 'USER', $6, $7, 'USER', $6, $7
+             )",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(lot_id)
+        .bind(sequence)
+        .bind(user_id)
+        .bind(MEMBER_ID)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_actions (
+                 guild_id, tournament_id, id, sequence, kind, target_user_id, team_id, lot_id,
+                 points, reverses_action_id, reversed_action_kind, actor_type, actor_id, created_at
+             ) VALUES (
+                 $1, $2, $3, $4, 'ASSIGN_UNSOLD', $5, $6, $7,
+                 NULL, NULL, NULL, 'USER', $8, $9
+             )",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(action_id)
+        .bind(sequence)
+        .bind(user_id)
+        .bind(team_id)
+        .bind(lot_id)
+        .bind(MEMBER_ID)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_team_members (
+                 guild_id, tournament_id, team_id, id, user_id, roster_slot,
+                 acquired_via, declared_lane, mmr_at_acquisition, snapshot_origin,
+                 acquisition_action_id, acquisition_action_kind, joined_at, released_at
+             ) VALUES (
+                 $1, $2, $3, $4, $5, $6,
+                 'MANUAL', $7, 1500, 'CAPTURED',
+                 $8, 'ASSIGN_UNSOLD', $9, NULL
+             )",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(team_id)
+        .bind(member_id)
+        .bind(user_id)
+        .bind(i16::try_from(index + 1)?)
+        .bind(lane)
+        .bind(action_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO auction_match_lineups (
+                 guild_id, tournament_id, match_id, team_id, lane, team_member_id, user_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(GUILD_ID)
+        .bind(tournament_id)
+        .bind(match_id)
+        .bind(team_id)
+        .bind(lane)
+        .bind(member_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn auction_lineup_confirmation_notification(

@@ -72,7 +72,26 @@ const auctionSnapshot: AuctionRecruitmentSnapshot = {
 	},
 	participants: [],
 	links: { draft: null },
-	permissions: { canManageMembers: false, canClose: false, canCancel: true }
+	permissions: {
+		canManageMembers: false,
+		canClose: false,
+		canReopen: false,
+		canRestore: false,
+		canSendParticipantConfirmationDms: false,
+		canCancel: true
+	}
+};
+
+const tenPersonAuctionSnapshot: AuctionRecruitmentSnapshot = {
+	...auctionSnapshot,
+	recruitment: {
+		...auctionSnapshot.recruitment,
+		title: `10인 경매 내전 모집 #215 · 예상 시작 ${expectedStartLabel}`,
+		format: 'TEN_PERSON',
+		rules: { hardFearless: true, semifinalBestOf: null, finalBestOf: 5 },
+		participantCount: 10,
+		teamCount: 2
+	}
 };
 
 const auctionTournamentCancelPreview = {
@@ -346,6 +365,28 @@ describe('MonkeyBotApiClient', () => {
 		});
 		const headers = new Headers((init as RequestInit).headers);
 		expect(headers.get('idempotency-key')).toBe('400000000000000007');
+	});
+
+	it('accepts the current 10-person auction response including recovery permissions', async () => {
+		const fetchMock = vi.fn<typeof globalThis.fetch>(async () =>
+			envelope(tenPersonAuctionSnapshot)
+		);
+		const client = createClient(fetchMock);
+
+		await expect(
+			client.createAuctionRecruitment(
+				guildId,
+				{
+					actor,
+					format: 'TEN_PERSON',
+					semifinalBestOf: null,
+					finalBestOf: 5,
+					hardFearless: true,
+					expectedStartAt
+				},
+				{ idempotencyKey: '400000000000000017' }
+			)
+		).resolves.toEqual(tenPersonAuctionSnapshot);
 	});
 
 	it('joins and leaves an auction recruitment with the canonical member routes', async () => {

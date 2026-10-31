@@ -193,13 +193,14 @@
 		if (match.status === 'LINEUP_PENDING') return '라인업 대기';
 		if (match.status === 'READY') return '시작 준비';
 		if (match.status === 'IN_PROGRESS') return '진행 중';
-		if (match.status === 'COMPLETED') return '완료';
+		if (match.status === 'COMPLETED') return match.endedEarly ? '조기 마무리' : '완료';
 		return '취소됨';
 	}
 
 	function tournamentStateLabel(): string {
 		if (championTeam) return `${championTeam.teamName} 우승`;
 		if (snapshot.tournament.status === 'CANCELLED') return '토너먼트 취소됨';
+		if (snapshot.tournament.status === 'COMPLETED') return '우승팀 없이 마무리';
 		if (!finalMatch) return '대진 생성 대기';
 		return finalMatch.status === 'COMPLETED' ? '우승팀 확정 대기' : matchStatusLabel(finalMatch);
 	}

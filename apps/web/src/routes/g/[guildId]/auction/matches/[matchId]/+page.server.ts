@@ -17,6 +17,8 @@ function requiresTournamentLineupStage(
 	bracket: AuctionTournamentBracketSnapshot
 ): boolean {
 	if (
+		bracket.tournament.status === 'COMPLETED' ||
+		bracket.tournament.status === 'CANCELLED' ||
 		bracket.tournament.format !== 'TWENTY_PERSON' ||
 		!bracket.bracket.locked ||
 		(snapshot.match.matchKey !== 'SEMIFINAL_A' && snapshot.match.matchKey !== 'SEMIFINAL_B')

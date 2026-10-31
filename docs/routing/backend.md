@@ -1115,7 +1115,9 @@ permissions
 `draft` link는 CLOSED 모집에만 non-null이다. `canManageMembers`는 OPEN 모집에서 현재 active operator가
 browser roster add/remove를 실행할 수 있을 때만 true다. Browser는 권한을 자체 계산하지 않고 permissions를
 사용한다.
-CANCELLED 또는 CONVERTED 모집은 이 read route에서 `404`다.
+CONVERTED 모집은 연결된 tournament의 `/g/{guildId}/auction/tournaments/{tournamentId}/draft`를
+`recruitment.href`로 반환한다. 기존 모집 상세와 마감 명단 Web route는 이 값을 사용해 `303` redirect한다.
+CANCELLED 모집은 복구 workflow를 위해 기존 snapshot을 반환한다.
 
 ### POST /api/guilds/{guildId}/auction-recruitments/{id}/close
 
@@ -1211,6 +1213,9 @@ browser session operator가 CLOSED/full 모집과 complete setup draft에서 경
 source recruitment, setup draft, setup team, JOINED participant를 잠그고 source를 CONVERTED로 전이한다.
 동시에 immutable rule snapshot, captain roster, initial point ledger, non-captain candidate queue를 만들고
 `BIDDING` snapshot을 반환한다. source recruitment의 기존 active tournament는 `409`로 거절한다.
+source에 bound Discord message가 있으면 같은 transaction에
+`AUCTION_RECRUITMENT_MESSAGE_UPDATE`를 적재한다. 갱신 snapshot은 `CONVERTED` 상태와 새 tournament UUID의
+작업대 `href`를 포함하므로 기존 모집 카드의 `마감 명단 열기` 버튼이 `경매 내전 열기`로 인계된다.
 
 ### GET /api/guilds/{guildId}/auction-tournaments
 
@@ -1341,7 +1346,8 @@ snapshot을 같은 transaction에 기록한다. `BRACKET_SETUP`이면서 아직 
 반환한다. 이 projection은 화면 제어용이며 game submit endpoint도 같은 조건을 transaction 안에서 다시
 검증한다. `canRevertLastGame`도 command와 같은 조건을 사용한다. 완료된 20인 준결승은 final의 다른 팀
 라인업, game, lineup lock 또는 `LINEUP_PENDING` 이외의 상태가 있으면 false이며, client가 보이는 control과
-실제 command 결과가 어긋나지 않는다.
+실제 command 결과가 어긋나지 않는다. BO3/BO5 결승에서 첫 확정 game 뒤 점수가 1:0이면 active operator에게
+`canCompleteFinalAsBo1=true`를 반환한다.
 
 ### PATCH /api/guilds/{guildId}/auction-matches/{matchId}/lineup
 
@@ -1389,6 +1395,13 @@ lock 전 입력은 거부한다. 경매 game은 일반 game과 같은 guild MMR 
 CREATE row만 terminal cancel할 수 있고, delivered CREATE는 typed result DELETE outbox를 enqueue한다. active
 lease 또는 attempted-but-undelivered/unknown delivery row가 있으면 card 상태를 안전하게 판단할 수 없으므로
 revert를 `409`로 거절한다.
+
+### POST /api/guilds/{guildId}/auction-matches/{matchId}/complete
+
+BO3 또는 BO5 `FINAL`이 `IN_PROGRESS`이고 확정 game이 정확히 하나라 점수가 1:0일 때만 BO1로 조기
+종료한다. source auction recruitment, final match, tournament의 `finalBestOf`를 같은 transaction에서 1로
+바꾸고 현재 선두 팀을 우승 팀으로 확정한다. 이미 확정된 game과 MMR ledger는 유지하며 취소 rollback을
+수행하지 않는다. 기존 tournament cancel command는 별도 기능으로 그대로 유지된다.
 
 ### GET /api/guilds/{guildId}/auction-tournaments/{id}/result
 

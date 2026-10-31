@@ -4,8 +4,9 @@ import { load } from './+page.server';
 const requestId = '01900000-0000-7000-8000-000000000001';
 const guildId = '200000000000000001';
 const recruitmentId = '01900000-0000-7000-8000-000000000501';
+const tournamentId = '01900000-0000-7000-8000-000000000601';
 
-function snapshot(status: 'OPEN' | 'CLOSED') {
+function snapshot(status: 'OPEN' | 'CLOSED' | 'CONVERTED') {
 	return {
 		recruitment: {
 			id: recruitmentId,
@@ -22,7 +23,10 @@ function snapshot(status: 'OPEN' | 'CLOSED') {
 			messageId: '200000000000000003',
 			createdById: '200000000000000004',
 			updatedAt: '2026-07-14T12:00:00Z',
-			href: `/g/${guildId}/auction/recruitments/${recruitmentId}`
+			href:
+				status === 'CONVERTED'
+					? `/g/${guildId}/auction/tournaments/${tournamentId}/draft`
+					: `/g/${guildId}/auction/recruitments/${recruitmentId}`
 		},
 		participants: [{ id: '200000000000000004', displayName: 'Longcat', declaredLane: 'MID' }],
 		links: {
@@ -32,6 +36,8 @@ function snapshot(status: 'OPEN' | 'CLOSED') {
 		permissions: {
 			canManageMembers: false,
 			canClose: false,
+			canReopen: true,
+			canRestore: false,
 			canSendParticipantConfirmationDms: true,
 			canCancel: false
 		}
@@ -98,5 +104,26 @@ describe('auction recruitment closed-roster page server load', () => {
 			status: 303,
 			location: `/g/${guildId}/auction/recruitments/${recruitmentId}`
 		});
+	});
+
+	it('redirects a converted recruitment to the linked auction tournament before loading setup', async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json({ data: snapshot('CONVERTED'), meta: { requestId } })
+		);
+
+		await expect(
+			load({
+				fetch: fetcher,
+				params: { guildId, id: recruitmentId },
+				parent: async () => ({ guildId }),
+				url: new URL(
+					`http://localhost:5173/g/${guildId}/auction/recruitments/${recruitmentId}/draft`
+				)
+			} as never)
+		).rejects.toMatchObject({
+			status: 303,
+			location: `/g/${guildId}/auction/tournaments/${tournamentId}/draft`
+		});
+		expect(fetcher).toHaveBeenCalledOnce();
 	});
 });

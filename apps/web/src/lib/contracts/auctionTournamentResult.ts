@@ -47,6 +47,7 @@ export const auctionTournamentResultMatchSchema = z
 		leftScore: nonnegativeIntegerSchema,
 		rightScore: nonnegativeIntegerSchema,
 		winnerTeamId: z.uuid().nullable(),
+		endedEarly: z.boolean().optional(),
 		lineupsLocked: z.boolean(),
 		lineups: z.array(auctionMatchLineupAssignmentSchema).max(10),
 		games: z.array(auctionMatchConfirmedGameSchema).max(5)
@@ -77,6 +78,7 @@ export const auctionTournamentResultSnapshotSchema = z
 				status: z.enum(['BIDDING', 'BRACKET_SETUP', 'IN_GAME', 'COMPLETED', 'CANCELLED']),
 				revision: revisionSchema,
 				championTeamId: z.uuid().nullable(),
+				endedEarly: z.boolean().optional(),
 				href: z.string().startsWith('/g/')
 			})
 			.strict(),
@@ -267,6 +269,7 @@ export const auctionTournamentResultSnapshotSchema = z
 
 			if (
 				match.status === 'COMPLETED' &&
+				!match.endedEarly &&
 				(!match.lineupsLocked || match.games.length === 0 || match.winnerTeamId === null)
 			) {
 				context.addIssue({

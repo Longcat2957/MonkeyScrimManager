@@ -321,6 +321,8 @@ const auctionRecruitmentSnapshotFields = {
 		.object({
 			canManageMembers: z.boolean(),
 			canClose: z.boolean(),
+			canReopen: z.boolean().optional(),
+			canRestore: z.boolean().optional(),
 			canSendParticipantConfirmationDms: z.boolean().optional(),
 			canCancel: z.boolean()
 		})
@@ -804,7 +806,8 @@ const auctionTournamentResultTournamentSchema = z
 		format: auctionRecruitmentFormatSchema,
 		semifinalBestOf: auctionBestOfSchema.nullable(),
 		finalBestOf: auctionBestOfSchema,
-		hardFearless: z.boolean()
+		hardFearless: z.boolean(),
+		endedEarly: z.boolean().optional()
 	})
 	.strict();
 
@@ -813,11 +816,12 @@ const auctionTournamentResultMatchSchema = z
 		matchKey: auctionTournamentResultMatchKeySchema,
 		label: z.string().min(1).max(100),
 		bestOf: auctionBestOfSchema,
-		leftTeamName: z.string().min(1).max(100),
-		rightTeamName: z.string().min(1).max(100),
+		leftTeamName: z.string().min(1).max(100).nullable(),
+		rightTeamName: z.string().min(1).max(100).nullable(),
 		leftScore: z.number().int().nonnegative(),
 		rightScore: z.number().int().nonnegative(),
-		winnerTeamName: z.string().min(1).max(100)
+		winnerTeamName: z.string().min(1).max(100).nullable(),
+		endedEarly: z.boolean().optional()
 	})
 	.strict();
 
@@ -833,8 +837,9 @@ export const auctionTournamentResultNotificationPayloadSchema = z
 				teamId: uuidSchema,
 				teamName: z.string().min(1).max(100)
 			})
-			.strict(),
-		matches: z.array(auctionTournamentResultMatchSchema).min(1).max(3),
+			.strict()
+			.nullable(),
+		matches: z.array(auctionTournamentResultMatchSchema).max(3),
 		completedAt: timestampSchema
 	})
 	.strict()
@@ -872,7 +877,7 @@ function validateAuctionTournamentResultPayload(
 	const matchByKey = new Map(matches.map((match) => [match.matchKey, match]));
 	if (
 		matchByKey.size !== matches.length ||
-		expectedMatchKeys.some((matchKey) => !matchByKey.has(matchKey)) ||
+		(!tournament.endedEarly && expectedMatchKeys.some((matchKey) => !matchByKey.has(matchKey))) ||
 		matches.some((match) => !expectedMatchKeys.includes(match.matchKey))
 	) {
 		context.addIssue({
@@ -892,9 +897,32 @@ function validateAuctionTournamentResultPayload(
 				message: 'match best-of must match the tournament rule snapshot'
 			});
 		}
+		if (match.endedEarly) {
+			const expectedWinner =
+				match.leftScore > match.rightScore
+					? match.leftTeamName
+					: match.rightScore > match.leftScore
+						? match.rightTeamName
+						: null;
+			if (
+				!tournament.endedEarly ||
+				match.winnerTeamName !== expectedWinner ||
+				match.leftScore + match.rightScore > match.bestOf ||
+				(match.leftScore + match.rightScore > 0 && (!match.leftTeamName || !match.rightTeamName))
+			) {
+				context.addIssue({
+					code: 'custom',
+					path: ['matches', index],
+					message: 'early match result must preserve the played score and its leader or draw'
+				});
+			}
+			continue;
+		}
 		if (
-			match.winnerTeamName !== match.leftTeamName &&
-			match.winnerTeamName !== match.rightTeamName
+			!match.leftTeamName ||
+			!match.rightTeamName ||
+			!match.winnerTeamName ||
+			(match.winnerTeamName !== match.leftTeamName && match.winnerTeamName !== match.rightTeamName)
 		) {
 			context.addIssue({
 				code: 'custom',
@@ -923,7 +951,10 @@ function validateAuctionTournamentResultPayload(
 	}
 
 	const final = matchByKey.get('FINAL');
-	if (final && final.winnerTeamName !== payload.champion.teamName) {
+	if (
+		(!tournament.endedEarly && !payload.champion) ||
+		(final?.winnerTeamName ?? null) !== (payload.champion?.teamName ?? null)
+	) {
 		context.addIssue({
 			code: 'custom',
 			path: ['champion', 'teamName'],

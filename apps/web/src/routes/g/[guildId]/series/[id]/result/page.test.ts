@@ -75,7 +75,8 @@ describe('series result page integration', () => {
 		expect(source).toContain(
 			'마지막 확정 세트의 결과와 MMR 정산을 되돌린 뒤 픽밴 작업대로 이동합니다.'
 		);
-		expect(source).toContain('확정된 모든 세트와 MMR 정산을 되돌린 뒤 시리즈를 취소 처리합니다.');
+		expect(source).toContain('확정된 모든 세트와 MMR 정산을 안전하게 역순으로 되돌린 뒤');
+		expect(source).toContain('deleteConfirmationValid');
 		expect(source).not.toContain('RealtimeEditStateBar');
 		expect(source).not.toContain('createBrowserRealtimeSocket');
 	});

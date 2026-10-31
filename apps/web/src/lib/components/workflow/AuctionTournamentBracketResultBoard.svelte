@@ -80,7 +80,7 @@
 		if (match.status === 'LINEUP_PENDING') return '라인업 대기';
 		if (match.status === 'READY') return '시작 준비';
 		if (match.status === 'IN_PROGRESS') return '진행 중';
-		if (match.status === 'COMPLETED') return '완료';
+		if (match.status === 'COMPLETED') return match.endedEarly ? '조기 마무리' : '완료';
 		return '취소됨';
 	}
 
@@ -88,6 +88,7 @@
 		const champion = teamById(snapshot.tournament.championTeamId);
 		if (champion) return `${champion.teamName} 우승`;
 		if (snapshot.tournament.status === 'CANCELLED') return '토너먼트 취소됨';
+		if (snapshot.tournament.status === 'COMPLETED') return '우승팀 없이 마무리';
 		if (!finalMatch) return '대진 정보 없음';
 		return matchStatusLabel(finalMatch);
 	}
@@ -105,7 +106,12 @@
 	}
 
 	function canOpenMatch(match: AuctionTournamentResultMatch): boolean {
-		return match.leftTeamId !== null && match.rightTeamId !== null && match.status !== 'CANCELLED';
+		return (
+			match.leftTeamId !== null &&
+			match.rightTeamId !== null &&
+			match.status !== 'CANCELLED' &&
+			(!match.endedEarly || match.games.length > 0)
+		);
 	}
 
 	function openMatch(match: AuctionTournamentResultMatch): void {
@@ -128,7 +134,12 @@
 			<span class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
 				<span class="min-w-0">
 					<span class={`block truncate font-semibold ${emphasis ? 'text-xl' : 'text-base'}`}>
-						{team?.teamName ?? (emphasis ? '승자 대기' : '팀 대기')}
+						{team?.teamName ??
+							(snapshot.tournament.status === 'COMPLETED'
+								? '미진행'
+								: emphasis
+									? '승자 대기'
+									: '팀 대기')}
 					</span>
 					{#if team}
 						<span class="mt-0.5 block truncate text-xs text-slate-500">
@@ -223,7 +234,12 @@
 					<div class="grid min-w-0 grid-cols-[minmax(0,1fr)_3rem] items-start gap-3">
 						<div class="min-w-0">
 							<p class="truncate text-lg font-semibold text-slate-100">
-								{team?.teamName ?? (emphasis ? '승자 대기' : '팀 대기')}
+								{team?.teamName ??
+									(snapshot.tournament.status === 'COMPLETED'
+										? '미진행'
+										: emphasis
+											? '승자 대기'
+											: '팀 대기')}
 							</p>
 							{#if team}
 								<p class="mt-0.5 truncate text-xs text-slate-500">{captainName(team)} 팀장</p>

@@ -113,7 +113,7 @@ function actionLabel(action: SeriesPickBanAction): string {
 	if (action === 'early_complete') return '시리즈 조기 종료';
 	if (action === 'revert_last_game') return '마지막 게임 결과 되돌리기';
 	if (action === 'revert') return '시리즈 되돌리기';
-	return '시리즈 삭제';
+	return '시리즈 취소';
 }
 
 function fallbackErrorMessage(status: number, action: SeriesPickBanAction): string {

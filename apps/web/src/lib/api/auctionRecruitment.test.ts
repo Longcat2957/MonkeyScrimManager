@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	addAuctionRecruitmentMember,
 	auctionRecruitmentErrorText,
+	cancelAuctionRecruitment,
 	closeAuctionRecruitment,
 	createAuctionRecruitment,
 	dispatchAuctionRecruitmentParticipantConfirmationDms,
-	removeAuctionRecruitmentMember
+	isAuctionRecruitmentRevisionConflict,
+	removeAuctionRecruitmentMember,
+	reopenAuctionRecruitment,
+	restoreAuctionRecruitment
 } from './auctionRecruitment';
 
 const guildId = '1525851181157580861';
@@ -44,6 +48,8 @@ const openSnapshot = {
 	permissions: {
 		canManageMembers: false,
 		canClose: false,
+		canReopen: false,
+		canRestore: false,
 		canSendParticipantConfirmationDms: false,
 		canCancel: true
 	}
@@ -112,6 +118,8 @@ describe('auction recruitment API client', () => {
 			permissions: {
 				canManageMembers: false,
 				canClose: false,
+				canReopen: true,
+				canRestore: false,
 				canSendParticipantConfirmationDms: true,
 				canCancel: true
 			}
@@ -155,12 +163,76 @@ describe('auction recruitment API client', () => {
 		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
 	});
 
+	it('reopens a closed recruitment with the authoritative recruitment revision', async () => {
+		const reopenedSnapshot = {
+			...openSnapshot,
+			recruitment: { ...openSnapshot.recruitment, revision: 2 },
+			permissions: { ...openSnapshot.permissions, canManageMembers: true }
+		};
+		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return Response.json({ data: reopenedSnapshot, meta: { requestId } });
+		});
+		installBrowser(fetcher);
+
+		await expect(
+			reopenAuctionRecruitment(guildId, recruitmentId, 1, idempotencyKey)
+		).resolves.toEqual(reopenedSnapshot);
+
+		const [path, init] = fetcher.mock.calls[0]!;
+		expect(path).toBe(`/api/guilds/${guildId}/auction-recruitments/${recruitmentId}/reopen`);
+		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 1 });
+	});
+
+	it('cancels and restores an auction recruitment with authoritative revisions', async () => {
+		const cancelledSnapshot = {
+			...openSnapshot,
+			recruitment: { ...openSnapshot.recruitment, status: 'CANCELLED' as const, revision: 1 },
+			permissions: {
+				...openSnapshot.permissions,
+				canCancel: false,
+				canRestore: true
+			}
+		};
+		const restoredSnapshot = {
+			...openSnapshot,
+			recruitment: { ...openSnapshot.recruitment, revision: 2 }
+		};
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(Response.json({ data: cancelledSnapshot, meta: { requestId } }))
+			.mockResolvedValueOnce(Response.json({ data: restoredSnapshot, meta: { requestId } }));
+		installBrowser(fetcher);
+
+		await expect(
+			cancelAuctionRecruitment(guildId, recruitmentId, 0, idempotencyKey)
+		).resolves.toEqual(cancelledSnapshot);
+		await expect(
+			restoreAuctionRecruitment(guildId, recruitmentId, 1, idempotencyKey)
+		).resolves.toEqual(restoredSnapshot);
+
+		const [cancelPath, cancelInit] = fetcher.mock.calls[0]!;
+		expect(cancelPath).toBe(`/api/guilds/${guildId}/auction-recruitments/${recruitmentId}`);
+		expect(cancelInit).toMatchObject({ method: 'DELETE', credentials: 'same-origin' });
+		expect(JSON.parse(String(cancelInit?.body))).toEqual({ expectedRevision: 0 });
+
+		const [restorePath, restoreInit] = fetcher.mock.calls[1]!;
+		expect(restorePath).toBe(
+			`/api/guilds/${guildId}/auction-recruitments/${recruitmentId}/restore`
+		);
+		expect(restoreInit).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+		expect(JSON.parse(String(restoreInit?.body))).toEqual({ expectedRevision: 1 });
+	});
+
 	it('adds and removes a guild member through the browser operator routes', async () => {
 		const operatorSnapshot = {
 			...openSnapshot,
 			permissions: {
 				canManageMembers: true,
 				canClose: false,
+				canReopen: false,
+				canRestore: false,
 				canSendParticipantConfirmationDms: false,
 				canCancel: true
 			}
@@ -230,5 +302,27 @@ describe('auction recruitment API client', () => {
 		expect(auctionRecruitmentErrorText(error)).toBe(
 			`경매 모집 채널을 먼저 설정해 주세요. (요청 ID: ${requestId})`
 		);
+	});
+
+	it('identifies optimistic revision conflicts so retries can use a new idempotency key', async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json(
+				{
+					error: {
+						code: 'recruitment_revision_conflict',
+						message: '경매 모집 상태가 변경되었습니다.',
+						requestId
+					}
+				},
+				{ status: 409 }
+			)
+		);
+		installBrowser(fetcher);
+
+		const error = await cancelAuctionRecruitment(guildId, recruitmentId, 0, idempotencyKey).catch(
+			(cause) => cause
+		);
+
+		expect(isAuctionRecruitmentRevisionConflict(error)).toBe(true);
 	});
 });

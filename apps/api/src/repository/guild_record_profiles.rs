@@ -804,7 +804,8 @@ async fn load_record_page(
                     match.id,
                     tournament.title,
                     max(game.played_at) AS played_at,
-                    CASE WHEN match.winner_team_id = target_team.id
+                    CASE WHEN match.winner_team_id IS NULL THEN 'DRAW'
+                         WHEN match.winner_team_id = target_team.id
                          THEN 'WIN' ELSE 'LOSS' END::text AS result,
                     target_team.id AS team_id,
                     target_team.team_name AS team_name,
@@ -1168,7 +1169,8 @@ async fn load_tournament_series_meta(
                 match.match_key AS stage,
                 opponent_team.team_name AS opponent_name,
                 max(game.played_at) AS played_at,
-                CASE WHEN match.winner_team_id = target_team.id
+                CASE WHEN match.winner_team_id IS NULL THEN 'DRAW'
+                         WHEN match.winner_team_id = target_team.id
                      THEN 'WIN' ELSE 'LOSS' END::text AS result
          FROM auction_tournaments AS tournament
          JOIN auction_matches AS match

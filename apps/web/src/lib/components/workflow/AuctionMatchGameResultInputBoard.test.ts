@@ -23,7 +23,18 @@ describe('AuctionMatchGameResultInputBoard', () => {
 		expect(source).toContain('expectedRevision: snapshot.match.revision');
 		expect(source).toContain('setNumber: nextSetNumber');
 		expect(source).toContain('sideSelected: false');
+		expect(source).toContain('const sidePresetLabels = $derived({');
+		expect(source).toContain('{sidePresetLabels}');
 		expect(source).toContain('patchVersion: catalog.version');
+	});
+
+	it('makes BLUE and RED selection explicit when entering a final', () => {
+		expect(source).toContain("snapshot.match.matchKey === 'FINAL'");
+		expect(normalizedSource).toContain(
+			'결승은 각 세트 시작 전에 양 팀의 BLUE/RED 진영을 반드시 선택해야 합니다.'
+		);
+		expect(source).toContain("DEFAULT: `${resultTeams[0]?.teamName ?? '왼쪽 팀'} BLUE");
+		expect(source).toContain("SWAPPED: `${resultTeams[1]?.teamName ?? '오른쪽 팀'} BLUE");
 	});
 
 	it('renders the selected completed auction game with the shared detailed pick-ban result card', () => {

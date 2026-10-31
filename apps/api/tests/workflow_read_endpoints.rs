@@ -578,10 +578,26 @@ async fn assert_browser_auction_tournament_cancel(app: &Router) -> TestResult {
         AUCTION_ACTIVE_SOURCE
     );
     assert_eq!(response["data"]["reversedGameCount"], 0);
+    let source_revision = response["data"]["sourceRecruitmentRevision"]
+        .as_i64()
+        .ok_or("cancelled auction source revision is missing")?;
 
     let replay = browser_post(app, &path, "01900000-0000-7000-8000-000000000911", body).await?;
     assert_eq!(replay.status(), StatusCode::OK);
     assert_eq!(body_json(replay).await?["data"], response["data"]);
+
+    let restore = browser_post(
+        app,
+        &format!("/api/guilds/{GUILD_A}/auction-recruitments/{AUCTION_ACTIVE_SOURCE}/restore"),
+        "01900000-0000-7000-8000-000000000912",
+        json!({ "expectedRevision": source_revision }),
+    )
+    .await?;
+    assert_eq!(restore.status(), StatusCode::OK);
+    let restore = body_json(restore).await?;
+    assert_eq!(restore["data"]["recruitment"]["status"], "CLOSED");
+    assert_eq!(restore["data"]["permissions"]["canRestore"], false);
+    assert!(restore["data"]["links"]["draft"].is_string());
     Ok(())
 }
 

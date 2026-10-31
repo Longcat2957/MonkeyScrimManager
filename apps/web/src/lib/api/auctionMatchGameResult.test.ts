@@ -5,6 +5,7 @@ import {
 } from '$lib/contracts/auctionMatchGameResult';
 import {
 	auctionMatchGameResultErrorText,
+	completeAuctionFinalAsBo1,
 	fetchAuctionMatchGameResult,
 	isAuctionMatchGameResultRevisionConflict,
 	revertLastAuctionMatchGameResult,
@@ -73,7 +74,8 @@ const snapshot: AuctionMatchGameResultSnapshot = {
 		canManageLineup: true,
 		canEnterResults: true,
 		canUnlockLineup: false,
-		canRevertLastGame: false
+		canRevertLastGame: false,
+		canCompleteFinalAsBo1: false
 	}
 };
 
@@ -168,6 +170,54 @@ describe('auction match game result API client', () => {
 			expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
 			expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
 		}
+	});
+
+	it('completes a one-game final as BO1 without reverting its confirmed game', async () => {
+		const completed: AuctionMatchGameResultSnapshot = {
+			...snapshot,
+			match: {
+				...snapshot.match,
+				bestOf: 1,
+				status: 'COMPLETED',
+				revision: 9,
+				leftScore: 1,
+				winnerTeamId: leftTeamId
+			},
+			games: [
+				{
+					id: '01900000-0000-7000-8000-000000000801',
+					setNumber: 1,
+					sidePreset: 'DEFAULT',
+					winner: 'BLUE',
+					picks: emptyPicks,
+					bans: emptyBans,
+					patchVersion: '16.13.1'
+				}
+			],
+			permissions: {
+				...snapshot.permissions,
+				canEnterResults: false,
+				canRevertLastGame: true,
+				canCompleteFinalAsBo1: false
+			}
+		};
+		const fetcher = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+			void args;
+			return envelope(completed);
+		});
+		installBrowser(fetcher);
+
+		await expect(
+			completeAuctionFinalAsBo1(guildId, matchId, { expectedRevision: 8 }, idempotencyKey)
+		).resolves.toEqual(completed);
+
+		const [path, init] = fetcher.mock.calls[0]!;
+		expect(path).toBe(`/api/guilds/${guildId}/auction-matches/${matchId}/complete`);
+		expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+		expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 8 });
+		const headers = new Headers(init?.headers);
+		expect(headers.get('X-CSRF-Token')).toBe('csrf-token');
+		expect(headers.get('Idempotency-Key')).toBe(idempotencyKey);
 	});
 
 	it('surfaces revision conflict details and limits hard fearless reuse to prior and current picks', async () => {

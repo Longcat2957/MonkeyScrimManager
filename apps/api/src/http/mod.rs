@@ -189,6 +189,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             post(bot_routes::reopen_recruitment),
         )
         .route(
+            "/api/guilds/{guild_id}/recruitments/{recruitment_id}/restore",
+            post(bot_routes::restore_recruitment),
+        )
+        .route(
             "/api/guilds/{guild_id}/recruitments/{recruitment_id}/auction-recruitment",
             post(bot_routes::convert_entry_draft_to_auction_recruitment),
         )
@@ -253,6 +257,14 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
             post(bot_routes::close_auction_recruitment),
         )
         .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/reopen",
+            post(bot_routes::reopen_auction_recruitment),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/restore",
+            post(bot_routes::restore_auction_recruitment),
+        )
+        .route(
             "/api/guilds/{guild_id}/auction-recruitments/{recruitment_id}/participant-confirmation-dms",
             post(bot_routes::dispatch_auction_recruitment_participant_confirmation_dms),
         )
@@ -276,6 +288,14 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/result",
             get(workflow_routes::auction_tournament_result),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/finish-preview",
+            get(bot_routes::auction_tournament_finish_preview),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/finish",
+            post(bot_routes::finish_auction_tournament),
         )
         .route(
             "/api/guilds/{guild_id}/auction-tournaments/{tournament_id}/cancel-preview",
@@ -313,6 +333,10 @@ fn build_router_with_routes(state: AppState, extra_routes: Router<AppState>) -> 
         .route(
             "/api/guilds/{guild_id}/auction-matches/{match_id}/games/last",
             delete(bot_routes::revert_last_auction_match_game),
+        )
+        .route(
+            "/api/guilds/{guild_id}/auction-matches/{match_id}/complete",
+            post(bot_routes::complete_auction_final_as_bo1),
         )
 		.route("/api/riot/records", get(riot_routes::records))
 		.route(

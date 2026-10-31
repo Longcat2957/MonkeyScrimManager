@@ -36,6 +36,8 @@ describe('auction recruitment closed-roster page', () => {
 						permissions: {
 							canManageMembers: false,
 							canClose: false,
+							canReopen: true,
+							canRestore: false,
 							canSendParticipantConfirmationDms: true,
 							canCancel: false
 						}

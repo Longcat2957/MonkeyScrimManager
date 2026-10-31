@@ -155,6 +155,36 @@ async fn run_champion_preferences_flow() -> TestResult {
         "duplicate_champion_id"
     );
 
+    let mode_specific = mutation(
+        &app,
+        "/api/me/champion-preferences/MID",
+        &json!({"championIds":["Jade_Ahri"]}),
+    )
+    .await?;
+    assert_eq!(mode_specific.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let mode_specific = body_json(mode_specific).await?;
+    assert_eq!(mode_specific["error"]["code"], "invalid_champion_id");
+    assert_eq!(
+        mode_specific["error"]["message"],
+        "챔피언 ID 형식이 올바르지 않습니다."
+    );
+    assert!(mode_specific["error"]["requestId"].is_string());
+
+    let constraint_error = sqlx::query(
+        "INSERT INTO user_champion_preferences (user_id, lane, position, champion_id)
+         VALUES ($1, 'SUPPORT', 1, 'Jade_Ahri')",
+    )
+    .bind(USER_ID)
+    .execute(&pool)
+    .await
+    .expect_err("database constraint must reject mode-specific champion ids");
+    assert_eq!(
+        constraint_error
+            .as_database_error()
+            .and_then(|error| error.constraint()),
+        Some("user_champion_preferences_canonical_champion_id_check")
+    );
+
     let too_many = mutation(
         &app,
         "/api/me/champion-preferences/JUNGLE",

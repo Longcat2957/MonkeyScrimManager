@@ -558,7 +558,10 @@ pub async fn ack_recruitment_message(
         .await?;
         let deduplication_key = match notification_type {
             RECRUITMENT_MESSAGE_DELETE_TYPE => {
-                format!("recruitment:{}:message:delete", payload.recruitment_id)
+                format!(
+                    "recruitment:{}:message:delete:{}",
+                    payload.recruitment_id, binding.revision
+                )
             }
             RECRUITMENT_MESSAGE_UPDATE_TYPE => format!(
                 "recruitment:{}:message:update:{}",
@@ -658,8 +661,8 @@ pub async fn ack_auction_recruitment_message(
         .await?;
         let deduplication_key = match notification_type {
             AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE => format!(
-                "auction-recruitment:{}:message:delete",
-                payload.auction_recruitment_id
+                "auction-recruitment:{}:message:delete:{}",
+                payload.auction_recruitment_id, binding.revision
             ),
             AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE => format!(
                 "auction-recruitment:{}:message:update:{}",

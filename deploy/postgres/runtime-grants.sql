@@ -25,9 +25,22 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"runtime_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"runtime_role";
 REVOKE TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA public FROM :"runtime_role";
 
-GRANT SELECT ON TABLE public._sqlx_migrations TO :"runtime_role";
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-    ON TABLE public._sqlx_migrations FROM :"runtime_role";
+-- SQLx-only databases have just the legacy ledger. An Alembic handover adds
+-- both metadata tables; a fresh Alembic bootstrap has no SQLx ledger.
+SELECT format('GRANT SELECT ON TABLE public.%I TO %I', metadata_table, :'runtime_role')
+FROM (VALUES ('_sqlx_migrations'), ('alembic_version'), ('migration_provenance'))
+    AS metadata(metadata_table)
+WHERE to_regclass(format('public.%I', metadata_table)) IS NOT NULL
+\gexec
+
+SELECT format(
+    'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.%I FROM %I',
+    metadata_table, :'runtime_role'
+)
+FROM (VALUES ('_sqlx_migrations'), ('alembic_version'), ('migration_provenance'))
+    AS metadata(metadata_table)
+WHERE to_regclass(format('public.%I', metadata_table)) IS NOT NULL
+\gexec
 
 -- These tables are append-only ledgers. Future append-only tables must be added here
 -- in the same release that creates them.

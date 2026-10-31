@@ -110,8 +110,12 @@ MONKEYBOT_BOT_RUNTIME_ENV=./bot/runtime.env.example \
 
 실제 PostgreSQL 통합 테스트는 Docker로 PostgreSQL 18.4를 자동 실행한다. 복구 smoke는 권한을 제한한
 libpq service/pass file과 서로 다른 `MONKEYBOT_BACKUP_SOURCE_SERVICE`,
-`MONKEYBOT_RESTORE_TARGET_SERVICE`를 지정해 `scripts/postgres-backup-restore-smoke.sh`로 실행한다. 이
-script는 exported repeatable-read snapshot으로 dump하고 DSN을 child process argument에 넣지 않는다.
+`MONKEYBOT_RESTORE_TARGET_SERVICE`, 대상의 `MONKEYBOT_RESTORE_RUNTIME_ROLE`을 지정해
+`scripts/postgres-backup-restore-smoke.sh`로 실행한다. 원본 runtime role 이름이 다르면
+`MONKEYBOT_BACKUP_SOURCE_RUNTIME_ROLE`도 지정한다. 이 script는 exported repeatable-read snapshot으로
+dump하고 DSN을 child process argument에 넣지 않으며, ACL을 제외한 복원 뒤 대상 runtime grant를
+재적용·검증한다. 개발 환경에서 reset 함수 권한을 의도적으로 켠 경우에만
+`MONKEYBOT_RESTORE_SERVICE_ADMIN_RESET_ENABLED=true`를 사용한다.
 
 ## VPS PostgreSQL 개발 접속
 

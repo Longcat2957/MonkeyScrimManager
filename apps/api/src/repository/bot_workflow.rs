@@ -74,10 +74,16 @@ const SERIES_GAME_REVERT_METHOD: &str = "DELETE";
 const SERIES_GAME_REVERT_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/games/last";
 const SERIES_EARLY_COMPLETE_METHOD: &str = "POST";
 const SERIES_EARLY_COMPLETE_ROUTE: &str = "/api/guilds/{guildId}/series/{id}/complete";
+const RECRUITMENT_CANCEL_ROUTE: &str = "/api/guilds/{guildId}/recruitments/{id}";
+const RECRUITMENT_RESTORE_ROUTE: &str = "/api/guilds/{guildId}/recruitments/{id}/restore";
 const AUCTION_RECRUITMENT_CREATE_ROUTE: &str = "/api/guilds/{guildId}/auction-recruitments";
 const AUCTION_RECRUITMENT_CLOSE_ROUTE: &str =
     "/api/guilds/{guildId}/auction-recruitments/{id}/close";
+const AUCTION_RECRUITMENT_REOPEN_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-recruitments/{id}/reopen";
 const AUCTION_RECRUITMENT_CANCEL_ROUTE: &str = "/api/guilds/{guildId}/auction-recruitments/{id}";
+const AUCTION_RECRUITMENT_RESTORE_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-recruitments/{id}/restore";
 const AUCTION_RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE: &str =
     "/api/guilds/{guildId}/auction-recruitments/{id}/participant-confirmation-dms";
 const AUCTION_RECRUITMENT_FORCE_CANCEL_METHOD: &str = "POST";
@@ -93,6 +99,8 @@ const AUCTION_TOURNAMENT_CREATE_ROUTE: &str = "/api/guilds/{guildId}/auction-tou
 const AUCTION_TOURNAMENT_CANCEL_METHOD: &str = "POST";
 const AUCTION_TOURNAMENT_CANCEL_ROUTE: &str =
     "/api/guilds/{guildId}/auction-tournaments/{id}/cancel";
+const AUCTION_TOURNAMENT_FINISH_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-tournaments/{id}/finish";
 const AUCTION_TOURNAMENT_BRACKET_COMMAND_ROUTE: &str =
     "/api/guilds/{guildId}/auction-tournaments/{id}/bracket/commands";
 const AUCTION_MATCH_LINEUP_ROUTE: &str = "/api/guilds/{guildId}/auction-matches/{matchId}/lineup";
@@ -104,6 +112,8 @@ const AUCTION_MATCH_GAME_SUBMIT_ROUTE: &str =
     "/api/guilds/{guildId}/auction-matches/{matchId}/games";
 const AUCTION_MATCH_GAME_REVERT_ROUTE: &str =
     "/api/guilds/{guildId}/auction-matches/{matchId}/games/last";
+const AUCTION_FINAL_BO1_COMPLETE_ROUTE: &str =
+    "/api/guilds/{guildId}/auction-matches/{matchId}/complete";
 const RECRUITMENT_PARTICIPANT_CONFIRMATION_DMS_ROUTE: &str =
     "/api/guilds/{guildId}/recruitments/{id}/participant-confirmation-dms";
 const AUCTION_INITIAL_TEAM_POINTS: i32 = 1_000;
@@ -439,6 +449,8 @@ pub struct AuctionRecruitmentLinksSnapshot {
 pub struct AuctionRecruitmentPermissions {
     pub can_manage_members: bool,
     pub can_close: bool,
+    pub can_reopen: bool,
+    pub can_restore: bool,
     pub can_send_participant_confirmation_dms: bool,
     pub can_cancel: bool,
 }
@@ -726,6 +738,8 @@ pub struct AuctionMatchSnapshotMatch {
     pub label: String,
     pub best_of: i16,
     pub hard_fearless: bool,
+    #[serde(default)]
+    pub ended_early: bool,
     pub status: String,
     pub revision: i64,
     pub left_team_id: Uuid,
@@ -768,10 +782,13 @@ pub struct AuctionMatchConfirmedGameSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuctionMatchSnapshotPermissions {
+    #[serde(default)]
+    pub can_finish_tournament: bool,
     pub can_manage_lineup: bool,
     pub can_enter_results: bool,
     pub can_unlock_lineup: bool,
     pub can_revert_last_game: bool,
+    pub can_complete_final_as_bo1: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -819,6 +836,12 @@ pub struct AuctionMatchGameRevertCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuctionFinalBo1CompleteCommand {
+    pub expected_revision: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuctionTournamentCancelCommand {
     pub actor: BotActor,
     pub expected_revision: i64,
@@ -834,6 +857,15 @@ pub struct AuctionTournamentCancelResult {
     pub source_recruitment_id: AuctionRecruitmentId,
     pub source_recruitment_revision: i64,
     pub reversed_game_count: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuctionTournamentFinishResult {
+    pub tournament_id: AuctionTournamentId,
+    pub tournament_status: AuctionTournamentStatus,
+    pub tournament_revision: i64,
+    pub champion_team_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -878,6 +910,8 @@ pub struct AuctionTournamentResultTournamentSnapshot {
     pub display_number: i64,
     pub format: AuctionFormat,
     pub rules: AuctionRecruitmentSeriesRules,
+    #[serde(default)]
+    pub ended_early: bool,
     pub status: AuctionTournamentStatus,
     pub revision: i64,
     pub champion_team_id: Option<Uuid>,
@@ -914,6 +948,8 @@ pub struct AuctionTournamentResultMatchSnapshot {
     pub match_key: String,
     pub best_of: i16,
     pub hard_fearless: bool,
+    #[serde(default)]
+    pub ended_early: bool,
     pub status: String,
     pub left_team_id: Option<Uuid>,
     pub right_team_id: Option<Uuid>,
@@ -968,6 +1004,7 @@ enum WebAuctionMatchLineupMutation {
 enum WebAuctionMatchGameMutation {
     Submit(AuctionMatchGameSubmitCommand),
     Revert(AuctionMatchGameRevertCommand),
+    CompleteFinalAsBo1(AuctionFinalBo1CompleteCommand),
 }
 
 #[derive(Serialize)]
@@ -1006,6 +1043,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(command) => command.expected_revision,
             Self::Revert(command) => command.expected_revision,
+            Self::CompleteFinalAsBo1(command) => command.expected_revision,
         }
     }
 
@@ -1013,6 +1051,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => "POST",
             Self::Revert(_) => "DELETE",
+            Self::CompleteFinalAsBo1(_) => "POST",
         }
     }
 
@@ -1020,6 +1059,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => AUCTION_MATCH_GAME_SUBMIT_ROUTE,
             Self::Revert(_) => AUCTION_MATCH_GAME_REVERT_ROUTE,
+            Self::CompleteFinalAsBo1(_) => AUCTION_FINAL_BO1_COMPLETE_ROUTE,
         }
     }
 
@@ -1027,6 +1067,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => "AUCTION_MATCH_GAME_CONFIRMED",
             Self::Revert(_) => "AUCTION_MATCH_GAME_REVERTED",
+            Self::CompleteFinalAsBo1(_) => "AUCTION_FINAL_COMPLETED_AS_BO1",
         }
     }
 
@@ -1034,6 +1075,7 @@ impl WebAuctionMatchGameMutation {
         match self {
             Self::Submit(_) => "AUCTION_MATCH_GAME_CONFIRMED",
             Self::Revert(_) => "AUCTION_MATCH_GAME_REVERTED",
+            Self::CompleteFinalAsBo1(_) => "AUCTION_FINAL_COMPLETED_AS_BO1",
         }
     }
 }
@@ -1290,7 +1332,7 @@ struct AuctionTournamentResultNotificationPayload {
     tournament_id: AuctionTournamentId,
     channel_id: DiscordChannelId,
     tournament: AuctionTournamentResultNotificationTournament,
-    champion: AuctionTournamentResultNotificationChampion,
+    champion: Option<AuctionTournamentResultNotificationChampion>,
     matches: Vec<AuctionTournamentResultNotificationMatch>,
     #[serde(with = "time::serde::rfc3339")]
     completed_at: OffsetDateTime,
@@ -1309,6 +1351,7 @@ struct AuctionTournamentResultDeleteNotificationPayload {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuctionTournamentResultNotificationTournament {
+    ended_early: bool,
     display_number: i64,
     title: String,
     format: AuctionFormat,
@@ -1327,14 +1370,15 @@ struct AuctionTournamentResultNotificationChampion {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuctionTournamentResultNotificationMatch {
+    ended_early: bool,
     match_key: String,
     label: String,
     best_of: i16,
-    left_team_name: String,
-    right_team_name: String,
+    left_team_name: Option<String>,
+    right_team_name: Option<String>,
     left_score: i64,
     right_score: i64,
-    winner_team_name: String,
+    winner_team_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2056,7 +2100,10 @@ pub async fn get_auction_recruitment_snapshot(
             .map_err(AttemptError::into_public)?;
     if !matches!(
         snapshot.recruitment.status,
-        RecruitmentStatus::Open | RecruitmentStatus::Closed
+        RecruitmentStatus::Open
+            | RecruitmentStatus::Closed
+            | RecruitmentStatus::Converted
+            | RecruitmentStatus::Cancelled
     ) {
         return Err(BotWorkflowError::RecruitmentNotFound);
     }
@@ -2465,6 +2512,67 @@ pub async fn cancel_web_auction_tournament(
     .map_err(map_transaction_error)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn finish_web_auction_tournament(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    reason: String,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<AuctionTournamentFinishResult, BotWorkflowError> {
+    let command = WebAuctionTournamentCancelCommand {
+        expected_revision,
+        reason: reason.trim().to_owned(),
+    };
+    validate_web_auction_tournament_cancel_command(&command)?;
+    let request_hash = request_hash(
+        guild_id,
+        &WebAuctionTournamentCancelIdempotencyCommand {
+            tournament_id,
+            command: &command,
+        },
+    )?;
+    let guild_id = guild_id.clone();
+    let actor_id = actor_id.clone();
+    let idempotency_key = idempotency_key.to_owned();
+    let request_id = request_id.0.clone();
+    let prepared = AuctionTournamentFinishPrepared::new();
+
+    run_with_deadlock_retry(
+        pool,
+        DeadlockRetryPolicy::DEFAULT,
+        move |transaction| {
+            let guild_id = guild_id.clone();
+            let actor_id = actor_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let request_id = request_id.clone();
+            let command = command.clone();
+            let request_hash = request_hash.clone();
+
+            Box::pin(async move {
+                finish_web_auction_tournament_attempt(
+                    transaction,
+                    &guild_id,
+                    tournament_id,
+                    &actor_id,
+                    &idempotency_key,
+                    &request_id,
+                    &request_hash,
+                    &command,
+                    prepared,
+                )
+                .await
+            })
+        },
+        attempt_sql_error,
+    )
+    .await
+    .map_err(map_transaction_error)
+}
+
 pub async fn force_cancel_auction_recruitment(
     pool: &PgPool,
     guild_id: &GuildId,
@@ -2751,6 +2859,32 @@ pub async fn revert_last_web_auction_match_game(
     .await
 }
 
+pub async fn complete_web_auction_final_as_bo1(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    match_id: AuctionMatchId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &RequestId,
+    command: AuctionFinalBo1CompleteCommand,
+) -> Result<AuctionMatchSnapshot, BotWorkflowError> {
+    if command.expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction match revision must be non-negative",
+        ));
+    }
+    execute_web_auction_match_game_mutation(
+        pool,
+        guild_id,
+        match_id,
+        actor_id,
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(command),
+        idempotency_key,
+        request_id,
+    )
+    .await
+}
+
 async fn execute_web_auction_match_game_mutation(
     pool: &PgPool,
     guild_id: &GuildId,
@@ -2884,6 +3018,34 @@ pub async fn close_web_auction_recruitment(
     .await
 }
 
+pub async fn reopen_web_auction_recruitment(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: AuctionRecruitmentId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction recruitment revision must be non-negative",
+        ));
+    }
+    execute_web_auction_recruitment_lifecycle(
+        pool,
+        guild_id,
+        actor_id,
+        idempotency_key,
+        request_id,
+        WebAuctionRecruitmentLifecycle::Reopen {
+            recruitment_id,
+            expected_revision,
+        },
+    )
+    .await
+}
+
 pub async fn dispatch_web_auction_recruitment_participant_confirmation_dms(
     pool: &PgPool,
     guild_id: &GuildId,
@@ -2935,16 +3097,53 @@ pub async fn cancel_web_auction_recruitment(
     guild_id: &GuildId,
     recruitment_id: AuctionRecruitmentId,
     actor_id: &UserId,
+    expected_revision: i64,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction recruitment revision must be non-negative",
+        ));
+    }
     execute_web_auction_recruitment_lifecycle(
         pool,
         guild_id,
         actor_id,
         idempotency_key,
         request_id,
-        WebAuctionRecruitmentLifecycle::Cancel { recruitment_id },
+        WebAuctionRecruitmentLifecycle::Cancel {
+            recruitment_id,
+            expected_revision,
+        },
+    )
+    .await
+}
+
+pub async fn restore_web_auction_recruitment(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: AuctionRecruitmentId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<AuctionRecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected auction recruitment revision must be non-negative",
+        ));
+    }
+    execute_web_auction_recruitment_lifecycle(
+        pool,
+        guild_id,
+        actor_id,
+        idempotency_key,
+        request_id,
+        WebAuctionRecruitmentLifecycle::Restore {
+            recruitment_id,
+            expected_revision,
+        },
     )
     .await
 }
@@ -3113,16 +3312,53 @@ pub async fn cancel_web_recruitment(
     guild_id: &GuildId,
     recruitment_id: RecruitmentId,
     actor_id: &UserId,
+    expected_revision: i64,
     idempotency_key: &str,
     request_id: &RequestId,
 ) -> Result<RecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected recruitment revision must be non-negative",
+        ));
+    }
     execute_web_recruitment_mutation(
         pool,
         guild_id,
         actor_id,
         idempotency_key,
         request_id,
-        WebRecruitmentMutation::Cancel { recruitment_id },
+        WebRecruitmentMutation::Cancel {
+            recruitment_id,
+            expected_revision,
+        },
+    )
+    .await
+}
+
+pub async fn restore_web_recruitment(
+    pool: &PgPool,
+    guild_id: &GuildId,
+    recruitment_id: RecruitmentId,
+    actor_id: &UserId,
+    expected_revision: i64,
+    idempotency_key: &str,
+    request_id: &RequestId,
+) -> Result<RecruitmentSnapshot, BotWorkflowError> {
+    if expected_revision < 0 {
+        return Err(BotWorkflowError::InvalidCommand(
+            "expected recruitment revision must be non-negative",
+        ));
+    }
+    execute_web_recruitment_mutation(
+        pool,
+        guild_id,
+        actor_id,
+        idempotency_key,
+        request_id,
+        WebRecruitmentMutation::Restore {
+            recruitment_id,
+            expected_revision,
+        },
     )
     .await
 }
@@ -3698,7 +3934,7 @@ pub async fn get_recruitment_snapshot(
         .map_err(AttemptError::into_public)?;
     if !matches!(
         snapshot.recruitment.status,
-        RecruitmentStatus::Open | RecruitmentStatus::Closed
+        RecruitmentStatus::Open | RecruitmentStatus::Closed | RecruitmentStatus::Cancelled
     ) {
         return Err(BotWorkflowError::RecruitmentNotFound);
     }
@@ -4632,7 +4868,10 @@ async fn execute_web_recruitment_mutation_attempt(
             .await?;
             (Some(before), snapshot)
         }
-        WebRecruitmentMutation::Cancel { recruitment_id } => {
+        WebRecruitmentMutation::Cancel {
+            recruitment_id,
+            expected_revision,
+        } => {
             let locked = lock_recruitment(transaction, guild_id, *recruitment_id).await?;
             require_active_creator_or_operator(
                 transaction,
@@ -4642,6 +4881,12 @@ async fn execute_web_recruitment_mutation_attempt(
                 &operator_role_id,
             )
             .await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
             ensure_cancellable(locked.status)?;
             let before = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
             let cancelled = sqlx::query(
@@ -4651,16 +4896,74 @@ async fn execute_web_recruitment_mutation_attempt(
                      updated_by = $1,
                      updated_at = $2,
                      cancelled_at = $2
-                 WHERE guild_id = $3 AND id = $4",
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND revision = $5
+                   AND status IN ('OPEN', 'CLOSED')",
             )
             .bind(actor_id)
             .bind(prepared.now)
             .bind(guild_id)
             .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
             .execute(&mut **transaction)
             .await?;
             if cancelled.rows_affected() != 1 {
                 return Err(AttemptError::InvariantViolation);
+            }
+            let snapshot = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
+            (Some(before), snapshot)
+        }
+        WebRecruitmentMutation::Restore {
+            recruitment_id,
+            expected_revision,
+        } => {
+            let locked = lock_recruitment(transaction, guild_id, *recruitment_id).await?;
+            require_active_creator_or_operator(
+                transaction,
+                guild_id,
+                actor_id,
+                &locked.created_by,
+                &operator_role_id,
+            )
+            .await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_restorable(locked.status)?;
+            let restored_status = if locked.closed_at.is_some() {
+                RecruitmentStatus::Closed
+            } else {
+                RecruitmentStatus::Open
+            };
+            let before = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
+            let restored = sqlx::query(
+                "UPDATE recruitments
+                 SET status = $1,
+                     revision = revision + 1,
+                     updated_by = $2,
+                     updated_at = $3,
+                     converted_at = NULL,
+                     cancelled_at = NULL,
+                     message_id = NULL
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND revision = $6
+                   AND status = 'CANCELLED'",
+            )
+            .bind(restored_status)
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
+            .execute(&mut **transaction)
+            .await?;
+            if restored.rows_affected() != 1 {
+                return Err(AttemptError::RecruitmentRestoreUnavailable(locked.status));
             }
             let snapshot = recruitment_snapshot(transaction, guild_id, *recruitment_id).await?;
             (Some(before), snapshot)
@@ -6259,7 +6562,7 @@ async fn execute_web_series_lifecycle_attempt(
             if deleted.rows_affected() != 1 {
                 return Err(AttemptError::InvariantViolation);
             }
-            format!("/g/{guild_id}/series")
+            format!("/g/{guild_id}/recruitments/{source_recruitment_id}")
         }
     };
     let result = SeriesLifecycleResult { next_href };
@@ -6983,7 +7286,57 @@ async fn execute_web_auction_recruitment_lifecycle_attempt(
                     .await?;
             (Some(before), snapshot)
         }
-        WebAuctionRecruitmentLifecycle::Cancel { recruitment_id } => {
+        WebAuctionRecruitmentLifecycle::Reopen {
+            recruitment_id,
+            expected_revision,
+        } => {
+            require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id)
+                .await?;
+            let locked = lock_auction_recruitment(transaction, guild_id, *recruitment_id).await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_auction_setup_editable(locked.status)?;
+            let before =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            let updated = sqlx::query(
+                "UPDATE auction_recruitments
+                 SET status = 'OPEN',
+                     revision = revision + 1,
+                     updated_by = $1,
+                     updated_at = $2,
+                     closed_at = NULL
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND revision = $5
+                   AND status = 'CLOSED'",
+            )
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
+            .execute(&mut **transaction)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            let snapshot =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            (Some(before), snapshot)
+        }
+        WebAuctionRecruitmentLifecycle::Cancel {
+            recruitment_id,
+            expected_revision,
+        } => {
             let locked = lock_auction_recruitment(transaction, guild_id, *recruitment_id).await?;
             require_active_creator_or_operator(
                 transaction,
@@ -6993,25 +7346,96 @@ async fn execute_web_auction_recruitment_lifecycle_attempt(
                 &operator_role_id,
             )
             .await?;
-            ensure_open(locked.status)?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_cancellable(locked.status)?;
             let before =
                 auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
                     .await?;
-            sqlx::query(
+            let cancelled = sqlx::query(
                 "UPDATE auction_recruitments
                  SET status = 'CANCELLED',
                      revision = revision + 1,
                      updated_by = $1,
                      updated_at = $2,
                      cancelled_at = $2
-                 WHERE guild_id = $3 AND id = $4",
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND revision = $5
+                   AND status IN ('OPEN', 'CLOSED')",
             )
             .bind(actor_id)
             .bind(prepared.now)
             .bind(guild_id)
             .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
             .execute(&mut **transaction)
             .await?;
+            if cancelled.rows_affected() != 1 {
+                return Err(AttemptError::InvariantViolation);
+            }
+            let snapshot =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            (Some(before), snapshot)
+        }
+        WebAuctionRecruitmentLifecycle::Restore {
+            recruitment_id,
+            expected_revision,
+        } => {
+            let locked = lock_auction_recruitment(transaction, guild_id, *recruitment_id).await?;
+            require_active_creator_or_operator(
+                transaction,
+                guild_id,
+                actor_id,
+                &locked.created_by,
+                &operator_role_id,
+            )
+            .await?;
+            if locked.revision != *expected_revision {
+                return Err(AttemptError::RecruitmentRevisionConflict {
+                    expected: *expected_revision,
+                    actual: locked.revision,
+                });
+            }
+            ensure_restorable(locked.status)?;
+            let restored_status = if locked.closed_at.is_some() {
+                RecruitmentStatus::Closed
+            } else {
+                RecruitmentStatus::Open
+            };
+            let before =
+                auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
+                    .await?;
+            let restored = sqlx::query(
+                "UPDATE auction_recruitments
+                 SET status = $1,
+                     revision = revision + 1,
+                     updated_by = $2,
+                     updated_at = $3,
+                     converted_at = NULL,
+                     cancelled_at = NULL,
+                     message_id = NULL
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND revision = $6
+                   AND status = 'CANCELLED'",
+            )
+            .bind(restored_status)
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(recruitment_id.as_uuid())
+            .bind(expected_revision)
+            .execute(&mut **transaction)
+            .await?;
+            if restored.rows_affected() != 1 {
+                return Err(AttemptError::RecruitmentRestoreUnavailable(locked.status));
+            }
             let snapshot =
                 auction_recruitment_snapshot(transaction, guild_id, *recruitment_id, actor_id)
                     .await?;
@@ -7499,6 +7923,21 @@ async fn execute_web_auction_tournament_create_attempt(
     let snapshot =
         auction_tournament_draft_snapshot(transaction, guild_id, prepared.tournament_id, actor_id)
             .await?;
+    let converted_recruitment_snapshot = auction_recruitment_snapshot(
+        transaction,
+        guild_id,
+        command.source_recruitment_id,
+        actor_id,
+    )
+    .await?;
+    enqueue_auction_recruitment_message_update(
+        transaction,
+        guild_id,
+        &converted_recruitment_snapshot,
+        prepared.recruitment_message_notification_id,
+        prepared.now,
+    )
+    .await?;
     let source_id = command.source_recruitment_id.to_string();
     let tournament_id = prepared.tournament_id.to_string();
     insert_audit(
@@ -7934,6 +8373,205 @@ async fn cancel_auction_tournament_attempt(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn finish_web_auction_tournament_attempt(
+    transaction: &mut DatabaseTransaction,
+    guild_id: &GuildId,
+    tournament_id: AuctionTournamentId,
+    actor_id: &UserId,
+    idempotency_key: &str,
+    request_id: &str,
+    request_hash: &[u8],
+    command: &WebAuctionTournamentCancelCommand,
+    prepared: AuctionTournamentFinishPrepared,
+) -> Result<AuctionTournamentFinishResult, AttemptError> {
+    let operator_role_id = lock_active_guild(transaction, guild_id).await?;
+    require_active_session_operator(transaction, guild_id, actor_id, &operator_role_id).await?;
+    let scope = TenantScope::guild(guild_id.clone());
+    let record_id = match acquire_idempotency::<AuctionTournamentFinishResult>(
+        transaction,
+        IdempotencyAcquire {
+            scope: &scope,
+            record_id: prepared.idempotency_record_id,
+            principal_type: IdempotencyPrincipalType::User,
+            principal_id: actor_id.as_str(),
+            method: "POST",
+            route_template: AUCTION_TOURNAMENT_FINISH_ROUTE,
+            key: idempotency_key,
+            request_hash,
+            now: prepared.now,
+        },
+    )
+    .await?
+    {
+        IdempotencyDecision::Acquired(record_id) => record_id,
+        IdempotencyDecision::Replay(result) => return Ok(result),
+    };
+
+    // All lineup, game and bracket mutations lock the tournament first. Holding
+    // it through completion prevents a late game/revert from changing this result.
+    let tournament =
+        lock_auction_tournament_for_cancel(transaction, guild_id, tournament_id).await?;
+    if tournament.revision != command.expected_revision {
+        return Err(AttemptError::AuctionTournamentRevisionConflict {
+            expected: command.expected_revision,
+            actual: tournament.revision,
+        });
+    }
+    if !matches!(
+        tournament.status,
+        AuctionTournamentStatus::Bidding
+            | AuctionTournamentStatus::BracketSetup
+            | AuctionTournamentStatus::InGame
+    ) {
+        return Err(AttemptError::AuctionTournamentFinishUnavailable(
+            tournament.status,
+        ));
+    }
+    let match_ids = lock_auction_tournament_matches(transaction, guild_id, tournament_id).await?;
+    let mut champion_team_id = None;
+    for id in match_ids {
+        let match_id = AuctionMatchId::from_uuid(id);
+        let auction_match = lock_auction_match(transaction, guild_id, match_id).await?;
+        let score = sqlx::query_as::<_, AuctionMatchScoreRow>(
+            "SELECT count(*) FILTER (
+                        WHERE (side_preset = 'DEFAULT' AND winning_side = 'BLUE')
+                           OR (side_preset = 'SWAPPED' AND winning_side = 'RED')
+                    ) AS left_score,
+                    count(*) FILTER (
+                        WHERE (side_preset = 'DEFAULT' AND winning_side = 'RED')
+                           OR (side_preset = 'SWAPPED' AND winning_side = 'BLUE')
+                    ) AS right_score
+             FROM games
+             WHERE guild_id = $1 AND auction_match_id = $2 AND status = 'CONFIRMED'",
+        )
+        .bind(guild_id)
+        .bind(id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        let winner_team_id = match score.left_score.cmp(&score.right_score) {
+            std::cmp::Ordering::Greater => auction_match.left_team_id,
+            std::cmp::Ordering::Less => auction_match.right_team_id,
+            std::cmp::Ordering::Equal => None,
+        };
+        if auction_match.match_key == "FINAL" {
+            champion_team_id = winner_team_id;
+        }
+        // Preserve completed semifinal outcomes and their historical timestamps.
+        // Pending/playing matches end in place, including unplayed tied matches.
+        let revision = if auction_match.status == "COMPLETED" {
+            sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_matches
+                 SET revision = revision + 1, updated_at = $1, updated_by = $2
+                 WHERE guild_id = $3 AND id = $4
+                 RETURNING revision",
+            )
+            .bind(prepared.now)
+            .bind(actor_id)
+            .bind(guild_id)
+            .bind(id)
+            .fetch_one(&mut **transaction)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_matches
+                 SET status = 'COMPLETED', ended_early = true, winner_team_id = $1,
+                     ended_at = $2, updated_at = $2, updated_by = $3, revision = revision + 1
+                 WHERE guild_id = $4 AND id = $5
+                 RETURNING revision",
+            )
+            .bind(winner_team_id)
+            .bind(prepared.now)
+            .bind(actor_id)
+            .bind(guild_id)
+            .bind(id)
+            .fetch_one(&mut **transaction)
+            .await?
+        };
+        // Already completed matches also lose their revert permission now.
+        insert_outbox(
+            transaction,
+            guild_id,
+            OutboxEventId::new(),
+            format!("guild:{guild_id}:auction-match:{match_id}"),
+            "AUCTION_MATCH",
+            &match_id.to_string(),
+            revision,
+            "AUCTION_TOURNAMENT_FINISHED",
+            json!({"type":"invalidate","resourceId":match_id,"revision":revision}),
+            prepared.now,
+        )
+        .await?;
+    }
+    let tournament_revision = sqlx::query_scalar::<_, i64>(
+        "UPDATE auction_tournaments
+         SET status = 'COMPLETED', ended_early = true, champion_team_id = $1,
+             ended_at = $2, updated_at = $2, updated_by = $3, revision = revision + 1
+         WHERE guild_id = $4 AND id = $5
+         RETURNING revision",
+    )
+    .bind(champion_team_id)
+    .bind(prepared.now)
+    .bind(actor_id)
+    .bind(guild_id)
+    .bind(tournament_id.as_uuid())
+    .fetch_one(&mut **transaction)
+    .await?;
+    let result = AuctionTournamentFinishResult {
+        tournament_id,
+        tournament_status: AuctionTournamentStatus::Completed,
+        tournament_revision,
+        champion_team_id,
+    };
+    let target_id = tournament_id.to_string();
+    insert_audit(
+        transaction,
+        guild_id,
+        AuditInsert {
+            id: prepared.audit_id,
+            actor_id: actor_id.as_str(),
+            action: "AUCTION_TOURNAMENT_FINISHED",
+            target_type: "AUCTION_TOURNAMENT",
+            target_id: &target_id,
+            request_id,
+            before_summary: Some(json!({"tournamentStatus":tournament.status,"tournamentRevision":tournament.revision})),
+            after_summary: Some(json!({
+                "tournamentStatus":result.tournament_status,
+                "tournamentRevision":result.tournament_revision,
+                "championTeamId":result.champion_team_id,
+                "endedEarly":true,
+                "reason":command.reason.trim(),
+            })),
+            now: prepared.now,
+        },
+    )
+    .await?;
+    insert_outbox(
+        transaction,
+        guild_id,
+        prepared.tournament_outbox_event_id,
+        format!("guild:{guild_id}:auction-tournament:{tournament_id}"),
+        "AUCTION_TOURNAMENT",
+        &target_id,
+        tournament_revision,
+        "AUCTION_TOURNAMENT_FINISHED",
+        json!({"type":"invalidate","resourceId":tournament_id,"revision":tournament_revision}),
+        prepared.now,
+    )
+    .await?;
+    enqueue_auction_tournament_result_notification_if_configured(
+        transaction,
+        guild_id,
+        tournament_id,
+        tournament_revision,
+        prepared.result_notification_id,
+        prepared.now,
+    )
+    .await?;
+    complete_idempotency(transaction, &scope, record_id, 200, &result, prepared.now).await?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn cancel_web_auction_tournament_attempt(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -8133,8 +8771,8 @@ async fn force_cancel_auction_recruitment_attempt(
                     &snapshot,
                     AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE,
                     format!(
-                        "auction-recruitment:{}:message:delete",
-                        snapshot.recruitment.id
+                        "auction-recruitment:{}:message:delete:{}",
+                        snapshot.recruitment.id, snapshot.recruitment.revision
                     ),
                     prepared.recruitment_notification_id,
                     prepared.now,
@@ -8359,8 +8997,8 @@ async fn cancel_locked_auction_tournament(
             &source_snapshot,
             AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE,
             format!(
-                "auction-recruitment:{}:message:delete",
-                source_snapshot.recruitment.id
+                "auction-recruitment:{}:message:delete:{}",
+                source_snapshot.recruitment.id, source_snapshot.recruitment.revision
             ),
             recruitment_notification_id,
             now,
@@ -8660,10 +9298,22 @@ async fn execute_web_auction_match_game_mutation_attempt(
             tournament.status,
             AuctionTournamentStatus::InGame | AuctionTournamentStatus::Completed
         ),
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => {
+            tournament.status == AuctionTournamentStatus::InGame
+        }
     };
-    if !tournament_allows_mutation {
+    if !tournament_allows_mutation || tournament.ended_early {
         return Err(AttemptError::AuctionMatchTournamentNotReady);
     }
+    let source_recruitment =
+        if matches!(command, WebAuctionMatchGameMutation::CompleteFinalAsBo1(_)) {
+            Some(
+                lock_auction_recruitment(transaction, guild_id, tournament.source_recruitment_id)
+                    .await?,
+            )
+        } else {
+            None
+        };
     let auction_match = lock_auction_match(transaction, guild_id, match_id).await?;
     if auction_match.tournament_id != tournament_id.as_uuid() {
         return Err(AttemptError::InvariantViolation);
@@ -8697,7 +9347,7 @@ async fn execute_web_auction_match_game_mutation_attempt(
     let roster = auction_match_roster_from_lineups(&lineups, left_team_id, right_team_id)?;
     let before = auction_match_snapshot(transaction, guild_id, match_id, actor_id).await?;
 
-    let (revision, completed_tournament_revision) = match command {
+    let (revision, completed_tournament_revision, completed_recruitment_revision) = match command {
         WebAuctionMatchGameMutation::Submit(command) => {
             let confirmed_game_count =
                 confirmed_auction_match_game_count(transaction, guild_id, match_id).await?;
@@ -8854,7 +9504,7 @@ async fn execute_web_auction_match_game_mutation_attempt(
                 }
                 None => None,
             };
-            (revision, completed_tournament_revision)
+            (revision, completed_tournament_revision, None)
         }
         WebAuctionMatchGameMutation::Revert(_) => {
             let was_completed = auction_match.status == "COMPLETED";
@@ -8899,7 +9549,108 @@ async fn execute_web_auction_match_game_mutation_attempt(
                 )
                 .await?;
             }
-            (revision, None)
+            (revision, None, None)
+        }
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => {
+            let source_recruitment = source_recruitment
+                .as_ref()
+                .ok_or(AttemptError::InvariantViolation)?;
+            let confirmed_game_count =
+                confirmed_auction_match_game_count(transaction, guild_id, match_id).await?;
+            let (left_score, right_score) =
+                confirmed_auction_match_score(transaction, guild_id, match_id).await?;
+            if auction_match.match_key != "FINAL"
+                || !matches!(auction_match.best_of, 3 | 5)
+                || confirmed_game_count != 1
+                || !matches!((left_score, right_score), (1, 0) | (0, 1))
+                || tournament.final_best_of != auction_match.best_of
+                || source_recruitment.final_best_of != auction_match.best_of
+                || source_recruitment.status != RecruitmentStatus::Converted
+            {
+                return Err(AttemptError::AuctionFinalBo1CompletionUnavailable);
+            }
+            let winner_team_id = if left_score == 1 {
+                left_team_id
+            } else {
+                right_team_id
+            };
+            let recruitment_revision = sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_recruitments
+                 SET final_best_of = 1,
+                     revision = revision + 1,
+                     updated_by = $1,
+                     updated_at = $2
+                 WHERE guild_id = $3
+                   AND id = $4
+                   AND status = 'CONVERTED'
+                   AND final_best_of = $5
+                 RETURNING revision",
+            )
+            .bind(actor_id)
+            .bind(prepared.now)
+            .bind(guild_id)
+            .bind(tournament.source_recruitment_id.as_uuid())
+            .bind(auction_match.best_of)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AttemptError::AuctionFinalBo1CompletionUnavailable)?;
+            let revision = sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_matches
+                 SET best_of = 1,
+                     status = 'COMPLETED',
+                     winner_team_id = $1,
+                     ended_at = $2,
+                     revision = revision + 1,
+                     updated_by = $3,
+                     updated_at = $2
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND match_key = 'FINAL'
+                   AND status = 'IN_PROGRESS'
+                   AND best_of = $6
+                   AND lineups_locked_at IS NOT NULL
+                   AND deleted_at IS NULL
+                 RETURNING revision",
+            )
+            .bind(winner_team_id)
+            .bind(prepared.now)
+            .bind(actor_id)
+            .bind(guild_id)
+            .bind(match_id.as_uuid())
+            .bind(auction_match.best_of)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AttemptError::AuctionFinalBo1CompletionUnavailable)?;
+            let tournament_revision = sqlx::query_scalar::<_, i64>(
+                "UPDATE auction_tournaments
+                 SET final_best_of = 1,
+                     status = 'COMPLETED',
+                     champion_team_id = $1,
+                     ended_at = $2,
+                     revision = revision + 1,
+                     updated_by = $3,
+                     updated_at = $2
+                 WHERE guild_id = $4
+                   AND id = $5
+                   AND status = 'IN_GAME'
+                   AND final_best_of = $6
+                   AND deleted_at IS NULL
+                 RETURNING revision",
+            )
+            .bind(winner_team_id)
+            .bind(prepared.now)
+            .bind(actor_id)
+            .bind(guild_id)
+            .bind(tournament_id.as_uuid())
+            .bind(auction_match.best_of)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AttemptError::AuctionFinalBo1CompletionUnavailable)?;
+            (
+                revision,
+                Some(tournament_revision),
+                Some(recruitment_revision),
+            )
         }
     };
 
@@ -8910,6 +9661,47 @@ async fn execute_web_auction_match_game_mutation_attempt(
             tournament_id,
             tournament_revision,
             prepared.result_notification_id,
+            prepared.now,
+        )
+        .await?;
+    }
+    if let Some(recruitment_revision) = completed_recruitment_revision {
+        let recruitment_snapshot = auction_recruitment_snapshot(
+            transaction,
+            guild_id,
+            tournament.source_recruitment_id,
+            actor_id,
+        )
+        .await?;
+        if recruitment_snapshot.recruitment.revision != recruitment_revision {
+            return Err(AttemptError::InvariantViolation);
+        }
+        enqueue_auction_recruitment_message_update(
+            transaction,
+            guild_id,
+            &recruitment_snapshot,
+            prepared.recruitment_notification_id,
+            prepared.now,
+        )
+        .await?;
+        let recruitment_target_id = tournament.source_recruitment_id.to_string();
+        insert_outbox(
+            transaction,
+            guild_id,
+            prepared.recruitment_outbox_event_id,
+            format!(
+                "guild:{guild_id}:auction-recruitment:{}",
+                tournament.source_recruitment_id
+            ),
+            "AUCTION_RECRUITMENT",
+            &recruitment_target_id,
+            recruitment_revision,
+            command.event_type(),
+            json!({
+                "type":"invalidate",
+                "resourceId":tournament.source_recruitment_id,
+                "revision":recruitment_revision
+            }),
             prepared.now,
         )
         .await?;
@@ -8948,9 +9740,30 @@ async fn execute_web_auction_match_game_mutation_attempt(
         prepared.now,
     )
     .await?;
+    if let Some(tournament_revision) = completed_tournament_revision {
+        let tournament_target_id = tournament_id.to_string();
+        insert_outbox(
+            transaction,
+            guild_id,
+            prepared.tournament_outbox_event_id,
+            format!("guild:{guild_id}:auction-tournament:{tournament_id}"),
+            "AUCTION_TOURNAMENT",
+            &tournament_target_id,
+            tournament_revision,
+            command.event_type(),
+            json!({
+                "type":"invalidate",
+                "resourceId":tournament_id,
+                "revision":tournament_revision
+            }),
+            prepared.now,
+        )
+        .await?;
+    }
     let status = match command {
         WebAuctionMatchGameMutation::Submit(_) => 201,
-        WebAuctionMatchGameMutation::Revert(_) => 200,
+        WebAuctionMatchGameMutation::Revert(_)
+        | WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => 200,
     };
     complete_idempotency(
         transaction,
@@ -9214,6 +10027,32 @@ async fn auction_recruitment_snapshot(
     let is_operator = is_active_session_operator(transaction, guild_id, viewer_id).await?;
     let status = recruitment.status;
     let created_by = recruitment.created_by.clone();
+    let href = if status == RecruitmentStatus::Converted {
+        let tournament_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id
+             FROM auction_tournaments
+             WHERE guild_id = $1
+               AND source_recruitment_id = $2
+               AND deleted_at IS NULL
+             ORDER BY started_at DESC, id DESC
+             LIMIT 1",
+        )
+        .bind(guild_id)
+        .bind(recruitment_id.as_uuid())
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AttemptError::InvariantViolation)?;
+        format!(
+            "/g/{}/auction/tournaments/{}/draft",
+            guild_id.as_str(),
+            AuctionTournamentId::from_uuid(tournament_id)
+        )
+    } else {
+        format!(
+            "/g/{}/auction/recruitments/{recruitment_id}",
+            guild_id.as_str()
+        )
+    };
     let draft = (status == RecruitmentStatus::Closed).then(|| {
         format!(
             "/g/{}/auction/recruitments/{}/draft",
@@ -9238,10 +10077,7 @@ async fn auction_recruitment_snapshot(
             message_id: recruitment.message_id,
             created_by_id: created_by.clone(),
             updated_at: recruitment.updated_at,
-            href: format!(
-                "/g/{}/auction/recruitments/{recruitment_id}",
-                guild_id.as_str()
-            ),
+            href,
         },
         participants: participant_rows
             .into_iter()
@@ -9255,9 +10091,12 @@ async fn auction_recruitment_snapshot(
         permissions: AuctionRecruitmentPermissions {
             can_manage_members: status == RecruitmentStatus::Open && is_operator,
             can_close: status == RecruitmentStatus::Open && is_operator,
+            can_reopen: status == RecruitmentStatus::Closed && is_operator,
+            can_restore: status == RecruitmentStatus::Cancelled
+                && (is_operator || created_by == *viewer_id),
             can_send_participant_confirmation_dms: status == RecruitmentStatus::Closed
                 && is_operator,
-            can_cancel: status == RecruitmentStatus::Open
+            can_cancel: matches!(status, RecruitmentStatus::Open | RecruitmentStatus::Closed)
                 && (is_operator || created_by == *viewer_id),
         },
     })
@@ -9279,7 +10118,7 @@ async fn auction_setup_draft_snapshot(
 ) -> Result<AuctionSetupDraftSnapshot, AttemptError> {
     require_active_session_member_read(transaction, guild_id, viewer_id).await?;
     let recruitment = sqlx::query_as::<_, AuctionRecruitmentLockRow>(
-        "SELECT season_id, format, status, target_count, semifinal_best_of, final_best_of,
+        "SELECT season_id, format, status, closed_at, target_count, semifinal_best_of, final_best_of,
                 hard_fearless, revision, created_by
          FROM auction_recruitments
          WHERE guild_id = $1 AND id = $2",
@@ -10170,6 +11009,7 @@ async fn auction_match_snapshot(
                 auction_match.best_of,
                 auction_match.hard_fearless,
                 auction_match.status,
+                auction_match.ended_early,
                 auction_match.revision,
                 auction_match.left_team_id,
                 auction_match.right_team_id,
@@ -10198,6 +11038,7 @@ async fn auction_match_snapshot(
                   auction_match.best_of,
                   auction_match.hard_fearless,
                   auction_match.status,
+                auction_match.ended_early,
                   auction_match.revision,
                   auction_match.left_team_id,
                   auction_match.right_team_id,
@@ -10374,7 +11215,23 @@ async fn auction_match_snapshot(
     let has_result_artifacts =
         auction_match_has_result_artifacts(transaction, guild_id, match_id).await?;
     let is_operator = is_active_session_operator(transaction, guild_id, viewer_id).await?;
-    let downstream_final_blocks_revert = if is_operator
+    let (tournament_status, tournament_ended_early) =
+        sqlx::query_as::<_, (AuctionTournamentStatus, bool)>(
+            "SELECT status, ended_early FROM auction_tournaments WHERE guild_id = $1 AND id = $2",
+        )
+        .bind(guild_id)
+        .bind(auction_match.tournament_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+    let can_finish_tournament = is_operator
+        && matches!(
+            tournament_status,
+            AuctionTournamentStatus::Bidding
+                | AuctionTournamentStatus::BracketSetup
+                | AuctionTournamentStatus::InGame
+        );
+    let can_mutate = is_operator && !tournament_ended_early;
+    let downstream_final_blocks_revert = if can_mutate
         && auction_match.status == "COMPLETED"
         && is_auction_semifinal_match_key(&auction_match.match_key)
     {
@@ -10389,23 +11246,32 @@ async fn auction_match_snapshot(
     } else {
         false
     };
-    let can_manage_lineup = is_operator
+    let can_manage_lineup = can_mutate
         && auction_match.status == "LINEUP_PENDING"
         && auction_match.lineups_locked_at.is_none();
     let can_enter_results = can_enter_auction_match_results(
-        is_operator,
+        can_mutate,
         auction_match.lineups_locked_at.is_some(),
         semifinal_lineups_ready,
         &auction_match.status,
     );
     let can_revert_last_game = can_revert_auction_match_last_game(
-        is_operator,
+        can_mutate,
         auction_match.lineups_locked_at.is_some(),
         !games.is_empty(),
         &auction_match.status,
         downstream_final_blocks_revert,
     );
-    let can_unlock_lineup = is_operator
+    let can_complete_final_as_bo1 = can_mutate
+        && auction_match.match_key == "FINAL"
+        && auction_match.status == "IN_PROGRESS"
+        && matches!(auction_match.best_of, 3 | 5)
+        && games.len() == 1
+        && matches!(
+            (auction_match.left_score, auction_match.right_score),
+            (1, 0) | (0, 1)
+        );
+    let can_unlock_lineup = can_mutate
         && auction_match.status == "READY"
         && auction_match.lineups_locked_at.is_some()
         && auction_match.lineups_locked_by.is_some()
@@ -10419,6 +11285,7 @@ async fn auction_match_snapshot(
             match_key: auction_match.match_key,
             best_of: auction_match.best_of,
             hard_fearless: auction_match.hard_fearless,
+            ended_early: auction_match.ended_early,
             status: auction_match.status,
             revision: auction_match.revision,
             left_team_id,
@@ -10439,10 +11306,12 @@ async fn auction_match_snapshot(
         lineups,
         games,
         permissions: AuctionMatchSnapshotPermissions {
+            can_finish_tournament,
             can_manage_lineup,
             can_enter_results,
             can_unlock_lineup,
             can_revert_last_game,
+            can_complete_final_as_bo1,
         },
     })
 }
@@ -10503,7 +11372,7 @@ async fn auction_tournament_result_snapshot(
     require_active_session_member_read(transaction, guild_id, viewer_id).await?;
     let tournament = sqlx::query_as::<_, AuctionTournamentResultRow>(
         "SELECT id, display_number, title, format, semifinal_best_of, final_best_of,
-                hard_fearless, status, revision, champion_team_id, bracket_locked_at
+                hard_fearless, status, ended_early, revision, champion_team_id, bracket_locked_at
          FROM auction_tournaments
          WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL",
     )
@@ -10635,6 +11504,7 @@ async fn auction_tournament_result_snapshot(
                 auction_match.best_of,
                 auction_match.hard_fearless,
                 auction_match.status,
+                auction_match.ended_early,
                 auction_match.left_team_id,
                 auction_match.right_team_id,
                 auction_match.winner_team_id,
@@ -10658,6 +11528,7 @@ async fn auction_tournament_result_snapshot(
            AND ($3::boolean OR auction_match.status <> 'CANCELLED')
          GROUP BY auction_match.id, auction_match.match_key, auction_match.best_of,
                   auction_match.hard_fearless, auction_match.status,
+                auction_match.ended_early,
                   auction_match.left_team_id, auction_match.right_team_id,
                   auction_match.winner_team_id, auction_match.lineups_locked_at
          ORDER BY CASE auction_match.match_key
@@ -10681,6 +11552,7 @@ async fn auction_tournament_result_snapshot(
     // bracket recovery left prior CANCELLED match history. Keep the archive readable
     // without weakening the active/completed bracket shape invariant.
     if tournament.status != AuctionTournamentStatus::Cancelled
+        && !tournament.ended_early
         && (match_rows.len() != expected_match_keys.len()
             || match_rows
                 .iter()
@@ -10768,6 +11640,7 @@ async fn auction_tournament_result_snapshot(
             match_key: row.match_key,
             best_of: row.best_of,
             hard_fearless: row.hard_fearless,
+            ended_early: row.ended_early,
             status: row.status,
             left_team_id: row.left_team_id,
             right_team_id: row.right_team_id,
@@ -10857,6 +11730,7 @@ async fn auction_tournament_result_snapshot(
             display_number: tournament.display_number,
             format,
             rules,
+            ended_early: tournament.ended_early,
             status: tournament.status,
             revision: tournament.revision,
             champion_team_id: tournament.champion_team_id,
@@ -10867,6 +11741,7 @@ async fn auction_tournament_result_snapshot(
         players,
         permissions: AuctionTournamentResultPermissions {
             can_revert_results: is_operator
+                && !tournament.ended_early
                 && matches!(
                     tournament.status,
                     AuctionTournamentStatus::InGame | AuctionTournamentStatus::Completed
@@ -15689,9 +16564,9 @@ async fn auction_tournament_result_notification_payload(
     let tournament = sqlx::query_as::<_, AuctionTournamentResultNotificationRow>(
         "SELECT tournament.display_number, tournament.title, tournament.format,
                 tournament.semifinal_best_of, tournament.final_best_of, tournament.hard_fearless,
-                tournament.champion_team_id, tournament.ended_at, champion.team_name AS champion_team_name
+                tournament.champion_team_id, tournament.ended_early, tournament.ended_at, champion.team_name AS champion_team_name
          FROM auction_tournaments AS tournament
-         JOIN auction_teams AS champion
+         LEFT JOIN auction_teams AS champion
            ON champion.guild_id = tournament.guild_id
           AND champion.tournament_id = tournament.id
           AND champion.id = tournament.champion_team_id
@@ -15716,6 +16591,7 @@ async fn auction_tournament_result_notification_payload(
     let rows = sqlx::query_as::<_, AuctionTournamentResultNotificationMatchRow>(
         "SELECT auction_match.match_key,
                 auction_match.best_of,
+                auction_match.ended_early,
                 left_team.team_name AS left_team_name,
                 right_team.team_name AS right_team_name,
                 winner_team.team_name AS winner_team_name,
@@ -15728,15 +16604,15 @@ async fn auction_tournament_result_notification_payload(
                        OR (game.side_preset = 'SWAPPED' AND game.winning_side = 'BLUE')
                 ) AS right_score
          FROM auction_matches AS auction_match
-         JOIN auction_teams AS left_team
+         LEFT JOIN auction_teams AS left_team
            ON left_team.guild_id = auction_match.guild_id
           AND left_team.tournament_id = auction_match.tournament_id
           AND left_team.id = auction_match.left_team_id
-         JOIN auction_teams AS right_team
+         LEFT JOIN auction_teams AS right_team
            ON right_team.guild_id = auction_match.guild_id
           AND right_team.tournament_id = auction_match.tournament_id
           AND right_team.id = auction_match.right_team_id
-         JOIN auction_teams AS winner_team
+         LEFT JOIN auction_teams AS winner_team
            ON winner_team.guild_id = auction_match.guild_id
           AND winner_team.tournament_id = auction_match.tournament_id
           AND winner_team.id = auction_match.winner_team_id
@@ -15748,7 +16624,7 @@ async fn auction_tournament_result_notification_payload(
            AND auction_match.tournament_id = $2
            AND auction_match.status = 'COMPLETED'
            AND auction_match.deleted_at IS NULL
-         GROUP BY auction_match.match_key, auction_match.best_of,
+         GROUP BY auction_match.match_key, auction_match.best_of, auction_match.ended_early,
                   left_team.team_name, right_team.team_name, winner_team.team_name
          ORDER BY CASE auction_match.match_key
                       WHEN 'SEMIFINAL_A' THEN 1
@@ -15765,30 +16641,37 @@ async fn auction_tournament_result_notification_payload(
         AuctionFormat::TenPerson => &["FINAL"],
         AuctionFormat::TwentyPerson => &["SEMIFINAL_A", "SEMIFINAL_B", "FINAL"],
     };
-    if rows.len() != expected_keys.len()
-        || rows
-            .iter()
-            .map(|row| row.match_key.as_str())
-            .ne(expected_keys.iter().copied())
+    if !tournament.ended_early
+        && (rows.len() != expected_keys.len()
+            || rows
+                .iter()
+                .map(|row| row.match_key.as_str())
+                .ne(expected_keys.iter().copied()))
     {
         return Err(AttemptError::InvariantViolation);
     }
     let mut matches = Vec::with_capacity(rows.len());
     for row in rows {
-        let required_wins = i64::from(row.best_of / 2 + 1);
-        let winner_score = if row.winner_team_name == row.left_team_name {
-            row.left_score
-        } else if row.winner_team_name == row.right_team_name {
-            row.right_score
-        } else {
-            return Err(AttemptError::InvariantViolation);
-        };
-        if winner_score != required_wins
-            || row.left_score + row.right_score > i64::from(row.best_of)
-        {
-            return Err(AttemptError::InvariantViolation);
+        if !row.ended_early {
+            let required_wins = i64::from(row.best_of / 2 + 1);
+            let winner_score = if row.winner_team_name.is_some()
+                && row.winner_team_name == row.left_team_name
+            {
+                row.left_score
+            } else if row.winner_team_name.is_some() && row.winner_team_name == row.right_team_name
+            {
+                row.right_score
+            } else {
+                return Err(AttemptError::InvariantViolation);
+            };
+            if winner_score != required_wins
+                || row.left_score + row.right_score > i64::from(row.best_of)
+            {
+                return Err(AttemptError::InvariantViolation);
+            }
         }
         matches.push(AuctionTournamentResultNotificationMatch {
+            ended_early: row.ended_early,
             label: auction_match_label(&row.match_key)?.to_owned(),
             match_key: row.match_key,
             best_of: row.best_of,
@@ -15799,15 +16682,24 @@ async fn auction_tournament_result_notification_payload(
             winner_team_name: row.winner_team_name,
         });
     }
-    let champion_team_id = tournament
-        .champion_team_id
-        .ok_or(AttemptError::InvariantViolation)?;
+    let champion = match (tournament.champion_team_id, tournament.champion_team_name) {
+        (Some(team_id), Some(team_name)) => {
+            Some(AuctionTournamentResultNotificationChampion { team_id, team_name })
+        }
+        (None, None) if tournament.ended_early => None,
+        _ => return Err(AttemptError::InvariantViolation),
+    };
     let completed_at = tournament
         .ended_at
         .ok_or(AttemptError::InvariantViolation)?;
-    let final_match = matches.last().ok_or(AttemptError::InvariantViolation)?;
-    if final_match.winner_team_name != tournament.champion_team_name {
-        return Err(AttemptError::InvariantViolation);
+    if let Some(champion) = &champion {
+        let final_match = matches
+            .iter()
+            .find(|m| m.match_key == "FINAL")
+            .ok_or(AttemptError::InvariantViolation)?;
+        if final_match.winner_team_name.as_ref() != Some(&champion.team_name) {
+            return Err(AttemptError::InvariantViolation);
+        }
     }
     Ok(AuctionTournamentResultNotificationPayload {
         schema_version: AUCTION_TOURNAMENT_RESULT_SCHEMA_VERSION,
@@ -15815,6 +16707,7 @@ async fn auction_tournament_result_notification_payload(
         tournament_id,
         channel_id,
         tournament: AuctionTournamentResultNotificationTournament {
+            ended_early: tournament.ended_early,
             display_number: tournament.display_number,
             title: tournament.title,
             format,
@@ -15822,10 +16715,7 @@ async fn auction_tournament_result_notification_payload(
             final_best_of: rules.final_best_of,
             hard_fearless: rules.hard_fearless,
         },
-        champion: AuctionTournamentResultNotificationChampion {
-            team_id: champion_team_id,
-            team_name: tournament.champion_team_name,
-        },
+        champion,
         matches,
         completed_at,
     })
@@ -15952,12 +16842,14 @@ async fn enqueue_web_recruitment_message_notification(
     notification_id: NotificationId,
     now: OffsetDateTime,
 ) -> Result<(), AttemptError> {
-    let (Some(channel_id), Some(_message_id)) = (
-        snapshot.recruitment.channel_id.as_ref(),
-        snapshot.recruitment.message_id.as_ref(),
-    ) else {
+    let Some(channel_id) = snapshot.recruitment.channel_id.as_ref() else {
         return Ok(());
     };
+    if !matches!(command, WebRecruitmentMutation::Restore { .. })
+        && snapshot.recruitment.message_id.is_none()
+    {
+        return Ok(());
+    }
     let (notification_type, deduplication_key) = match command {
         WebRecruitmentMutation::AddMember { .. }
         | WebRecruitmentMutation::RemoveMember { .. }
@@ -15970,7 +16862,17 @@ async fn enqueue_web_recruitment_message_notification(
         ),
         WebRecruitmentMutation::Cancel { .. } => (
             RECRUITMENT_MESSAGE_DELETE_TYPE,
-            format!("recruitment:{}:message:delete", snapshot.recruitment.id),
+            format!(
+                "recruitment:{}:message:delete:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
+        ),
+        WebRecruitmentMutation::Restore { .. } => (
+            RECRUITMENT_MESSAGE_CREATE_TYPE,
+            format!(
+                "recruitment:{}:message:restore:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
         ),
     };
     enqueue_recruitment_message_notification(
@@ -16015,6 +16917,7 @@ async fn enqueue_recruitment_message_update(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn enqueue_recruitment_message_notification(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -16055,14 +16958,23 @@ async fn enqueue_auction_recruitment_message_lifecycle_notification(
     notification_id: NotificationId,
     now: OffsetDateTime,
 ) -> Result<(), AttemptError> {
-    let (Some(channel_id), Some(_message_id)) = (
-        snapshot.recruitment.channel_id.as_ref(),
-        snapshot.recruitment.message_id.as_ref(),
-    ) else {
+    let Some(channel_id) = snapshot.recruitment.channel_id.as_ref() else {
         return Ok(());
     };
+    if !matches!(command, WebAuctionRecruitmentLifecycle::Restore { .. })
+        && snapshot.recruitment.message_id.is_none()
+    {
+        return Ok(());
+    }
     let (notification_type, deduplication_key) = match command {
         WebAuctionRecruitmentLifecycle::Close { .. } => (
+            AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE,
+            format!(
+                "auction-recruitment:{}:message:update:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
+        ),
+        WebAuctionRecruitmentLifecycle::Reopen { .. } => (
             AUCTION_RECRUITMENT_MESSAGE_UPDATE_TYPE,
             format!(
                 "auction-recruitment:{}:message:update:{}",
@@ -16072,8 +16984,15 @@ async fn enqueue_auction_recruitment_message_lifecycle_notification(
         WebAuctionRecruitmentLifecycle::Cancel { .. } => (
             AUCTION_RECRUITMENT_MESSAGE_DELETE_TYPE,
             format!(
-                "auction-recruitment:{}:message:delete",
-                snapshot.recruitment.id
+                "auction-recruitment:{}:message:delete:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
+            ),
+        ),
+        WebAuctionRecruitmentLifecycle::Restore { .. } => (
+            AUCTION_RECRUITMENT_MESSAGE_CREATE_TYPE,
+            format!(
+                "auction-recruitment:{}:message:restore:{}",
+                snapshot.recruitment.id, snapshot.recruitment.revision
             ),
         ),
     };
@@ -16119,6 +17038,7 @@ async fn enqueue_auction_recruitment_message_update(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn enqueue_auction_recruitment_message_notification(
     transaction: &mut DatabaseTransaction,
     guild_id: &GuildId,
@@ -16289,7 +17209,7 @@ async fn lock_recruitment(
     recruitment_id: RecruitmentId,
 ) -> Result<RecruitmentLockRow, AttemptError> {
     sqlx::query_as::<_, RecruitmentLockRow>(
-        "SELECT season_id, status, target_count, best_of, hard_fearless, revision, created_by
+        "SELECT season_id, status, closed_at, target_count, best_of, hard_fearless, revision, created_by
          FROM recruitments
          WHERE guild_id = $1 AND id = $2
          FOR UPDATE",
@@ -16307,7 +17227,7 @@ async fn lock_auction_recruitment(
     recruitment_id: AuctionRecruitmentId,
 ) -> Result<AuctionRecruitmentLockRow, AttemptError> {
     sqlx::query_as::<_, AuctionRecruitmentLockRow>(
-        "SELECT season_id, format, status, target_count, semifinal_best_of, final_best_of,
+        "SELECT season_id, format, status, closed_at, target_count, semifinal_best_of, final_best_of,
                 hard_fearless, revision, created_by
          FROM auction_recruitments
          WHERE guild_id = $1 AND id = $2
@@ -16380,7 +17300,8 @@ async fn lock_auction_tournament(
     tournament_id: AuctionTournamentId,
 ) -> Result<AuctionTournamentLockRow, AttemptError> {
     sqlx::query_as::<_, AuctionTournamentLockRow>(
-        "SELECT display_number, title, format, hard_fearless, status, revision, bracket_locked_at
+        "SELECT source_recruitment_id, display_number, title, format, final_best_of,
+                hard_fearless, status, ended_early, revision, bracket_locked_at
          FROM auction_tournaments
          WHERE guild_id = $1 AND id = $2 AND deleted_at IS NULL
          FOR UPDATE",
@@ -16761,6 +17682,7 @@ fn ensure_auction_match_result_editable(
             auction_match.status.as_str(),
             "READY" | "IN_PROGRESS" | "COMPLETED"
         ),
+        WebAuctionMatchGameMutation::CompleteFinalAsBo1(_) => auction_match.status == "IN_PROGRESS",
     };
     if allowed {
         Ok(())
@@ -20146,6 +21068,14 @@ fn ensure_cancellable(status: RecruitmentStatus) -> Result<(), AttemptError> {
     }
 }
 
+fn ensure_restorable(status: RecruitmentStatus) -> Result<(), AttemptError> {
+    if status == RecruitmentStatus::Cancelled {
+        Ok(())
+    } else {
+        Err(AttemptError::RecruitmentRestoreUnavailable(status))
+    }
+}
+
 fn ensure_entry_editable(status: RecruitmentStatus) -> Result<(), AttemptError> {
     if status == RecruitmentStatus::Closed {
         Ok(())
@@ -20429,6 +21359,7 @@ struct WebAuctionTournamentCreatePrepared {
     audit_id: Uuid,
     recruitment_outbox_event_id: OutboxEventId,
     tournament_outbox_event_id: OutboxEventId,
+    recruitment_message_notification_id: NotificationId,
 }
 
 impl WebAuctionTournamentCreatePrepared {
@@ -20443,6 +21374,7 @@ impl WebAuctionTournamentCreatePrepared {
             audit_id: Uuid::now_v7(),
             recruitment_outbox_event_id: OutboxEventId::new(),
             tournament_outbox_event_id: OutboxEventId::new(),
+            recruitment_message_notification_id: NotificationId::new(),
         }
     }
 }
@@ -20498,6 +21430,27 @@ impl WebAuctionTournamentBracketPrepared {
             match_ids: std::array::from_fn(|_| Uuid::now_v7()),
             audit_id: Uuid::now_v7(),
             outbox_event_id: OutboxEventId::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AuctionTournamentFinishPrepared {
+    now: OffsetDateTime,
+    idempotency_record_id: IdempotencyRecordId,
+    audit_id: Uuid,
+    tournament_outbox_event_id: OutboxEventId,
+    result_notification_id: NotificationId,
+}
+
+impl AuctionTournamentFinishPrepared {
+    fn new() -> Self {
+        Self {
+            now: OffsetDateTime::now_utc(),
+            idempotency_record_id: IdempotencyRecordId::new(),
+            audit_id: Uuid::now_v7(),
+            tournament_outbox_event_id: OutboxEventId::new(),
+            result_notification_id: NotificationId::new(),
         }
     }
 }
@@ -20577,7 +21530,10 @@ struct WebAuctionMatchGameMutationPrepared {
     input_id: Uuid,
     audit_id: Uuid,
     outbox_event_id: OutboxEventId,
+    tournament_outbox_event_id: OutboxEventId,
+    recruitment_outbox_event_id: OutboxEventId,
     result_notification_id: NotificationId,
+    recruitment_notification_id: NotificationId,
 }
 
 impl WebAuctionMatchGameMutationPrepared {
@@ -20589,7 +21545,10 @@ impl WebAuctionMatchGameMutationPrepared {
             input_id: Uuid::now_v7(),
             audit_id: Uuid::now_v7(),
             outbox_event_id: OutboxEventId::new(),
+            tournament_outbox_event_id: OutboxEventId::new(),
+            recruitment_outbox_event_id: OutboxEventId::new(),
             result_notification_id: NotificationId::new(),
+            recruitment_notification_id: NotificationId::new(),
         }
     }
 }
@@ -20930,8 +21889,17 @@ enum WebAuctionRecruitmentLifecycle {
     Close {
         recruitment_id: AuctionRecruitmentId,
     },
+    Reopen {
+        recruitment_id: AuctionRecruitmentId,
+        expected_revision: i64,
+    },
     Cancel {
         recruitment_id: AuctionRecruitmentId,
+        expected_revision: i64,
+    },
+    Restore {
+        recruitment_id: AuctionRecruitmentId,
+        expected_revision: i64,
     },
 }
 
@@ -20949,11 +21917,23 @@ impl WebAuctionRecruitmentLifecycle {
                 audit_action: "AUCTION_RECRUITMENT_CLOSED",
                 event_type: "AUCTION_RECRUITMENT_CLOSED",
             },
+            Self::Reopen { .. } => WebAuctionRecruitmentLifecycleMetadata {
+                method: "POST",
+                route_template: AUCTION_RECRUITMENT_REOPEN_ROUTE,
+                audit_action: "AUCTION_RECRUITMENT_REOPENED",
+                event_type: "AUCTION_RECRUITMENT_REOPENED",
+            },
             Self::Cancel { .. } => WebAuctionRecruitmentLifecycleMetadata {
                 method: "DELETE",
                 route_template: AUCTION_RECRUITMENT_CANCEL_ROUTE,
                 audit_action: "AUCTION_RECRUITMENT_CANCELLED",
                 event_type: "AUCTION_RECRUITMENT_CANCELLED",
+            },
+            Self::Restore { .. } => WebAuctionRecruitmentLifecycleMetadata {
+                method: "POST",
+                route_template: AUCTION_RECRUITMENT_RESTORE_ROUTE,
+                audit_action: "AUCTION_RECRUITMENT_RESTORED",
+                event_type: "AUCTION_RECRUITMENT_RESTORED",
             },
         }
     }
@@ -21268,6 +22248,11 @@ enum WebRecruitmentMutation {
     },
     Cancel {
         recruitment_id: RecruitmentId,
+        expected_revision: i64,
+    },
+    Restore {
+        recruitment_id: RecruitmentId,
+        expected_revision: i64,
     },
 }
 
@@ -21299,9 +22284,15 @@ impl WebRecruitmentMutation {
             },
             Self::Cancel { .. } => WebRecruitmentMutationMetadata {
                 method: "DELETE",
-                route_template: "/api/guilds/{guildId}/recruitments/{id}",
+                route_template: RECRUITMENT_CANCEL_ROUTE,
                 audit_action: "RECRUITMENT_CANCELLED",
                 event_type: "RECRUITMENT_CANCELLED",
+            },
+            Self::Restore { .. } => WebRecruitmentMutationMetadata {
+                method: "POST",
+                route_template: RECRUITMENT_RESTORE_ROUTE,
+                audit_action: "RECRUITMENT_RESTORED",
+                event_type: "RECRUITMENT_RESTORED",
             },
         }
     }
@@ -21406,6 +22397,7 @@ impl SeasonRow {
 struct RecruitmentLockRow {
     season_id: Uuid,
     status: RecruitmentStatus,
+    closed_at: Option<OffsetDateTime>,
     target_count: i16,
     best_of: i16,
     hard_fearless: bool,
@@ -21418,6 +22410,7 @@ struct AuctionRecruitmentLockRow {
     season_id: Uuid,
     format: String,
     status: RecruitmentStatus,
+    closed_at: Option<OffsetDateTime>,
     target_count: i16,
     semifinal_best_of: Option<i16>,
     final_best_of: i16,
@@ -21490,10 +22483,13 @@ struct AuctionTournamentDraftRow {
 
 #[derive(Debug, FromRow)]
 struct AuctionTournamentLockRow {
+    source_recruitment_id: AuctionRecruitmentId,
     display_number: i64,
     title: String,
     format: String,
+    final_best_of: i16,
     hard_fearless: bool,
+    ended_early: bool,
     status: AuctionTournamentStatus,
     revision: i64,
     bracket_locked_at: Option<OffsetDateTime>,
@@ -21570,6 +22566,7 @@ struct AuctionMatchSnapshotRow {
     match_key: String,
     best_of: i16,
     hard_fearless: bool,
+    ended_early: bool,
     status: String,
     revision: i64,
     left_team_id: Option<Uuid>,
@@ -21647,6 +22644,7 @@ struct AuctionTournamentCompletionLockRow {
 
 #[derive(Debug, FromRow)]
 struct AuctionTournamentResultNotificationRow {
+    ended_early: bool,
     display_number: i64,
     title: String,
     format: String,
@@ -21655,7 +22653,7 @@ struct AuctionTournamentResultNotificationRow {
     hard_fearless: bool,
     champion_team_id: Option<Uuid>,
     ended_at: Option<OffsetDateTime>,
-    champion_team_name: String,
+    champion_team_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -21672,11 +22670,12 @@ struct AuctionTournamentResultOutboxLockRow {
 
 #[derive(Debug, FromRow)]
 struct AuctionTournamentResultNotificationMatchRow {
+    ended_early: bool,
     match_key: String,
     best_of: i16,
-    left_team_name: String,
-    right_team_name: String,
-    winner_team_name: String,
+    left_team_name: Option<String>,
+    right_team_name: Option<String>,
+    winner_team_name: Option<String>,
     left_score: i64,
     right_score: i64,
 }
@@ -21690,6 +22689,7 @@ struct AuctionTournamentResultRow {
     semifinal_best_of: Option<i16>,
     final_best_of: i16,
     hard_fearless: bool,
+    ended_early: bool,
     status: AuctionTournamentStatus,
     revision: i64,
     champion_team_id: Option<Uuid>,
@@ -21714,6 +22714,7 @@ struct AuctionTournamentResultMatchRow {
     match_key: String,
     best_of: i16,
     hard_fearless: bool,
+    ended_early: bool,
     status: String,
     left_team_id: Option<Uuid>,
     right_team_id: Option<Uuid>,
@@ -22304,6 +23305,8 @@ enum AttemptError {
     AuctionTournamentNotFound,
     #[error("recruitment must be OPEN, but is {0}")]
     RecruitmentNotOpen(RecruitmentStatus),
+    #[error("recruitment can only be restored while CANCELLED, but is {0}")]
+    RecruitmentRestoreUnavailable(RecruitmentStatus),
     #[error(
         "participant confirmation DMs can only be requested while recruitment is CLOSED, but is {0}"
     )]
@@ -22409,6 +23412,8 @@ enum AttemptError {
     AuctionMatchTeamsPending,
     #[error("auction match tournament is not in an active bracket state")]
     AuctionMatchTournamentNotReady,
+    #[error("auction final cannot be completed as BO1 from its current state")]
+    AuctionFinalBo1CompletionUnavailable,
     #[error("auction match revision mismatch: expected {expected}, actual {actual}")]
     AuctionMatchRevisionConflict { expected: i64, actual: i64 },
     #[error("auction match lineup cannot be changed while status is {0}")]
@@ -22453,6 +23458,8 @@ enum AttemptError {
     AuctionTournamentResultDeliveryInProgress,
     #[error("auction tournament result delivery state is uncertain")]
     AuctionTournamentResultDeliveryUncertain,
+    #[error("auction tournament cannot be finished while status is {0}")]
+    AuctionTournamentFinishUnavailable(AuctionTournamentStatus),
     #[error("auction tournament cannot be cancelled while status is {0}")]
     AuctionTournamentCancelUnavailable(AuctionTournamentStatus),
     #[error("a later MMR change prevents this auction tournament from being cancelled safely")]
@@ -22579,6 +23586,9 @@ impl AttemptError {
             Self::AuctionRecruitmentNotFound => BotWorkflowError::RecruitmentNotFound,
             Self::AuctionTournamentNotFound => BotWorkflowError::AuctionTournamentNotFound,
             Self::RecruitmentNotOpen(status) => BotWorkflowError::RecruitmentNotOpen(status),
+            Self::RecruitmentRestoreUnavailable(status) => {
+                BotWorkflowError::RecruitmentRestoreUnavailable(status)
+            }
             Self::ParticipantConfirmationDmUnavailable(status) => {
                 BotWorkflowError::ParticipantConfirmationDmUnavailable(status)
             }
@@ -22694,6 +23704,9 @@ impl AttemptError {
             Self::AuctionMatchTournamentNotReady => {
                 BotWorkflowError::AuctionMatchTournamentNotReady
             }
+            Self::AuctionFinalBo1CompletionUnavailable => {
+                BotWorkflowError::AuctionFinalBo1CompletionUnavailable
+            }
             Self::AuctionMatchRevisionConflict { expected, actual } => {
                 BotWorkflowError::AuctionMatchRevisionConflict { expected, actual }
             }
@@ -22747,6 +23760,9 @@ impl AttemptError {
             }
             Self::AuctionTournamentResultDeliveryUncertain => {
                 BotWorkflowError::AuctionTournamentResultDeliveryUncertain
+            }
+            Self::AuctionTournamentFinishUnavailable(status) => {
+                BotWorkflowError::AuctionTournamentFinishUnavailable(status)
             }
             Self::AuctionTournamentCancelUnavailable(status) => {
                 BotWorkflowError::AuctionTournamentCancelUnavailable(status)
@@ -22874,6 +23890,8 @@ pub enum BotWorkflowError {
     AuctionTournamentNotFound,
     #[error("recruitment must be OPEN, but is {0}")]
     RecruitmentNotOpen(RecruitmentStatus),
+    #[error("recruitment can only be restored while CANCELLED, but is {0}")]
+    RecruitmentRestoreUnavailable(RecruitmentStatus),
     #[error(
         "participant confirmation DMs can only be requested while recruitment is CLOSED, but is {0}"
     )]
@@ -22975,6 +23993,8 @@ pub enum BotWorkflowError {
     AuctionMatchTeamsPending,
     #[error("auction match tournament is not in an active bracket state")]
     AuctionMatchTournamentNotReady,
+    #[error("auction final cannot be completed as BO1 from its current state")]
+    AuctionFinalBo1CompletionUnavailable,
     #[error("auction match revision mismatch: expected {expected}, actual {actual}")]
     AuctionMatchRevisionConflict { expected: i64, actual: i64 },
     #[error("auction match lineup cannot be changed while status is {0}")]
@@ -23019,6 +24039,8 @@ pub enum BotWorkflowError {
     AuctionTournamentResultDeliveryInProgress,
     #[error("auction tournament result delivery state is uncertain")]
     AuctionTournamentResultDeliveryUncertain,
+    #[error("auction tournament cannot be finished while status is {0}")]
+    AuctionTournamentFinishUnavailable(AuctionTournamentStatus),
     #[error("auction tournament cannot be cancelled while status is {0}")]
     AuctionTournamentCancelUnavailable(AuctionTournamentStatus),
     #[error("a later MMR change prevents this auction tournament from being cancelled safely")]
@@ -23527,6 +24549,12 @@ mod tests {
         });
         assert_eq!(revert.method(), "DELETE");
         assert_eq!(revert.route_template(), AUCTION_MATCH_GAME_REVERT_ROUTE);
+        let complete =
+            WebAuctionMatchGameMutation::CompleteFinalAsBo1(AuctionFinalBo1CompleteCommand {
+                expected_revision: 4,
+            });
+        assert_eq!(complete.method(), "POST");
+        assert_eq!(complete.route_template(), AUCTION_FINAL_BO1_COMPLETE_ROUTE);
     }
 
     #[test]
@@ -23634,6 +24662,7 @@ mod tests {
                 label: "결승".to_owned(),
                 best_of: 3,
                 hard_fearless: true,
+                ended_early: false,
                 status: "READY".to_owned(),
                 revision: 14,
                 left_team_id,
@@ -23647,17 +24676,22 @@ mod tests {
             lineups,
             games: Vec::new(),
             permissions: AuctionMatchSnapshotPermissions {
+                can_finish_tournament: true,
                 can_manage_lineup: false,
                 can_enter_results: true,
                 can_unlock_lineup: true,
                 can_revert_last_game: false,
+                can_complete_final_as_bo1: false,
             },
         };
         let tournament = AuctionTournamentLockRow {
+            source_recruitment_id: AuctionRecruitmentId::new(),
             display_number: 42,
             title: "금요 경매 내전".to_owned(),
             format: "TWENTY_PERSON".to_owned(),
+            final_best_of: 3,
             hard_fearless: true,
+            ended_early: false,
             status: AuctionTournamentStatus::InGame,
             revision: 8,
             bracket_locked_at: Some(OffsetDateTime::now_utc()),
@@ -23757,6 +24791,12 @@ mod tests {
         assert!(!validate_series_pick_ban_bulk_items(&[
             set_pick.clone(),
             set_pick.clone(),
+        ]));
+        assert!(!validate_series_pick_ban_bulk_items(&[
+            SeriesPickBanBulkItem::SetPick {
+                player_id: UserId::from(&user_id("100000000000000001")),
+                champion_id: "Jade_Ahri".to_owned(),
+            },
         ]));
         assert!(
             serde_json::from_value::<SeriesPickBanOperation>(json!({

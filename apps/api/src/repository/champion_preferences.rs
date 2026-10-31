@@ -223,7 +223,12 @@ mod tests {
 
     #[test]
     fn validator_rejects_non_canonical_champion_ids() {
-        for champion_ids in [ids(&[""]), ids(&["Lee Sin"]), ids(&["아리"])] {
+        for champion_ids in [
+            ids(&[""]),
+            ids(&["Lee Sin"]),
+            ids(&["아리"]),
+            ids(&["Jade_Ahri"]),
+        ] {
             assert!(matches!(
                 validate_champion_ids(&champion_ids),
                 Err(ChampionPreferencesRepositoryError::InvalidChampionId)

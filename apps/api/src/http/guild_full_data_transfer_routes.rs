@@ -285,6 +285,17 @@ fn table_label(table: &str) -> &'static str {
 }
 
 fn constraint_message(table: &str) -> &'static str {
+    if matches!(
+        table,
+        "user_champion_preferences"
+            | "game_input_picks"
+            | "game_input_bans"
+            | "game_participants"
+            | "game_bans"
+    ) {
+        return "전체 백업의 챔피언 ID에 일반 게임에서 사용할 수 없는 값이 포함되어 있습니다.";
+    }
+
     match table_label(table) {
         "사용자·멤버" => {
             "전체 백업의 사용자·멤버 데이터가 현재 MonkeyBot 데이터 규칙과 맞지 않습니다."
@@ -334,5 +345,9 @@ mod tests {
         assert_eq!(table_label("games"), "경기 전적");
         assert_eq!(table_label("auction_actions"), "경매");
         assert_eq!(table_label("unknown"), "보관");
+        assert_eq!(
+            constraint_message("game_input_picks"),
+            "전체 백업의 챔피언 ID에 일반 게임에서 사용할 수 없는 값이 포함되어 있습니다."
+        );
     }
 }

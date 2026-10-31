@@ -4,6 +4,7 @@ import {
 	championIconUrl,
 	createChampionCatalog,
 	findChampion,
+	isCanonicalChampionId,
 	loadCachedChampionCatalog,
 	loadChampionCatalog,
 	normalizeChampionSlug,
@@ -42,6 +43,43 @@ describe('Data Dragon champion helpers', () => {
 	it('normalizes champion ids into stable id slugs', () => {
 		expect(normalizeChampionSlug('Lee Sin')).toBe('leesin');
 		expect(normalizeChampionSlug("Kai'Sa")).toBe('kaisa');
+	});
+
+	it('keeps only canonical base-game champion ids', () => {
+		expect(isCanonicalChampionId('LeeSin')).toBe(true);
+		expect(isCanonicalChampionId('MonkeyKing')).toBe(true);
+		expect(isCanonicalChampionId('Jade_LeeSin')).toBe(false);
+	});
+
+	it('removes mode-specific Classic variants before building lookup maps', () => {
+		const pollutedResponse: DataDragonChampionResponse = {
+			...championResponse,
+			version: '16.15.1',
+			data: {
+				...championResponse.data,
+				Jade_LeeSin: {
+					...championResponse.data.LeeSin,
+					version: '16.15.1',
+					id: 'Jade_LeeSin',
+					key: '60064',
+					image: { full: 'Jade_LeeSin.png' }
+				},
+				Jade_Wukong: {
+					version: '16.15.1',
+					id: 'Jade_Wukong',
+					key: '60062',
+					name: '오공',
+					image: { full: 'Jade_Wukong.png' }
+				}
+			}
+		};
+
+		const catalog = createChampionCatalog(pollutedResponse);
+
+		expect(catalog.champions.map((champion) => champion.id)).toEqual(['LeeSin', 'Kaisa']);
+		expect(searchChampions(catalog, '리 신').map((champion) => champion.id)).toEqual(['LeeSin']);
+		expect(findChampion(catalog, '리 신')?.id).toBe('LeeSin');
+		expect(catalog.byId.Jade_LeeSin).toBeUndefined();
 	});
 
 	it('creates id, key, name, and idSlug lookup maps', () => {

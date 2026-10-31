@@ -91,14 +91,14 @@ dialog에서 두 준결승에 공통 적용할 4강 BO1/BO3/BO5를 별도로 고
 OPEN 모집 상세 route에 이동한다. 팀장 설정/입찰/브래킷 board를 목록 route에 직접 쌓지 않는다.
 `/auction?create=1`도 같은 생성 dialog만 여는 deep-link다.
 
-| 컴포넌트                                  | 운영 route                                      | 필수 입력과 parent 책임                                                                                                                |
-| ----------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `AuctionTournamentCaptainPointSetupBoard` | `/g/[guildId]/auction/recruitments/[id]/draft`  | `AuctionSetupDraft`, 확정 참가자, `canEdit`, `canCreateTournament`, save/create callback, busy 상태                                    |
-| `AuctionTournamentBidDraftWorkbench`      | `/g/[guildId]/auction/tournaments/[id]/draft`   | `AuctionTournamentDraftSnapshot`, command callback, submitting 상태                                                                    |
-| `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket` | `AuctionTournamentBracketSnapshot`, bracket command callback, canonical match 열기 callback                                            |
-| `AuctionTournamentBracketResultBoard`     | `/g/[guildId]/auction/tournaments/[id]/result`  | `AuctionTournamentResultSnapshot`, read-only 대진과 canonical match 열기 callback                                                      |
-| `AuctionMatchStartingLineupInputBoard`    | `/g/[guildId]/auction/matches/[matchId]`        | canonical auction match snapshot, lineup assign/lock/unlock callback, busy 상태                                                        |
-| `AuctionMatchGameResultInputBoard`        | `/g/[guildId]/auction/matches/[matchId]`        | 같은 match snapshot, Data Dragon champion catalog, game submit/last-game revert callback, 확정 세트의 픽·밴 상세 disclosure, busy 상태 |
+| 컴포넌트                                  | 운영 route                                      | 필수 입력과 parent 책임                                                                                                                                           |
+| ----------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AuctionTournamentCaptainPointSetupBoard` | `/g/[guildId]/auction/recruitments/[id]/draft`  | `AuctionSetupDraft`, 확정 참가자, `canEdit`, `canCreateTournament`, save/create callback, busy 상태                                                               |
+| `AuctionTournamentBidDraftWorkbench`      | `/g/[guildId]/auction/tournaments/[id]/draft`   | `AuctionTournamentDraftSnapshot`, command callback, submitting 상태                                                                                               |
+| `AuctionTournamentBracketMatchSetupBoard` | `/g/[guildId]/auction/tournaments/[id]/bracket` | `AuctionTournamentBracketSnapshot`, bracket command callback, canonical match 열기 callback                                                                       |
+| `AuctionTournamentBracketResultBoard`     | `/g/[guildId]/auction/tournaments/[id]/result`  | `AuctionTournamentResultSnapshot`, read-only 대진과 canonical match 열기 callback                                                                                 |
+| `AuctionMatchStartingLineupInputBoard`    | `/g/[guildId]/auction/matches/[matchId]`        | canonical auction match snapshot, lineup assign/lock/unlock callback, busy 상태                                                                                   |
+| `AuctionMatchGameResultInputBoard`        | `/g/[guildId]/auction/matches/[matchId]`        | 같은 match snapshot, Data Dragon champion catalog, game submit/last-game revert callback, 확정 세트의 픽·밴 상세 disclosure, BO1 결승 조기 종료 dialog, busy 상태 |
 
 `AuctionMatchStartingLineupInputBoard`는 `permissions.canUnlockLineup`가 true일 때만 recovery control을
 노출한다. parent는 `expectedRevision`을 포함해 `/lineup/unlock`을 호출하며, games와 game_inputs가 전혀 없어야
